@@ -1,0 +1,11 @@
+{
+  "title": "MyPro",
+  "description": "Organize your schedule, tasks, learning library, and personal health records in one place, with an AI assistant to help manage everyday life.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
