@@ -4,7 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "node:path";
 
-import siteConfiguration from "./.figma/make/site.json";
+// .figma stays at the repo root (platform-managed); the app lives in frontend/.
+import siteConfiguration from "../.figma/make/site.json";
 
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {

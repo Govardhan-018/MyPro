@@ -1,37 +1,76 @@
-# figma-make-app
+# MyPro
 
-React + Vite + Tailwind CSS project running inside Figma Make.
+Personal assistant platform. One repo, three deployables:
 
-## Development Server
+| Folder | What it is | Where it runs |
+|---|---|---|
+| `frontend/` | React 19 + Vite + Tailwind v4 web app | Vercel (dev server locally) |
+| `backend-render/` | Always-on core API: CRUD, scheduler, notifications (NestJS) | Render |
+| `backend-local/` | Personal agent: assistant chat + LLM, Supabase access, heartbeat (NestJS) | The user's laptop |
+| `supabase/` | Postgres migrations (4NF schema + RLS + health consent gate) | Supabase cloud |
 
-A Vite development server is **already running** on `$PORT` (default 8443). You don't need to start it manually.
+Routing rule: the web/app call **backend-render** for everything except
+`/assistant/*`, which goes straight to **backend-local**. When the laptop is
+offline (heartbeat stale ~90s), the UI greys out the assistant and render
+degrades AI-dependent scheduled jobs to plain messages.
 
-- Preview URL: The user can access the running app through the preview panel
-- Hot reload: Changes to source files are reflected immediately
+**The laptop's address is dynamic.** `start-agent.bat` opens a Cloudflare
+quick tunnel, captures the random `*.trycloudflare.com` URL and passes it as
+`PUBLIC_BASE_URL`; the agent heartbeats it into `node_status`, and both render
+(`AgentClient.resolveBase`) and the web app (`resolveAgentBase` in `api.ts`)
+read it from there. Never hardcode the tunnel URL anywhere.
 
-## Project Structure
+Secrets live only in each deployable's `.env` (`.env.example` holds
+placeholders **only** and is committed — never put real values in it). The
+model key (Google AI Studio / Gemini) exists only on the laptop. Supabase uses
+the current key format: `sb_publishable_…` + `sb_secret_…`, with client JWTs
+verified against the project's JWKS endpoint.
 
-This is the canonical project structure. Start with task-relevant files below. Only follow imports or inspect other files when required, when a documented path is missing, or when the repository contradicts this guide.
+## Development
 
-- `src/main.tsx` - React entrypoint; imports `src/index.css` and mounts `src/App.tsx` into the `#root` element
-- `src/App.tsx` - Primary application component and the usual starting point for UI work
-- `src/index.css` - Global CSS entrypoint and Tailwind CSS v4 import
-- `index.html` - Vite HTML shell containing the `#root` element and loading `src/main.tsx`
-- `package.json` - Project dependencies and the Vite build, development, preview, and formatting scripts
-- `vite.config.ts` - Vite configuration with React, Tailwind CSS v4, and Figma Make plugins plus the `@` alias for `src`
-- `.mise.toml` - Toolchain versions for Node.js and pnpm
+- Frontend: `pnpm --dir frontend dev` (or `pnpm dev` from the root, which
+  delegates). The Vite server reads `$PORT` (default 8443). `.figma/` stays at
+  the repo root; `frontend/vite.config.ts` references it as `../.figma/`.
+- Backends: `npm run dev` inside `backend-render/` or `backend-local/`.
+  Both refuse to boot with an incomplete `.env` (zod-validated; blank values
+  count as absent for optional vars).
+- The agent, with a public address: `start-agent.bat` from the repo root.
+- Type checks: `npx tsc --noEmit` in each of the three folders.
 
-## Dependencies
+## Frontend structure
 
-- Runtime: React 19 and React DOM 19
-- Styling: Tailwind CSS v4 with the `@tailwindcss/vite` plugin
-- Build tooling: Vite 8, TypeScript 5.7, and `@vitejs/plugin-react`
-- Formatting: oxfmt
+- `frontend/src/main.tsx` — entrypoint; imports `index.css` + `reading-listening.css`
+- `frontend/src/App.tsx` — primary application component (all views)
+- `frontend/src/components/` — library reader, podcast player, settings views
+- `frontend/src/lib/` — `env.ts` (VITE_* config), `supabase.ts` (auth),
+  `api.ts` (typed client; `api.assistant.*` targets the agent, the rest render)
+- `frontend/src/types/`, `frontend/src/data/`, `frontend/src/utils/`
 
-## Styling
+## Styling (frontend)
 
-This project uses **Tailwind CSS v4** through the `@tailwindcss/vite` plugin configured in `vite.config.ts`. `src/index.css` imports Tailwind with `@import 'tailwindcss';`. Use Tailwind utility classes directly in JSX and put global CSS or Tailwind v4 theme customization in `src/index.css`. This scaffold does not need a Tailwind config file or PostCSS config.
+Tailwind CSS v4 via `@tailwindcss/vite`; `src/index.css` does
+`@import 'tailwindcss';`. Use utility classes in JSX; global CSS and theme
+customization live in `src/index.css` (app shell) and
+`src/reading-listening.css` (reader/library additions). No Tailwind config or
+PostCSS file is needed.
 
-`src/main.tsx` imports `src/index.css`, so global font wiring belongs in `src/index.css`. Keep CSS `@import` statements first, then add any `@font-face` rules and font-family defaults there.
+Tailwind emits utilities in `@layer utilities`, and CSS outside any cascade
+layer overrides every layer regardless of specificity, so put global element
+styles (resets, `body`, headings, `button`, `input` defaults) inside
+`@layer base { ... }`. Preflight already applies `box-sizing: border-box`,
+removes default margins, and sets `font: inherit` on form controls — do not
+repeat those.
 
-Tailwind emits utility classes in `@layer utilities`, and CSS outside any cascade layer overrides every layer regardless of specificity. Put global element styles, such as resets and defaults for `body`, headings, `button`, or `input`, inside `@layer base { ... }` so utility classes on those elements still apply. Tailwind's Preflight already applies `box-sizing: border-box`, removes default margins, and sets `font: inherit` on form controls, so do not repeat those rules.
+Design system: pure black `#000`, graphite surfaces, white typography with
+size-based hierarchy, thin `rgba(255,255,255,.1…)` borders, rounded cards,
+global Monochrome/Color Mode (accents only under `.color-mode`, 1000ms
+transitions).
+
+## Rules of the road
+
+- Read only what the task needs; prefer targeted edits.
+- Do not run tests/builds/typechecks unless asked (installing a dependency a
+  change requires is fine).
+- Never hardcode secrets, URLs, or model names — env only.
+- The architecture contract is `docs/BACKEND_PLAN.md`; update it when the
+  topology or schema changes.

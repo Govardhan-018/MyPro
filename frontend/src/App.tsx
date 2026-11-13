@@ -7,7 +7,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import type { LottieHandle } from "lottie-react";
 import {
@@ -16,6 +18,11 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
+  Bookmark,
+  Brain,
+  HelpCircle,
+  Highlighter,
+  Quote,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -55,8 +62,27 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import type {
+  LibraryItem,
+  BookmarkItem,
+  NoteItem,
+  HighlightItem,
+  Annotation,
+} from "./types/library";
+import { MyProDarkReader } from "./components/library/MyProDarkReader";
+import { MyProPodcastPlayer } from "./components/library/MyProPodcastPlayer";
+import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
+import { BookOptionsModal } from "./components/library/BookOptionsModal";
+import { StorageSyncView } from "./components/settings/StorageSyncView";
 
-type View = "today" | "calendar" | "library" | "health" | "assistant" | "settings";
+type View =
+  | "today"
+  | "calendar"
+  | "library"
+  | "knowledge"
+  | "health"
+  | "assistant"
+  | "settings";
 
 // Lottie is large; load it in its own chunk so the first screen renders immediately.
 const LottieSvg = lazy(() =>
@@ -95,6 +121,7 @@ const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "today", label: "Today", icon: Home },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
   { id: "library", label: "My Library", icon: Library },
+  { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
   { id: "assistant", label: "AI Assistant", icon: Sparkles },
 ];
@@ -1550,17 +1577,6 @@ function AssistantView() {
   );
 }
 
-type LibraryItem = {
-  title: string;
-  creator: string;
-  type: string;
-  status: string;
-  progress: number;
-  accessed: string;
-  tone: string;
-  image: string;
-};
-
 const initialLibraryItems: LibraryItem[] = [
   {
     title: "The Creative Act",
@@ -1571,6 +1587,38 @@ const initialLibraryItems: LibraryItem[] = [
     accessed: "Today",
     tone: "lavender",
     image: "https://covers.openlibrary.org/b/isbn/9780593652886-M.jpg",
+    totalPages: 320,
+    currentPage: 205,
+    pdfFileName: "the-creative-act.pdf",
+    pdfStorageOption: "device",
+    syncStatus: "local",
+    fileSizeBytes: 5033164,
+    bookmarks: [
+      { id: "bm-1", page: 14, title: "How to Notice", createdAt: "May 18" },
+      { id: "bm-2", page: 128, title: "Attention as a Practice", createdAt: "Today" },
+    ],
+    notes: [
+      {
+        id: "n-1",
+        page: 128,
+        text: "The quality of attention changes the quality of the work itself.",
+        createdAt: "Today, 8:44 AM",
+      },
+    ],
+    highlights: [
+      {
+        id: "h-1",
+        page: 36,
+        text: "We are receivers of energy, filters of the world around us.",
+        color: "lavender",
+      },
+      {
+        id: "h-2",
+        page: 128,
+        text: "To approach the canvas without preconception is true innocence.",
+        color: "mint",
+      },
+    ],
   },
   {
     title: "Design Better",
@@ -1582,6 +1630,12 @@ const initialLibraryItems: LibraryItem[] = [
     tone: "blue",
     image:
       "https://images.unsplash.com/photo-1449247709967-d4461a6a6103?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=80&w=300&h=300",
+    youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    podcastName: "Design Better",
+    episodeTitle: "Designing for trust and calm",
+    durationSeconds: 3852,
+    currentTimeSeconds: 1620,
+    playbackSpeed: 1,
   },
   {
     title: "Designing Calm Systems",
@@ -1593,6 +1647,7 @@ const initialLibraryItems: LibraryItem[] = [
     tone: "peach",
     image:
       "https://images.unsplash.com/photo-1499951360447-b19be8fe80f5?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=80&w=360&h=240",
+    readTimeMinutes: 9,
   },
   {
     title: "Attention as a Practice",
@@ -1606,50 +1661,104 @@ const initialLibraryItems: LibraryItem[] = [
   },
 ];
 
-function LibraryView() {
+type AddKind = "Digital Book" | "Physical Book" | "Podcast" | "Article";
+
+const emptyAddForm = {
+  title: "",
+  author: "",
+  description: "",
+  category: "Personal Growth",
+  totalPages: "",
+  currentPage: "",
+  url: "",
+  channel: "",
+  duration: "",
+  timestamp: "",
+  fileName: "",
+};
+
+function LibraryView({
+  colorMode,
+  items: libraryItems,
+  setItems: setLibraryItems,
+  onOpenMedia,
+}: {
+  colorMode: boolean;
+  items: LibraryItem[];
+  setItems: Dispatch<SetStateAction<LibraryItem[]>>;
+  onOpenMedia: (item: LibraryItem) => void;
+}) {
   const categories = ["All", "Books", "Podcasts", "Articles", "Notes"] as const;
   const filters = ["All", "In Progress", "Completed", "Want to Read", "Favorites"] as const;
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
-  const [addType, setAddType] = useState("Book");
-  const [libraryItems, setLibraryItems] = useState(initialLibraryItems);
-  const [addTitle, setAddTitle] = useState("");
-  const [addNotes, setAddNotes] = useState("");
+  const [addType, setAddType] = useState<AddKind>("Digital Book");
+  const [form, setForm] = useState(emptyAddForm);
   const [addingItem, setAddingItem] = useState(false);
   const [toast, setToast] = useState("");
   const request = useSimulatedRequest();
+  const setField = (key: keyof typeof emptyAddForm, value: string) =>
+    setForm((current) => ({ ...current, [key]: value }));
 
   const closeAdd = () => {
     if (addingItem) return;
     setShowAdd(false);
-    setAddTitle("");
-    setAddNotes("");
+    setForm(emptyAddForm);
+  };
+
+  const parseTimestamp = (value: string) => {
+    const parts = value.split(":").map((part) => parseInt(part, 10));
+    if (parts.some(Number.isNaN) || parts.length === 0) return 0;
+    return parts.reduce((total, part) => total * 60 + part, 0);
   };
 
   const addLibraryItem = async () => {
-    const tones = { Book: "lavender", Podcast: "blue", Article: "peach", Note: "mint" };
-    const title = addTitle.trim() || `Untitled ${addType.toLowerCase()}`;
+    const tone =
+      addType === "Podcast" ? "blue" : addType === "Article" ? "peach" : "lavender";
+    const title = form.title.trim() || `Untitled ${addType.toLowerCase()}`;
+    const total = parseInt(form.totalPages, 10) || 320;
+    const current = parseInt(form.currentPage, 10) || 0;
+    const base: LibraryItem = {
+      title,
+      creator: form.author.trim() || form.channel.trim() || "Added by you",
+      type:
+        addType === "Podcast" ? "Podcasts" : addType === "Article" ? "Articles" : "Books",
+      status: "Want to Read",
+      progress: 0,
+      accessed: "Just now",
+      tone,
+      image: "",
+      description: form.description.trim() || undefined,
+    };
+    if (addType === "Digital Book") {
+      base.totalPages = total;
+      base.currentPage = 1;
+      base.pdfFileName = form.fileName || "document.pdf";
+      base.pdfStorageOption = "device";
+      base.syncStatus = "local";
+    } else if (addType === "Physical Book") {
+      base.totalPages = total;
+      base.currentPage = current;
+      base.progress = total ? Math.round((current / total) * 100) : 0;
+      if (base.progress > 0) base.status = "In Progress";
+    } else if (addType === "Podcast") {
+      base.youtubeUrl = form.url.trim();
+      base.podcastName = form.channel.trim() || "Podcast";
+      base.episodeTitle = title;
+      base.durationSeconds = parseTimestamp(form.duration) || 3600;
+      base.currentTimeSeconds = parseTimestamp(form.timestamp);
+      base.playbackSpeed = 1;
+    } else {
+      base.readTimeMinutes = 8;
+    }
     setAddingItem(true);
     await request();
-    setLibraryItems((current) => [
-      {
-        title,
-        creator: addType === "Note" ? "Personal note" : "Added by you",
-        type: `${addType}s`,
-        status: "Want to Read",
-        progress: 0,
-        accessed: "Just now",
-        tone: tones[addType as keyof typeof tones],
-        image: "",
-      },
-      ...current,
-    ]);
+    setLibraryItems((currentItems) => [base, ...currentItems]);
     setAddingItem(false);
     setShowAdd(false);
-    setAddTitle("");
-    setAddNotes("");
+    setForm(emptyAddForm);
     setCategory("All");
     setFilter("All");
     setQuery("");
@@ -1746,9 +1855,13 @@ function LibraryView() {
           <div className="learning-list">
             {visibleItems.map((item) => (
               <article className="learning-row" key={item.title}>
-                <div className={`learning-thumbnail ${item.type.toLowerCase()} ${item.tone}`}>
+                <button
+                  className={`learning-thumbnail ${item.type.toLowerCase()} ${item.tone}`}
+                  onClick={() => onOpenMedia(item)}
+                  aria-label={`Open ${item.title}`}
+                >
                   {item.image ? <img src={item.image} alt="" /> : <StickyNote size={22} />}
-                </div>
+                </button>
                 <div className="learning-copy">
                   <div className="learning-title-line">
                     <div>
@@ -1768,7 +1881,7 @@ function LibraryView() {
                   </div>
                   <div className="learning-footer">
                     <span>Last opened {item.accessed}</span>
-                    <button>
+                    <button onClick={() => onOpenMedia(item)}>
                       <Play size={12} fill="currentColor" />
                       Continue
                     </button>
@@ -1901,6 +2014,36 @@ function LibraryView() {
         </section>
       </div>
 
+      <section className="library-stats">
+        {(() => {
+          const books = libraryItems.filter((item) => item.type === "Books");
+          const podcasts = libraryItems.filter((item) => item.type === "Podcasts");
+          const inProgress = libraryItems.filter((item) => item.status === "In Progress").length;
+          const completed = libraryItems.filter(
+            (item) => item.progress === 100 || item.status === "Completed",
+          ).length;
+          const pagesRead = books.reduce((total, item) => total + (item.currentPage || 0), 0);
+          const minutesListened = Math.round(
+            podcasts.reduce((total, item) => total + (item.currentTimeSeconds || 0), 0) / 60,
+          );
+          const stats: [typeof BookOpen, string, string][] = [
+            [BookOpen, String(inProgress), "In progress"],
+            [CheckCircle2, String(completed), "Completed"],
+            [FileText, pagesRead.toLocaleString(), "Pages read"],
+            [Headphones, `${minutesListened}m`, "Listened"],
+          ];
+          return stats.map(([Icon, value, label]) => (
+            <div className="glass-card library-stat" key={label}>
+              <span className="library-stat-icon">
+                <Icon size={16} />
+              </span>
+              <strong>{value}</strong>
+              <small>{label}</small>
+            </div>
+          ));
+        })()}
+      </section>
+
       <section className="glass-card learning-history-card">
         <div className="card-heading">
           <div>
@@ -1945,48 +2088,150 @@ function LibraryView() {
                 <X size={18} />
               </IconButton>
             </div>
-            <div className="add-type-grid">
-              {[
-                [BookOpen, "Book"],
-                [Headphones, "Podcast"],
-                [FileText, "Article"],
-                [StickyNote, "Note"],
-              ].map(([Icon, type]) => (
+            <div className="add-type-grid add-type-grid-4">
+              {(
+                [
+                  [BookOpen, "Digital Book"],
+                  [Library, "Physical Book"],
+                  [Headphones, "Podcast"],
+                  [FileText, "Article"],
+                ] as [typeof BookOpen, AddKind][]
+              ).map(([Icon, type]) => (
                 <button
                   className={addType === type ? "active" : ""}
-                  onClick={() => setAddType(String(type))}
-                  key={String(type)}
+                  onClick={() => setAddType(type)}
+                  key={type}
                 >
                   <Icon size={18} />
-                  <span>Add a {String(type)}</span>
+                  <span>{type}</span>
                 </button>
               ))}
             </div>
-            <label className="field-label">
-              TITLE
-              <input
-                value={addTitle}
-                onChange={(event) => setAddTitle(event.target.value)}
-                placeholder={`${addType} title`}
-              />
-            </label>
-            {addType !== "Note" && (
+
+            {addType === "Digital Book" && (
               <label className="field-label">
-                EXTERNAL LINK
+                PDF FILE
                 <div className="link-input">
-                  <ExternalLink size={15} />
-                  <input placeholder="Paste a URL, ISBN, or RSS link" />
+                  <Upload size={15} />
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(event) =>
+                      setField("fileName", event.target.files?.[0]?.name ?? "")
+                    }
+                  />
                 </div>
               </label>
             )}
+            {(addType === "Podcast" || addType === "Article") && (
+              <label className="field-label">
+                {addType === "Podcast" ? "YOUTUBE URL" : "ARTICLE URL"}
+                <div className="link-input">
+                  <ExternalLink size={15} />
+                  <input
+                    value={form.url}
+                    onChange={(event) => setField("url", event.target.value)}
+                    placeholder={
+                      addType === "Podcast"
+                        ? "Paste a YouTube link"
+                        : "Paste the article URL"
+                    }
+                  />
+                </div>
+              </label>
+            )}
+
             <label className="field-label">
-              NOTES
+              TITLE
+              <input
+                value={form.title}
+                onChange={(event) => setField("title", event.target.value)}
+                placeholder={`${addType} title`}
+              />
+            </label>
+
+            <div className="field-grid">
+              <label className="field-label">
+                {addType === "Podcast" ? "CHANNEL" : "AUTHOR / SOURCE"}
+                <input
+                  value={addType === "Podcast" ? form.channel : form.author}
+                  onChange={(event) =>
+                    setField(addType === "Podcast" ? "channel" : "author", event.target.value)
+                  }
+                  placeholder={addType === "Podcast" ? "Channel name" : "Author or source"}
+                />
+              </label>
+              <label className="field-label">
+                CATEGORY
+                <select
+                  value={form.category}
+                  onChange={(event) => setField("category", event.target.value)}
+                >
+                  <option>Personal Growth</option>
+                  <option>Technology</option>
+                  <option>Business</option>
+                  <option>Philosophy</option>
+                  <option>Health &amp; Fitness</option>
+                </select>
+              </label>
+            </div>
+
+            {addType === "Physical Book" && (
+              <div className="field-grid">
+                <label className="field-label">
+                  CURRENT PAGE
+                  <input
+                    type="number"
+                    value={form.currentPage}
+                    onChange={(event) => setField("currentPage", event.target.value)}
+                    placeholder="0"
+                  />
+                </label>
+                <label className="field-label">
+                  TOTAL PAGES
+                  <input
+                    type="number"
+                    value={form.totalPages}
+                    onChange={(event) => setField("totalPages", event.target.value)}
+                    placeholder="320"
+                  />
+                </label>
+              </div>
+            )}
+            {addType === "Podcast" && (
+              <div className="field-grid">
+                <label className="field-label">
+                  DURATION
+                  <input
+                    value={form.duration}
+                    onChange={(event) => setField("duration", event.target.value)}
+                    placeholder="1:04:12"
+                  />
+                </label>
+                <label className="field-label">
+                  START AT
+                  <input
+                    value={form.timestamp}
+                    onChange={(event) => setField("timestamp", event.target.value)}
+                    placeholder="0:00"
+                  />
+                </label>
+              </div>
+            )}
+
+            <label className="field-label">
+              DESCRIPTION
               <textarea
-                value={addNotes}
-                onChange={(event) => setAddNotes(event.target.value)}
+                value={form.description}
+                onChange={(event) => setField("description", event.target.value)}
                 placeholder="Add a short description or context..."
               />
             </label>
+            {addType === "Podcast" && (
+              <p className="prototype-note">
+                Video metadata retrieval is shown as a prototype interaction.
+              </p>
+            )}
             <div className="modal-footer">
               <button className="secondary-button" onClick={closeAdd} disabled={addingItem}>
                 Cancel
@@ -2014,6 +2259,265 @@ function LibraryView() {
           <CheckCircle2 size={16} /> {toast}
         </div>
       )}
+    </div>
+  );
+}
+
+type KnowledgeKind = "Note" | "Highlight" | "Quote" | "Summary" | "Question" | "Bookmark";
+
+type KnowledgeEntry = {
+  id: string;
+  kind: KnowledgeKind;
+  text: string;
+  heading?: string;
+  bookTitle: string;
+  page: number;
+  date: string;
+  tone: string;
+  tags: string[];
+};
+
+const seededKnowledge: KnowledgeEntry[] = [
+  {
+    id: "q-seed-1",
+    kind: "Quote",
+    text: "A work is never truly finished; it is simply released.",
+    bookTitle: "The Creative Act",
+    page: 210,
+    date: "May 24",
+    tone: "peach",
+    tags: ["craft", "process"],
+  },
+  {
+    id: "s-seed-1",
+    kind: "Summary",
+    heading: "Part III — Crafting",
+    text: "Craft is the patient translation of attention into form; the work improves as the quality of looking improves.",
+    bookTitle: "The Creative Act",
+    page: 128,
+    date: "May 22",
+    tone: "lavender",
+    tags: ["summary"],
+  },
+  {
+    id: "qu-seed-1",
+    kind: "Question",
+    text: "How do I keep beginner's mind without losing the discipline that experience brings?",
+    bookTitle: "The Creative Act",
+    page: 102,
+    date: "May 21",
+    tone: "cyan",
+    tags: ["open-question"],
+  },
+];
+
+const knowledgeTabs: { id: "All" | KnowledgeKind; label: string; icon: typeof BookOpen }[] = [
+  { id: "All", label: "All", icon: ClipboardList },
+  { id: "Note", label: "Notes", icon: StickyNote },
+  { id: "Highlight", label: "Highlights", icon: Highlighter },
+  { id: "Quote", label: "Quotes", icon: Quote },
+  { id: "Summary", label: "Summaries", icon: FileText },
+  { id: "Question", label: "Questions", icon: HelpCircle },
+  { id: "Bookmark", label: "Bookmarks", icon: Bookmark },
+];
+
+function KnowledgeView({
+  items,
+  onJumpToSource,
+}: {
+  items: LibraryItem[];
+  colorMode: boolean;
+  onJumpToSource: (title: string, page: number) => void;
+}) {
+  const [tab, setTab] = useState<"All" | KnowledgeKind>("All");
+  const [query, setQuery] = useState("");
+  const [deleted, setDeleted] = useState<Set<string>>(new Set());
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const entries = useMemo(() => {
+    const colorToTone: Record<string, string> = {
+      lavender: "lavender",
+      cyan: "cyan",
+      mint: "mint",
+      coral: "peach",
+      yellow: "lavender",
+      peach: "peach",
+      monochrome: "lavender",
+    };
+    const capitalize = (value: string) =>
+      (value.charAt(0).toUpperCase() + value.slice(1)) as KnowledgeKind;
+    const derived: KnowledgeEntry[] = [];
+    for (const item of items) {
+      const tone = item.tone || "lavender";
+      if (item.annotations?.length) {
+        // The reader is the source of truth once a book has annotations.
+        item.annotations.forEach((annotation) =>
+          derived.push({
+            id: `an-${item.title}-${annotation.id}`,
+            kind: capitalize(annotation.kind),
+            text: annotation.body || annotation.anchorText,
+            heading: annotation.title,
+            bookTitle: item.title,
+            page: annotation.page,
+            date: annotation.createdAt,
+            tone: colorToTone[annotation.color || ""] || tone,
+            tags: annotation.tags?.length ? annotation.tags : [annotation.kind],
+          }),
+        );
+      } else {
+        item.highlights?.forEach((highlight) =>
+          derived.push({
+            id: `hl-${item.title}-${highlight.id}`,
+            kind: "Highlight",
+            text: highlight.text,
+            bookTitle: item.title,
+            page: highlight.page,
+            date: item.accessed,
+            tone: colorToTone[highlight.color] || tone,
+            tags: [item.type.toLowerCase()],
+          }),
+        );
+        item.notes?.forEach((note) =>
+          derived.push({
+            id: `nt-${item.title}-${note.id}`,
+            kind: "Note",
+            text: note.text,
+            bookTitle: item.title,
+            page: note.page,
+            date: note.createdAt,
+            tone,
+            tags: ["note"],
+          }),
+        );
+      }
+      item.bookmarks?.forEach((bookmark) =>
+        derived.push({
+          id: `bm-${item.title}-${bookmark.id}`,
+          kind: "Bookmark",
+          text: bookmark.title,
+          bookTitle: item.title,
+          page: bookmark.page,
+          date: bookmark.createdAt,
+          tone,
+          tags: ["bookmark"],
+        }),
+      );
+    }
+    return [...seededKnowledge, ...derived];
+  }, [items]);
+
+  const visible = entries.filter((entry) => {
+    if (deleted.has(entry.id)) return false;
+    if (tab !== "All" && entry.kind !== tab) return false;
+    const text = (edits[entry.id] ?? entry.text).toLowerCase();
+    const haystack = `${text} ${entry.bookTitle} ${entry.tags.join(" ")}`;
+    return haystack.includes(query.toLowerCase());
+  });
+
+  const counts = knowledgeTabs.map((item) => ({
+    id: item.id,
+    count:
+      item.id === "All"
+        ? entries.filter((entry) => !deleted.has(entry.id)).length
+        : entries.filter((entry) => entry.kind === item.id && !deleted.has(entry.id)).length,
+  }));
+
+  return (
+    <div className="page-content knowledge-view">
+      <header className="page-heading">
+        <div>
+          <div className="eyebrow muted-eyebrow">MY KNOWLEDGE</div>
+          <h1>Everything you saved, connected.</h1>
+          <p>Notes, highlights, quotes, summaries, and questions — organized across your library.</p>
+        </div>
+      </header>
+
+      <div className="library-toolbar">
+        <label className="library-search">
+          <Search size={17} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search your knowledge"
+          />
+        </label>
+        <div className="library-categories knowledge-tabs" role="tablist">
+          {knowledgeTabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              className={tab === id ? "active" : ""}
+              onClick={() => setTab(id)}
+            >
+              <Icon size={13} />
+              {label}
+              <kbd>{counts.find((count) => count.id === id)?.count ?? 0}</kbd>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="knowledge-list">
+        {visible.map((entry) => (
+          <article className="glass-card knowledge-card" key={entry.id}>
+            <div className="knowledge-card-top">
+              <span className={`knowledge-kind kind-${entry.tone}`}>{entry.kind}</span>
+              <div className="knowledge-actions">
+                <button
+                  aria-label="Edit"
+                  onClick={() => setEditingId(editingId === entry.id ? null : entry.id)}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  aria-label="Delete"
+                  onClick={() => setDeleted((current) => new Set(current).add(entry.id))}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+            {entry.heading && <h3>{entry.heading}</h3>}
+            {editingId === entry.id ? (
+              <textarea
+                className="knowledge-edit"
+                autoFocus
+                value={edits[entry.id] ?? entry.text}
+                onChange={(event) =>
+                  setEdits((current) => ({ ...current, [entry.id]: event.target.value }))
+                }
+                onBlur={() => setEditingId(null)}
+              />
+            ) : (
+              <p className="knowledge-text">{edits[entry.id] ?? entry.text}</p>
+            )}
+            <div className="knowledge-tags">
+              {entry.tags.map((tag) => (
+                <span key={tag}>#{tag}</span>
+              ))}
+            </div>
+            <div className="knowledge-footer">
+              <button
+                className="knowledge-source"
+                onClick={() => onJumpToSource(entry.bookTitle, entry.page)}
+              >
+                <ExternalLink size={13} />
+                {entry.bookTitle} → Page {entry.page}
+              </button>
+              <time>{entry.date}</time>
+            </div>
+          </article>
+        ))}
+        {visible.length === 0 && (
+          <div className="library-empty">
+            <Brain size={20} />
+            <strong>Nothing here yet</strong>
+            <span>Highlights and notes you save while reading appear here.</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2936,7 +3440,35 @@ function HealthTextarea({
   );
 }
 
-function SettingsView() {
+function SettingsView({
+  books,
+  onUpdateBookStorage,
+  colorMode,
+}: {
+  books: LibraryItem[];
+  onUpdateBookStorage: (
+    title: string,
+    newStorageOption: "device" | "sync",
+    syncStatus: "local" | "synced",
+    lastSyncedAt?: string,
+  ) => void;
+  colorMode: boolean;
+}) {
+  const [showStorage, setShowStorage] = useState(false);
+
+  if (showStorage) {
+    return (
+      <div className="page-content foundation-view storage-sync-view">
+        <StorageSyncView
+          books={books.filter((item) => item.type === "Books")}
+          onUpdateBookStorage={onUpdateBookStorage}
+          onBack={() => setShowStorage(false)}
+          colorMode={colorMode}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="page-content foundation-view">
       <header className="page-heading">
@@ -2947,6 +3479,11 @@ function SettingsView() {
         </div>
       </header>
       <div className="glass-card settings-card">
+        <button onClick={() => setShowStorage(true)}>
+          <span>Storage &amp; sync</span>
+          <small>Manage</small>
+          <ChevronRight size={17} />
+        </button>
         {[
           "Profile & preferences",
           "Notifications",
@@ -3204,6 +3741,22 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
   const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null);
   const [indicatorAnimated, setIndicatorAnimated] = useState(false);
 
+  // Library content is shared between the Library and My Knowledge views, and
+  // the reader/player overlays write progress and annotations back into it.
+  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>(initialLibraryItems);
+  const [reader, setReader] = useState<LibraryItem | null>(null);
+  const [player, setPlayer] = useState<LibraryItem | null>(null);
+  const [articleItem, setArticleItem] = useState<LibraryItem | null>(null);
+  const [bookOptions, setBookOptions] = useState<LibraryItem | null>(null);
+
+  const updateItem = useCallback(
+    (title: string, patch: (item: LibraryItem) => LibraryItem) =>
+      setLibraryItems((items) =>
+        items.map((item) => (item.title === title ? patch(item) : item)),
+      ),
+    [],
+  );
+
   const activeRoot = () =>
     displayedRef.current === "assistant" ? assistantRef.current : pageRef.current;
 
@@ -3236,6 +3789,110 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
         exitRef.current = null;
       });
   }, []);
+
+  const openMedia = useCallback(
+    (item: LibraryItem) => {
+      if (item.type === "Podcasts") setPlayer(item);
+      else if (item.type === "Articles") setArticleItem(item);
+      else if (item.type === "Notes") navigate("knowledge");
+      else if (item.pdfFileName || item.pdfUrl) setReader(item);
+      else setBookOptions(item);
+    },
+    [navigate],
+  );
+
+  const jumpToSource = useCallback(
+    (title: string, page: number) => {
+      const item = libraryItems.find((entry) => entry.title === title);
+      if (!item) return;
+      if (item.type === "Books" && (item.pdfFileName || item.pdfUrl)) {
+        setReader({ ...item, currentPage: page });
+      } else {
+        openMedia(item);
+      }
+    },
+    [libraryItems, openMedia],
+  );
+
+  const saveReaderProgress = (
+    title: string,
+    currentPage: number,
+    totalPages: number,
+    bookmarks: BookmarkItem[],
+    notes: NoteItem[],
+    highlights: HighlightItem[],
+    annotations: Annotation[],
+  ) =>
+    updateItem(title, (item) => ({
+      ...item,
+      currentPage,
+      totalPages,
+      progress: totalPages ? Math.round((currentPage / totalPages) * 100) : item.progress,
+      bookmarks,
+      notes,
+      highlights,
+      annotations,
+      accessed: "Just now",
+    }));
+
+  const updatePodcastProgress = (
+    title: string,
+    currentTimeSeconds: number,
+    durationSeconds: number,
+  ) =>
+    updateItem(title, (item) => ({
+      ...item,
+      currentTimeSeconds,
+      durationSeconds,
+      progress: durationSeconds
+        ? Math.round((currentTimeSeconds / durationSeconds) * 100)
+        : item.progress,
+      accessed: "Just now",
+    }));
+
+  const savePodcastDetails = (updated: LibraryItem) =>
+    updateItem(updated.title, (item) => ({ ...item, ...updated }));
+
+  const updateArticleProgress = (title: string, progress: number) =>
+    updateItem(title, (item) => ({ ...item, progress, accessed: "Just now" }));
+
+  const updateBookProgress = (title: string, newPage: number, totalPages: number) =>
+    updateItem(title, (item) => ({
+      ...item,
+      currentPage: newPage,
+      totalPages,
+      progress: totalPages ? Math.round((newPage / totalPages) * 100) : item.progress,
+    }));
+
+  const importPdf = (
+    title: string,
+    fileName: string,
+    storageChoice: "device" | "sync",
+    detectedPages: number,
+    syncStatus: "local" | "synced",
+    fileSizeBytes?: number,
+  ) =>
+    updateItem(title, (item) => ({
+      ...item,
+      pdfFileName: fileName,
+      pdfStorageOption: storageChoice,
+      totalPages: detectedPages,
+      syncStatus,
+      fileSizeBytes,
+    }));
+
+  const updateBookStorage = (
+    title: string,
+    newStorageOption: "device" | "sync",
+    syncStatus: "local" | "synced",
+    lastSyncedAt?: string,
+  ) =>
+    updateItem(title, (item) => ({
+      ...item,
+      pdfStorageOption: newStorageOption,
+      syncStatus,
+      lastSyncedAt,
+    }));
 
   // Runs before paint so the new page never flashes before its entrance starts.
   useLayoutEffect(() => {
@@ -3275,9 +3932,32 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
   const renderView = () => {
     if (displayedView === "today") return <TodayView navigate={navigate} />;
     if (displayedView === "calendar") return <CalendarView />;
-    if (displayedView === "library") return <LibraryView />;
+    if (displayedView === "library")
+      return (
+        <LibraryView
+          colorMode={colorMode}
+          items={libraryItems}
+          setItems={setLibraryItems}
+          onOpenMedia={openMedia}
+        />
+      );
+    if (displayedView === "knowledge")
+      return (
+        <KnowledgeView
+          items={libraryItems}
+          colorMode={colorMode}
+          onJumpToSource={jumpToSource}
+        />
+      );
     if (displayedView === "health") return <HealthView />;
-    if (displayedView === "settings") return <SettingsView />;
+    if (displayedView === "settings")
+      return (
+        <SettingsView
+          books={libraryItems}
+          onUpdateBookStorage={updateBookStorage}
+          colorMode={colorMode}
+        />
+      );
     return null;
   };
 
@@ -3405,6 +4085,49 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
           );
         })}
       </nav>
+
+      {reader && (
+        <MyProDarkReader
+          book={reader}
+          isOpen
+          colorMode={colorMode}
+          onClose={() => setReader(null)}
+          onSaveProgress={saveReaderProgress}
+        />
+      )}
+      {player && (
+        <MyProPodcastPlayer
+          podcast={player}
+          isOpen
+          colorMode={colorMode}
+          onClose={() => setPlayer(null)}
+          onUpdateProgress={updatePodcastProgress}
+          onSavePodcastDetails={savePodcastDetails}
+        />
+      )}
+      {articleItem && (
+        <ArticleReaderModal
+          article={articleItem}
+          isOpen
+          colorMode={colorMode}
+          onClose={() => setArticleItem(null)}
+          onUpdateProgress={updateArticleProgress}
+        />
+      )}
+      {bookOptions && (
+        <BookOptionsModal
+          book={bookOptions}
+          isOpen
+          colorMode={colorMode}
+          onClose={() => setBookOptions(null)}
+          onUpdateProgress={updateBookProgress}
+          onOpenReader={(item) => {
+            setBookOptions(null);
+            setReader(item);
+          }}
+          onImportPdf={importPdf}
+        />
+      )}
     </div>
   );
 }

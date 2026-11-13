@@ -1,0 +1,50 @@
+# Render blueprint — deploys backend-render as a single web service.
+# Render → New → Blueprint → select this repo.
+#
+# Values are inlined here ONLY where they are public by design:
+#   SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and SUPABASE_JWKS_URL are shipped
+#   to browsers anyway, and RLS is what protects the data.
+#
+# The three real secrets stay `sync: false` so they are typed into the Render
+# dashboard and never committed to this repository:
+#   SUPABASE_SECRET_KEY    — bypasses RLS entirely
+#   INTERNAL_SERVICE_TOKEN — must match backend-local/.env
+#   TOKEN_ENCRYPTION_KEY   — encrypts Gmail OAuth tokens at rest
+services:
+  - type: web
+    name: mypro-core
+    runtime: node
+    rootDir: backend-render
+    buildCommand: npm install && npm run build
+    startCommand: node dist/main.js
+    healthCheckPath: /api/v1/healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Public Supabase config
+      - key: SUPABASE_URL
+        value: https://kssucdvrfzbdkyzovmjo.supabase.co
+      - key: SUPABASE_PUBLISHABLE_KEY
+        value: sb_publishable_fSwoeDUEFGyiaJLWPZXKKA_DvkvUAUc
+      - key: SUPABASE_JWKS_URL
+        value: https://kssucdvrfzbdkyzovmjo.supabase.co/auth/v1/.well-known/jwks.json
+
+      # Secrets — set these in the Render dashboard
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: INTERNAL_SERVICE_TOKEN
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+
+      # Your Vercel origin(s), comma separated. Set once the frontend is up.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Leave unset: the laptop publishes its own URL into node_status on
+      # every start, so an ephemeral quick-tunnel address needs no redeploy.
+      # Only set this if you move to a fixed/named tunnel.
+      - key: LOCAL_AGENT_URL
+        sync: false

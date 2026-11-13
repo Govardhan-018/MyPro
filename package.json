@@ -1,29 +1,12 @@
 {
-  "name": "figma-make-app",
+  "name": "mypro",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
+  "description": "MyPro monorepo: frontend (Vercel), backend-render (always-on core API), backend-local (personal agent on the laptop).",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "format": "oxfmt"
-  },
-  "dependencies": {
-    "lottie-react": "^3.1.2",
-    "lucide-react": "^1.70.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/vite": "^4.0.0",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.0",
-    "oxfmt": "^0.76.0",
-    "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0",
-    "vite": "^8.0.5"
+    "dev": "pnpm --dir frontend dev",
+    "build": "pnpm --dir frontend build",
+    "preview": "pnpm --dir frontend preview",
+    "format": "pnpm --dir frontend format"
   }
 }
