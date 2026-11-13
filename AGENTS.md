@@ -22,7 +22,7 @@ read it from there. Never hardcode the tunnel URL anywhere.
 
 Secrets live only in each deployable's `.env` (`.env.example` holds
 placeholders **only** and is committed — never put real values in it). The
-model key (Google AI Studio / Gemini) exists only on the laptop. Supabase uses
+model key (Groq) exists only on the laptop. Supabase uses
 the current key format: `sb_publishable_…` + `sb_secret_…`, with client JWTs
 verified against the project's JWKS endpoint.
 

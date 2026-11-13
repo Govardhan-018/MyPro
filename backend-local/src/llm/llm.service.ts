@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { env } from '../config/env';
 
 /* ------------------------------------------------------------------ */
@@ -7,111 +7,66 @@ import { env } from '../config/env';
 /* ------------------------------------------------------------------ */
 
 export interface LlmToolCall {
+  /** Provider id; must be echoed back on the matching tool result. */
+  id: string;
   name: string;
   args: Record<string, unknown>;
 }
 
 export type LlmMessage =
   | { role: 'user'; text: string }
-  | { role: 'model'; text?: string; toolCalls?: LlmToolCall[] }
-  | { role: 'tool'; responses: { name: string; result: unknown }[] };
+  | {
+      role: 'model';
+      text?: string;
+      toolCalls?: LlmToolCall[];
+      /** Provider's original assistant message, replayed verbatim when present. */
+      raw?: unknown;
+    }
+  | { role: 'tool'; responses: { id: string; name: string; result: unknown }[] };
 
 export interface LlmTool {
   name: string;
   description: string;
-  /** JSON Schema; sanitised to Gemini's subset before use. */
+  /** Standard JSON Schema — Groq takes it as-is. */
   parameters: Record<string, unknown>;
 }
 
 export interface LlmResult {
   text: string;
   toolCalls: LlmToolCall[];
+  /** Pass back as `raw` on the model turn so history replays exactly. */
+  rawParts: unknown;
 }
 
-/* ------------------------------------------------------------------ */
-/* JSON Schema → Gemini Schema                                          */
-/* ------------------------------------------------------------------ */
+/** Hard ceiling on a single model call, so a busy model cannot wedge a request. */
+const REQUEST_TIMEOUT_MS = 60_000;
+/** Free tiers rate-limit and occasionally 5xx; a couple of retries smooths it. */
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 1_500;
 
-const TYPE_MAP: Record<string, string> = {
-  string: 'STRING',
-  number: 'NUMBER',
-  integer: 'INTEGER',
-  boolean: 'BOOLEAN',
-  array: 'ARRAY',
-  object: 'OBJECT',
-};
+const isTransient = (message: string): boolean =>
+  /\b(408|429|500|502|503|504)\b|rate.?limit|timeout|ECONNRESET|overloaded/i.test(message);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+type ChatMessage = Groq.Chat.Completions.ChatCompletionMessageParam;
 
 /**
- * Gemini accepts only a small subset of JSON Schema and rejects the request
- * outright on anything else — `minLength`, `additionalProperties`, `$schema`
- * and friends all have to go, and `type` must be the uppercase enum name.
- */
-function toGeminiSchema(node: unknown): Record<string, unknown> | undefined {
-  if (!node || typeof node !== 'object') return undefined;
-  const src = node as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-
-  const rawType = typeof src.type === 'string' ? src.type : undefined;
-  if (rawType && TYPE_MAP[rawType]) out.type = TYPE_MAP[rawType];
-  if (typeof src.description === 'string') out.description = src.description;
-  if (Array.isArray(src.enum)) out.enum = src.enum.map(String);
-
-  if (rawType === 'object') {
-    const props = src.properties as Record<string, unknown> | undefined;
-    if (props && Object.keys(props).length) {
-      const mapped: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(props)) {
-        const child = toGeminiSchema(value);
-        if (child) mapped[key] = child;
-      }
-      if (Object.keys(mapped).length) {
-        out.properties = mapped;
-        const required = (src.required as string[] | undefined)?.filter((r) => r in mapped);
-        if (required?.length) out.required = required;
-      }
-    }
-  }
-
-  if (rawType === 'array') {
-    const items = toGeminiSchema(src.items);
-    // Gemini requires `items` on every ARRAY.
-    out.items = items ?? { type: 'STRING' };
-  }
-
-  return Object.keys(out).length ? out : undefined;
-}
-
-/** A no-argument tool must omit `parameters` entirely rather than send {}. */
-function toolParameters(schema: Record<string, unknown>): Record<string, unknown> | undefined {
-  const converted = toGeminiSchema(schema);
-  if (!converted || converted.type !== 'OBJECT') return undefined;
-  const props = converted.properties as Record<string, unknown> | undefined;
-  return props && Object.keys(props).length ? converted : undefined;
-}
-
-/* ------------------------------------------------------------------ */
-
-interface GeminiPart {
-  text?: string;
-  functionCall?: { name?: string; args?: Record<string, unknown> };
-  functionResponse?: { name: string; response: Record<string, unknown> };
-}
-
-/**
- * The only place a model is called. Swapping providers means replacing this
- * file — nothing above it knows about Gemini.
+ * The only file that knows which model vendor is in use. Groq speaks the
+ * OpenAI chat-completions dialect, so tools are plain JSON Schema and tool
+ * results are matched by `tool_call_id`.
  */
 @Injectable()
 export class LlmService {
   private readonly logger = new Logger(LlmService.name);
-  private client: GoogleGenAI | null = null;
+  private client: Groq | null = null;
 
   /** Built on first use so the process can start without the key present. */
-  private ai(): GoogleGenAI {
+  private groq(): Groq {
     if (!this.client) {
-      const apiKey = env().GEMINI_API_KEY;
+      const apiKey = env().GROQ_API_KEY;
       if (!apiKey) throw new BadRequestException('This node is not configured to run the AI');
-      this.client = new GoogleGenAI({ apiKey });
+      this.client = new Groq({ apiKey, timeout: REQUEST_TIMEOUT_MS });
     }
     return this.client;
   }
@@ -125,70 +80,103 @@ export class LlmService {
   }): Promise<LlmResult> {
     const model = params.model || env().ASSISTANT_MODEL;
 
-    const contents = params.messages.map((m) => {
+    const messages: ChatMessage[] = [{ role: 'system', content: params.system }];
+    for (const m of params.messages) {
       if (m.role === 'user') {
-        return { role: 'user', parts: [{ text: m.text }] };
+        messages.push({ role: 'user', content: m.text });
+        continue;
       }
       if (m.role === 'model') {
-        const parts: GeminiPart[] = [];
-        if (m.text) parts.push({ text: m.text });
-        for (const call of m.toolCalls ?? []) {
-          parts.push({ functionCall: { name: call.name, args: call.args } });
+        if (m.raw) {
+          messages.push(m.raw as ChatMessage);
+          continue;
         }
-        // A model turn must never be empty.
-        if (!parts.length) parts.push({ text: '' });
-        return { role: 'model', parts };
+        messages.push({
+          role: 'assistant',
+          content: m.text ?? '',
+          ...(m.toolCalls?.length
+            ? {
+                tool_calls: m.toolCalls.map((c) => ({
+                  id: c.id,
+                  type: 'function' as const,
+                  function: { name: c.name, arguments: JSON.stringify(c.args) },
+                })),
+              }
+            : {}),
+        });
+        continue;
       }
-      return {
-        role: 'user',
-        parts: m.responses.map((r) => ({
-          functionResponse: {
-            name: r.name,
-            // Gemini requires the response to be an object.
-            response: { result: r.result ?? null },
-          },
-        })),
-      };
-    });
+      // Each tool result is its own message, keyed to the call it answers.
+      for (const r of m.responses) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: r.id,
+          content: typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? null),
+        });
+      }
+    }
 
-    const declarations = (params.tools ?? []).map((t) => {
-      const parameters = toolParameters(t.parameters);
-      return {
+    const tools = (params.tools ?? []).map((t) => ({
+      type: 'function' as const,
+      function: {
         name: t.name,
         description: t.description,
-        ...(parameters ? { parameters } : {}),
-      };
+        parameters: t.parameters,
+      },
+    }));
+
+    let lastError = '';
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await this.attempt(model, messages, tools, params.temperature);
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        if (!isTransient(lastError) || attempt === MAX_ATTEMPTS) break;
+        this.logger.warn(`model busy (attempt ${attempt}/${MAX_ATTEMPTS}), retrying`);
+        await sleep(RETRY_BASE_MS * attempt);
+      }
+    }
+
+    this.logger.error(`model call failed: ${lastError}`);
+    throw new BadRequestException(
+      isTransient(lastError)
+        ? 'The model is busy right now — try again in a moment'
+        : 'Assistant is unavailable right now',
+    );
+  }
+
+  private async attempt(
+    model: string,
+    messages: ChatMessage[],
+    tools: { type: 'function'; function: Record<string, unknown> }[],
+    temperature?: number,
+  ): Promise<LlmResult> {
+    const res = await this.groq().chat.completions.create({
+      model,
+      messages,
+      temperature: temperature ?? 1,
+      max_tokens: 4096,
+      ...(tools.length
+        ? { tools: tools as unknown as Groq.Chat.Completions.ChatCompletionTool[], tool_choice: 'auto' as const }
+        : {}),
     });
 
-    try {
-      const res = await this.ai().models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: params.system,
-          temperature: params.temperature ?? 1,
-          maxOutputTokens: 2048,
-          ...(declarations.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
-        },
-      });
+    const message = res.choices?.[0]?.message;
+    const text = (message?.content ?? '').trim();
 
-      const parts = (res.candidates?.[0]?.content?.parts ?? []) as GeminiPart[];
-      const text = parts
-        .map((p) => p.text ?? '')
-        .join('')
-        .trim();
-      const toolCalls: LlmToolCall[] = parts
-        .filter((p) => p.functionCall?.name)
-        .map((p) => ({
-          name: p.functionCall!.name as string,
-          args: (p.functionCall!.args ?? {}) as Record<string, unknown>,
-        }));
+    const toolCalls: LlmToolCall[] = (message?.tool_calls ?? []).flatMap((call) => {
+      const fn = (call as { function?: { name?: string; arguments?: string } }).function;
+      if (!fn?.name) return [];
+      let args: Record<string, unknown> = {};
+      try {
+        // Arguments arrive as a JSON string and can be malformed.
+        args = fn.arguments ? (JSON.parse(fn.arguments) as Record<string, unknown>) : {};
+      } catch {
+        this.logger.warn(`tool ${fn.name} sent unparseable arguments; using {}`);
+      }
+      return [{ id: (call as { id: string }).id, name: fn.name, args }];
+    });
 
-      return { text, toolCalls };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`model call failed: ${message}`);
-      throw new BadRequestException('Assistant is unavailable right now');
-    }
+    return { text, toolCalls, rawParts: message };
   }
 }

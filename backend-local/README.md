@@ -1,7 +1,7 @@
 # backend-local
 
 Your personal agent. Runs on your laptop — the only machine that holds the
-model API key (Google AI Studio / Gemini). Serves the assistant directly to
+model API key (Groq). Serves the assistant directly to
 the web app (and later the Android app), reads/writes Supabase itself, and
 heartbeats so everything else knows when it is awake.
 
@@ -50,10 +50,12 @@ dynamic. If you later buy a domain, create a *named* tunnel and set a fixed
 
 ## The model
 
-Google AI Studio (Gemini), free tier: <https://aistudio.google.com/apikey>.
-Set `GEMINI_API_KEY` in `.env`; `ASSISTANT_MODEL` defaults to
-`gemini-3.8-flash` and is overridable per user in `assistant_settings.model`.
+Groq, free tier: <https://console.groq.com/keys>.
+Set `GROQ_API_KEY` in `.env`; `ASSISTANT_MODEL` defaults to
+`openai/gpt-oss-120b` and is overridable per user in
+`assistant_settings.model`.
 
-`src/llm/llm.service.ts` is the only file that knows which vendor is in use —
-it converts JSON Schema to Gemini's stricter subset and normalises function
-calls, so swapping providers means replacing that one file.
+`src/llm/llm.service.ts` is the only file that knows which vendor is in use.
+Groq speaks the OpenAI chat-completions dialect, so tool schemas pass through
+as plain JSON Schema and tool results are matched by `tool_call_id`.
+Swapping providers means replacing that one file.

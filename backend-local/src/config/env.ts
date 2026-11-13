@@ -46,9 +46,9 @@ const schema = z.object({
    */
   PUBLIC_BASE_URL: optionalUrl(),
 
-  /** Google AI Studio (Gemini). Never leaves this machine. */
-  GEMINI_API_KEY: z.string().min(10),
-  ASSISTANT_MODEL: z.string().default('gemini-3.8-flash'),
+  /** Groq (console.groq.com). Never leaves this machine. */
+  GROQ_API_KEY: z.string().min(10),
+  ASSISTANT_MODEL: z.string().default('openai/gpt-oss-120b'),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),

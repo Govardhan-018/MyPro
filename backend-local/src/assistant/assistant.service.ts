@@ -252,16 +252,22 @@ export class AssistantService {
 
       if (!res.toolCalls.length) return { text: res.text, receipts };
 
-      messages.push({ role: 'model', text: res.text, toolCalls: res.toolCalls });
+      messages.push({
+        role: 'model',
+        text: res.text,
+        toolCalls: res.toolCalls,
+        raw: res.rawParts,
+      });
 
-      const responses: { name: string; result: unknown }[] = [];
+      const responses: { id: string; name: string; result: unknown }[] = [];
       for (const call of res.toolCalls) {
         const outcome = await this.skills.execute(params.user, call.name, call.args, {
           conversationId: params.conversationId,
           timezone: params.timezone,
         });
         receipts.push(outcome.receipt);
-        responses.push({ name: call.name, result: outcome.content.slice(0, 20_000) });
+        // The id ties this result to the call that produced it.
+        responses.push({ id: call.id, name: call.name, result: outcome.content.slice(0, 20_000) });
       }
       messages.push({ role: 'tool', responses });
     }

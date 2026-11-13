@@ -43,7 +43,9 @@ async function bootstrap() {
     origin: (origin, cb) => {
       // Allow non-browser callers (mobile app, curl) which send no Origin.
       if (!origin || config.CORS_ORIGINS.includes(origin)) return cb(null, true);
-      return cb(new Error('Origin not allowed'), false);
+      // Not allowed: answer without CORS headers so the browser blocks it.
+      // Passing an Error here would surface as a confusing 500 instead.
+      return cb(null, false);
     },
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
