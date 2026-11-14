@@ -60,7 +60,14 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
     },
     async signUpWithPassword(email, password) {
       if (!supabase) throw new Error('Supabase is not configured');
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        // Route the confirmation email back to the app that started the
+        // signup (dev vs prod), not the project's default Site URL. The URL
+        // must still be in Supabase's redirect allow-list.
+        ...(opts.redirectTo ? { options: { emailRedirectTo: opts.redirectTo } } : {}),
+      });
       if (error) throw new Error(error.message);
       return data.session;
     },

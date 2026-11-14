@@ -33,6 +33,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The app icon (and other images) are stored in Git LFS; without this
+          # the runner gets LFS pointer files and `expo prebuild` fails trying
+          # to read the icon ("Could not find MIME for Buffer <null>").
+          lfs: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
