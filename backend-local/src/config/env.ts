@@ -33,8 +33,8 @@ const schema = z.object({
   SUPABASE_PUBLISHABLE_KEY: z.string().min(20),
   /** Secret key (sb_secret_…) — bypasses RLS. Server only. */
   SUPABASE_SECRET_KEY: z.string().min(20),
-  /** Public JWKS endpoint used to verify client tokens. */
-  SUPABASE_JWKS_URL: z.string().url(),
+  /** Optional/deprecated: JWKS is now derived from SUPABASE_URL. No longer read. */
+  SUPABASE_JWKS_URL: z.string().url().optional(),
 
   /** Shared secret for render→laptop calls. Must match backend-render. */
   INTERNAL_SERVICE_TOKEN: z.string().min(32),

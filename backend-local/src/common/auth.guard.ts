@@ -24,10 +24,18 @@ export interface AuthedRequest extends Request {
  * Supabase's current key system signs tokens asymmetrically, so we verify
  * against the project's published JWKS rather than a shared secret. jose
  * caches the key set and refreshes it on rotation by itself.
+ *
+ * The JWKS URL is derived from SUPABASE_URL so a stale/mismatched
+ * SUPABASE_JWKS_URL can never reject otherwise-valid tokens.
  */
+function resolveJwksUrl(): string {
+  const base = env().SUPABASE_URL.replace(/\/$/, '');
+  return `${base}/auth/v1/.well-known/jwks.json`;
+}
+
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function keySet() {
-  if (!jwks) jwks = createRemoteJWKSet(new URL(env().SUPABASE_JWKS_URL));
+  if (!jwks) jwks = createRemoteJWKSet(new URL(resolveJwksUrl()));
   return jwks;
 }
 
