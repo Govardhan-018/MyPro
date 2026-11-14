@@ -7,10 +7,15 @@
     "scheme": "mypro",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#000000",
+    "icon": "./assets/icon.png",
     "platforms": ["android", "ios"],
     "assetBundlePatterns": ["**/*"],
     "android": {
-      "package": "com.mypro.app"
+      "package": "com.mypro.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#F4F1EA"
+      }
     },
     "newArchEnabled": false
   }

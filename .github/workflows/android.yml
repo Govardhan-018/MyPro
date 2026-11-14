@@ -73,17 +73,18 @@ jobs:
         run: |
           printf '\n# CI tuning\norg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m\norg.gradle.daemon=false\n' >> gradle.properties
 
-      - name: Gradle assembleDebug
+      - name: Gradle assembleRelease
         working-directory: android/android
         run: |
           chmod +x ./gradlew
-          # --info so a Kotlin/native compile error prints its actual `e:` lines
-          # (a plain run only says "Compilation error. See log").
-          ./gradlew assembleDebug --no-daemon --stacktrace --info
+          # Release (not debug): bundles the JS so the APK runs standalone on a
+          # phone with no Metro dev server. Expo signs release with the debug
+          # keystore by default, so it installs with no secret needed.
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mypro-debug-apk
-          path: android/android/app/build/outputs/apk/debug/*.apk
+          name: mypro-apk
+          path: android/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
