@@ -40,6 +40,9 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
+        // Resolve the shared workspace package to its TS source so Vite
+        // transpiles it as app code (a node_modules symlink would be skipped).
+        "@mypro/shared": path.resolve(__dirname, "../shared/src/index.ts"),
       },
     },
     server: {

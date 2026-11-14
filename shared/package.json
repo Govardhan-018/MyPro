@@ -1,0 +1,16 @@
+{
+  "name": "@mypro/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Platform-injected core (types, API client, Supabase auth, agent discovery) shared by the web app and the Android app.",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
