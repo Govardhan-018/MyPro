@@ -36,8 +36,8 @@ export default function App() {
           <Row label="Assistant (laptop agent)" ready={agentReady} />
           {!apiReady && (
             <Text style={styles.muted}>
-              Set EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY and
-              EXPO_PUBLIC_API_URL to connect.
+              Set EXPO_PUBLIC_API_URL (your Render URL) to connect — that's the
+              only backend the app needs.
             </Text>
           )}
         </View>

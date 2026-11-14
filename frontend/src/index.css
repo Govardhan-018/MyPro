@@ -1567,6 +1567,21 @@ button {
   opacity: 0.5;
   cursor: default;
 }
+
+/* Data loading / error banners (feature views) */
+.data-banner {
+  margin: 0 0 16px;
+  padding: 11px 15px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+}
+.data-banner-error {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #f8a3a3;
+}
 .mode-select {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.65);

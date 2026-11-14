@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CommonModule } from './common/common.module';
+import { AuthModule } from './auth/auth.module';
 import { NodesModule } from './nodes/nodes.module';
 import { ProfileModule } from './profile/profile.module';
 import { LibraryModule } from './library/library.module';
@@ -21,6 +22,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
   imports: [
     ScheduleModule.forRoot(),
     CommonModule,
+    AuthModule,
     NodesModule,
     ProfileModule,
     LibraryModule,

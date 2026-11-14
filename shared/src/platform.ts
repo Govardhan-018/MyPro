@@ -1,15 +1,14 @@
 /**
  * The platform seam. Everything platform-specific the shared core needs is
- * passed in here, so the same code runs unchanged on the web (fetch +
- * localStorage + Vite env) and on Android/React Native (fetch + AsyncStorage +
- * its own env). Nothing in `shared/` reads `import.meta`, `window`, or any
- * Vite/RN global directly — it only ever sees a `Platform`.
+ * passed in here, so the same code runs unchanged on web (fetch + localStorage)
+ * and on Android/React Native (fetch + AsyncStorage).
+ *
+ * Thin-client model: the only backend a client configures is Render
+ * (`apiUrl`). Auth is brokered by Render — no Supabase URL or key lives in the
+ * client. The laptop agent's URL is discovered at runtime via Render too.
  */
 
-/** Resolved client configuration. URLs already have trailing slashes stripped. */
 export interface EnvConfig {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
   /** backend-render base, e.g. https://mypro.onrender.com/api/v1 */
   apiUrl: string;
   /**
@@ -21,9 +20,8 @@ export interface EnvConfig {
 }
 
 /**
- * The subset of supabase-js's `SupportedStorage` the auth layer needs.
- * Satisfied by the browser's `localStorage` and by React Native's
- * `@react-native-async-storage/async-storage`.
+ * The subset of storage the auth layer needs to persist the session. Satisfied
+ * by the browser's `localStorage` and by React Native's AsyncStorage.
  */
 export interface AuthStorage {
   getItem(key: string): string | null | Promise<string | null>;
@@ -37,10 +35,6 @@ export interface Platform {
   env: Partial<EnvConfig>;
   /** Fetch implementation. Defaults to the global `fetch`. */
   fetch?: typeof fetch;
-  /** Supabase session storage. Web omits it (localStorage); RN passes AsyncStorage. */
+  /** Where the auth session is persisted (web: localStorage; RN: AsyncStorage). */
   storage?: AuthStorage;
-  /** OAuth redirect target (web: `window.location.origin`; RN: a deep link). */
-  redirectTo?: string;
-  /** Parse the session out of the URL after an OAuth redirect. Web: true; RN: false. */
-  detectSessionInUrl?: boolean;
 }

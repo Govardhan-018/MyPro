@@ -1,29 +1,29 @@
 import { useEffect, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import type { AuthSession } from '@mypro/shared';
 import { getSession, onAuthChange } from './supabase';
-import { isSupabaseConfigured } from './env';
+import { isApiConfigured } from './env';
 
 export interface SessionState {
-  /** The current Supabase session, or null when signed out. */
-  session: Session | null;
-  /** True while the initial session is being restored from storage. */
+  /** The current session, or null when signed out. */
+  session: AuthSession | null;
+  /** True while the stored session is being restored. */
   loading: boolean;
-  /** Whether Supabase is configured at all (env present). */
+  /** Whether the backend (Render) is configured at all. */
   configured: boolean;
 }
 
 /**
- * Tracks the Supabase auth session: restores it on load, then stays in sync via
- * `onAuthChange` (sign-in, sign-out, token refresh, OAuth redirect return).
- * When Supabase isn't configured it reports `configured: false` immediately so
- * the app can fall back to its local-only prototype mode.
+ * Tracks the auth session: restores it on load, then stays in sync via
+ * `onAuthChange` (sign-in, sign-out, token refresh). Reports
+ * `configured: false` immediately when Render isn't configured so the app can
+ * fall back to its local-only prototype mode.
  */
 export function useSession(): SessionState {
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [loading, setLoading] = useState<boolean>(isApiConfigured);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
+    if (!isApiConfigured) {
       setLoading(false);
       return;
     }
@@ -51,5 +51,5 @@ export function useSession(): SessionState {
     };
   }, []);
 
-  return { session, loading, configured: isSupabaseConfigured };
+  return { session, loading, configured: isApiConfigured };
 }

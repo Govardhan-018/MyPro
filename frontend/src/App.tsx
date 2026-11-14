@@ -75,7 +75,7 @@ import { MyProPodcastPlayer } from "./components/library/MyProPodcastPlayer";
 import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
-import { isApiConfigured, isSupabaseConfigured } from "./lib/env";
+import { isApiConfigured } from "./lib/env";
 import {
   AgentOfflineError,
   api,
@@ -87,6 +87,8 @@ import {
 import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from "./lib/supabase";
 import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
+import { useLibrary } from "./lib/useLibrary";
+import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 
 type View =
   | "today"
@@ -221,9 +223,9 @@ function Welcome({
     };
   }, [contentPending]);
 
-  // Real Supabase auth when the project is configured; otherwise the original
-  // local-only prototype flow, so the design stays demoable without a backend.
-  const configured = isSupabaseConfigured;
+  // Real auth (via Render) when the backend is configured; otherwise the
+  // original local-only prototype flow, so the design stays demoable.
+  const configured = isApiConfigured;
   const minPassword = configured ? 6 : 4;
 
   const runPrototype = async (provider: string) => {
@@ -2211,11 +2213,17 @@ function LibraryView({
   items: libraryItems,
   setItems: setLibraryItems,
   onOpenMedia,
+  onCreateItem,
+  loading,
+  error,
 }: {
   colorMode: boolean;
   items: LibraryItem[];
   setItems: Dispatch<SetStateAction<LibraryItem[]>>;
   onOpenMedia: (item: LibraryItem) => void;
+  onCreateItem: (item: LibraryItem) => Promise<LibraryItem>;
+  loading: boolean;
+  error: string | null;
 }) {
   const categories = ["All", "Books", "Podcasts", "Articles", "Notes"] as const;
   const filters = ["All", "In Progress", "Completed", "Want to Read", "Favorites"] as const;
@@ -2283,8 +2291,15 @@ function LibraryView({
       base.readTimeMinutes = 8;
     }
     setAddingItem(true);
-    await request();
-    setLibraryItems((currentItems) => [base, ...currentItems]);
+    try {
+      await onCreateItem(base);
+    } catch (caught) {
+      setAddingItem(false);
+      setToast(caught instanceof Error ? caught.message : "Could not add item.");
+      await request(2600);
+      setToast("");
+      return;
+    }
     setAddingItem(false);
     setShowAdd(false);
     setForm(emptyAddForm);
@@ -2333,6 +2348,17 @@ function LibraryView({
           <Plus size={17} /> Add to library
         </button>
       </header>
+
+      {error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {loading && !error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your library…
+        </div>
+      )}
 
       <div className="library-toolbar">
         <label className="library-search">
@@ -4293,19 +4319,66 @@ function AppShell({
 
   // Library content is shared between the Library and My Knowledge views, and
   // the reader/player overlays write progress and annotations back into it.
-  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>(initialLibraryItems);
+  // Loaded from /library (mapped to the UI model) when the backend is
+  // configured; otherwise the seed, so the prototype still works offline.
+  const {
+    items: libraryItems,
+    setItems: setLibraryItems,
+    loading: libraryLoading,
+    error: libraryError,
+    configured: libraryConfigured,
+    createItem: createLibraryItem,
+    updateItem,
+  } = useLibrary(initialLibraryItems);
+  const readerSync = useReaderSync(libraryConfigured);
+  const enrichedReaderId = useRef<string | null>(null);
   const [reader, setReader] = useState<LibraryItem | null>(null);
   const [player, setPlayer] = useState<LibraryItem | null>(null);
   const [articleItem, setArticleItem] = useState<LibraryItem | null>(null);
   const [bookOptions, setBookOptions] = useState<LibraryItem | null>(null);
 
-  const updateItem = useCallback(
-    (title: string, patch: (item: LibraryItem) => LibraryItem) =>
-      setLibraryItems((items) =>
-        items.map((item) => (item.title === title ? patch(item) : item)),
-      ),
-    [],
+  // Open a book in the reader. When it's a saved item we first load its
+  // annotations + bookmarks so the reader mounts with them (the reader seeds
+  // its state once, so post-open injection wouldn't show), and record the
+  // session start for reconciliation on close.
+  const openReader = useCallback(
+    async (item: LibraryItem) => {
+      if (libraryConfigured && item.id) {
+        readerSync.begin(item.id);
+        try {
+          const [annotations, bookmarks] = await Promise.all([
+            api.reader.annotations(item.id),
+            api.reader.bookmarks(item.id),
+          ]);
+          readerSync.setServer(item.id, annotations, bookmarks);
+          enrichedReaderId.current = item.id;
+          setReader({
+            ...item,
+            annotations: annotations.map(annotationRowToUi),
+            bookmarks: bookmarks.map(bookmarkRowToUi),
+          });
+          return;
+        } catch {
+          /* fall through and open with whatever the item already carries */
+        }
+      }
+      if (item.id) {
+        readerSync.begin(item.id);
+        enrichedReaderId.current = item.id;
+      }
+      setReader(item);
+    },
+    [libraryConfigured, readerSync],
   );
+
+  // When the reader closes, reconcile the final annotations/bookmarks to the
+  // server (create the new, delete the removed) and log the reading session.
+  useEffect(() => {
+    if (reader || !enrichedReaderId.current) return;
+    const id = enrichedReaderId.current;
+    enrichedReaderId.current = null;
+    readerSync.flush(id);
+  }, [reader, readerSync]);
 
   const activeRoot = () =>
     displayedRef.current === "assistant" ? assistantRef.current : pageRef.current;
@@ -4345,10 +4418,10 @@ function AppShell({
       if (item.type === "Podcasts") setPlayer(item);
       else if (item.type === "Articles") setArticleItem(item);
       else if (item.type === "Notes") navigate("knowledge");
-      else if (item.pdfFileName || item.pdfUrl) setReader(item);
+      else if (item.pdfFileName || item.pdfUrl) void openReader(item);
       else setBookOptions(item);
     },
-    [navigate],
+    [navigate, openReader],
   );
 
   const jumpToSource = useCallback(
@@ -4356,12 +4429,12 @@ function AppShell({
       const item = libraryItems.find((entry) => entry.title === title);
       if (!item) return;
       if (item.type === "Books" && (item.pdfFileName || item.pdfUrl)) {
-        setReader({ ...item, currentPage: page });
+        void openReader({ ...item, currentPage: page });
       } else {
         openMedia(item);
       }
     },
-    [libraryItems, openMedia],
+    [libraryItems, openMedia, openReader],
   );
 
   const saveReaderProgress = (
@@ -4372,7 +4445,10 @@ function AppShell({
     notes: NoteItem[],
     highlights: HighlightItem[],
     annotations: Annotation[],
-  ) =>
+  ) => {
+    // Stash the latest reader snapshot so it can be reconciled to the API when
+    // the reader closes (create new / delete removed annotations + bookmarks).
+    readerSync.snapshot({ bookmarks, annotations, currentPage, totalPages });
     updateItem(title, (item) => ({
       ...item,
       currentPage,
@@ -4384,6 +4460,7 @@ function AppShell({
       annotations,
       accessed: "Just now",
     }));
+  };
 
   const updatePodcastProgress = (
     title: string,
@@ -4489,6 +4566,9 @@ function AppShell({
           items={libraryItems}
           setItems={setLibraryItems}
           onOpenMedia={openMedia}
+          onCreateItem={createLibraryItem}
+          loading={libraryLoading}
+          error={libraryError}
         />
       );
     if (displayedView === "knowledge")
@@ -4691,7 +4771,7 @@ function AppShell({
           onUpdateProgress={updateBookProgress}
           onOpenReader={(item) => {
             setBookOptions(null);
-            setReader(item);
+            void openReader(item);
           }}
           onImportPdf={importPdf}
         />

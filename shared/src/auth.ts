@@ -1,91 +1,165 @@
-import {
-  createClient as createSupabaseClient,
-  type Session,
-  type SupabaseClient,
-} from '@supabase/supabase-js';
 import type { AuthStorage, EnvConfig } from './platform';
-import { isSupabaseConfigured } from './env';
 
-export interface AuthOptions {
-  /** Session storage. Web omits it (localStorage); RN passes AsyncStorage. */
-  storage?: AuthStorage;
-  /** OAuth redirect target. */
-  redirectTo?: string;
-  /** Parse the session out of the URL after an OAuth redirect (web only). */
-  detectSessionInUrl?: boolean;
+/**
+ * Thin-client auth. The client holds no Supabase credentials — it posts
+ * email/password to Render's `/auth/*` broker, stores the returned session, and
+ * sends the access token as the Bearer on every render + agent call. Tokens are
+ * refreshed through Render when they near expiry. The session is persisted via
+ * the platform storage adapter (localStorage on web, AsyncStorage on RN).
+ */
+
+export interface AuthUser {
+  id: string;
+  email: string | null;
 }
 
-/** Supabase session handling, platform-agnostic. `supabase` is null until configured. */
+export interface AuthSession {
+  access_token: string;
+  refresh_token: string;
+  /** Unix seconds; null when unknown. */
+  expires_at: number | null;
+  user: AuthUser;
+}
+
 export interface Auth {
-  readonly supabase: SupabaseClient | null;
-  getSession(): Promise<Session | null>;
-  /** Fresh access token for API calls; supabase-js refreshes it as needed. */
+  getSession(): Promise<AuthSession | null>;
+  /** Fresh access token (refreshes through Render if the current one expired). */
   getAccessToken(): Promise<string | null>;
-  signInWithPassword(email: string, password: string): Promise<Session | null>;
-  signUpWithPassword(email: string, password: string): Promise<Session | null>;
+  signInWithPassword(email: string, password: string): Promise<AuthSession | null>;
+  /** Returns null when the project requires email confirmation. */
+  signUpWithPassword(email: string, password: string): Promise<AuthSession | null>;
+  /** Not available in the thin-client model yet; throws a friendly message. */
   signInWithOAuth(provider: 'google' | 'apple'): Promise<void>;
   signOut(): Promise<void>;
-  onAuthChange(cb: (session: Session | null) => void): () => void;
+  onAuthChange(cb: (session: AuthSession | null) => void): () => void;
+}
+
+export interface AuthOptions {
+  storage?: AuthStorage;
+  fetch?: typeof fetch;
+}
+
+const STORAGE_KEY = 'mypro.session';
+const REFRESH_SKEW_MS = 60_000;
+
+function memoryStorage(): AuthStorage {
+  const store = new Map<string, string>();
+  return {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => void store.set(k, v),
+    removeItem: (k) => void store.delete(k),
+  };
 }
 
 export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
-  const supabase: SupabaseClient | null = isSupabaseConfigured(env)
-    ? createSupabaseClient(env.supabaseUrl, env.supabaseAnonKey, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: opts.detectSessionInUrl ?? true,
-          ...(opts.storage ? { storage: opts.storage } : {}),
-        },
-      })
-    : null;
+  const doFetch: typeof fetch =
+    opts.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
+  const storage = opts.storage ?? memoryStorage();
+  const listeners = new Set<(session: AuthSession | null) => void>();
 
-  async function getSession(): Promise<Session | null> {
-    if (!supabase) return null;
-    const { data } = await supabase.auth.getSession();
-    return data.session;
+  let cached: AuthSession | null | undefined;
+  let refreshing: Promise<AuthSession | null> | null = null;
+
+  async function load(): Promise<AuthSession | null> {
+    if (cached !== undefined) return cached;
+    try {
+      const raw = await storage.getItem(STORAGE_KEY);
+      cached = raw ? (JSON.parse(raw) as AuthSession) : null;
+    } catch {
+      cached = null;
+    }
+    return cached;
+  }
+
+  async function save(session: AuthSession | null): Promise<void> {
+    cached = session;
+    try {
+      if (session) await storage.setItem(STORAGE_KEY, JSON.stringify(session));
+      else await storage.removeItem(STORAGE_KEY);
+    } catch {
+      /* storage can be unavailable (private mode); keep the in-memory cache */
+    }
+    for (const listener of listeners) listener(session);
+  }
+
+  function isExpired(session: AuthSession): boolean {
+    if (!session.expires_at) return false;
+    return Date.now() >= session.expires_at * 1000 - REFRESH_SKEW_MS;
+  }
+
+  async function post(
+    path: string,
+    body: unknown,
+  ): Promise<{ session: AuthSession | null; needs_confirmation?: boolean }> {
+    const res = await doFetch(`${env.apiUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    const parsed: unknown = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      const message =
+        parsed && typeof parsed === 'object' && 'message' in parsed
+          ? String((parsed as { message: unknown }).message)
+          : `Request failed (${res.status})`;
+      throw new Error(message);
+    }
+    return (parsed ?? { session: null }) as {
+      session: AuthSession | null;
+      needs_confirmation?: boolean;
+    };
+  }
+
+  async function refresh(session: AuthSession): Promise<AuthSession | null> {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      try {
+        const out = await post('/auth/refresh', { refresh_token: session.refresh_token });
+        await save(out.session);
+        return out.session;
+      } catch {
+        await save(null);
+        return null;
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
   }
 
   return {
-    supabase,
-    getSession,
+    async getSession() {
+      return (await load()) ?? null;
+    },
     async getAccessToken() {
-      return (await getSession())?.access_token ?? null;
+      const session = await load();
+      if (!session) return null;
+      if (isExpired(session)) {
+        const next = await refresh(session);
+        return next?.access_token ?? null;
+      }
+      return session.access_token;
     },
     async signInWithPassword(email, password) {
-      if (!supabase) throw new Error('Supabase is not configured');
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw new Error(error.message);
-      return data.session;
+      const out = await post('/auth/login', { email, password });
+      await save(out.session);
+      return out.session;
     },
     async signUpWithPassword(email, password) {
-      if (!supabase) throw new Error('Supabase is not configured');
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        // Route the confirmation email back to the app that started the
-        // signup (dev vs prod), not the project's default Site URL. The URL
-        // must still be in Supabase's redirect allow-list.
-        ...(opts.redirectTo ? { options: { emailRedirectTo: opts.redirectTo } } : {}),
-      });
-      if (error) throw new Error(error.message);
-      return data.session;
+      const out = await post('/auth/signup', { email, password });
+      if (out.session) await save(out.session);
+      return out.session;
     },
-    async signInWithOAuth(provider) {
-      if (!supabase) throw new Error('Supabase is not configured');
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: opts.redirectTo ? { redirectTo: opts.redirectTo } : undefined,
-      });
-      if (error) throw new Error(error.message);
+    async signInWithOAuth() {
+      throw new Error('Social sign-in is not available yet — use email and password.');
     },
     async signOut() {
-      await supabase?.auth.signOut();
+      await save(null);
     },
     onAuthChange(cb) {
-      if (!supabase) return () => {};
-      const { data } = supabase.auth.onAuthStateChange((_event, session) => cb(session));
-      return () => data.subscription.unsubscribe();
+      listeners.add(cb);
+      return () => void listeners.delete(cb);
     },
   };
 }

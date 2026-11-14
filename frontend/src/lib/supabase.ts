@@ -1,18 +1,16 @@
 /**
- * Web view of Supabase auth. The client itself (with the browser's
- * localStorage as session storage) is created in `./client` via
- * `@mypro/shared`; this module re-exports the session helpers under the names
- * the app already uses. The methods close over the client, so re-exporting
- * them as bare functions is safe.
+ * Auth surface for the web app. Despite the filename (kept to avoid churn),
+ * this no longer talks to Supabase directly — it re-exports the Render-brokered
+ * auth from the shared client. The client holds no Supabase credentials.
  */
-import type { Session } from '@supabase/supabase-js';
+import type { AuthSession } from '@mypro/shared';
 import { client } from './client';
 
 const { auth } = client;
 
-export const supabase = auth.supabase;
+export type Session = AuthSession;
 
-export const getSession = (): Promise<Session | null> => auth.getSession();
+export const getSession = (): Promise<AuthSession | null> => auth.getSession();
 export const getAccessToken = (): Promise<string | null> => auth.getAccessToken();
 export const signInWithPassword = (email: string, password: string) =>
   auth.signInWithPassword(email, password);
@@ -20,5 +18,5 @@ export const signUpWithPassword = (email: string, password: string) =>
   auth.signUpWithPassword(email, password);
 export const signInWithOAuth = (provider: 'google' | 'apple') => auth.signInWithOAuth(provider);
 export const signOut = (): Promise<void> => auth.signOut();
-export const onAuthChange = (cb: (session: Session | null) => void): (() => void) =>
+export const onAuthChange = (cb: (session: AuthSession | null) => void): (() => void) =>
   auth.onAuthChange(cb);
