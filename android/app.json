@@ -12,6 +12,6 @@
     "android": {
       "package": "com.mypro.app"
     },
-    "newArchEnabled": true
+    "newArchEnabled": false
   }
 }

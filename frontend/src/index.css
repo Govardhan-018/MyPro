@@ -124,6 +124,46 @@ button {
 .sidebar nav {
   margin-top: 27px;
 }
+.sidebar-account {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-account-email {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11.5px;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-signout {
+  width: 100%;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+.sidebar-signout:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+.auth-splash {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
 .nav-label {
   display: block;
   color: #ffffff;
@@ -2494,6 +2534,14 @@ button {
 .settings-card small {
   color: var(--soft);
   font-size: 9px;
+}
+.settings-card button.settings-signout {
+  display: flex;
+  gap: 12px;
+  color: #ffffff;
+}
+.settings-card button.settings-signout small {
+  margin-left: auto;
 }
 
 /* Welcome */

@@ -41,6 +41,7 @@ import {
   HeartPulse,
   Home,
   Library,
+  LogOut,
   Mail,
   Mic,
   Paperclip,
@@ -74,6 +75,10 @@ import { MyProPodcastPlayer } from "./components/library/MyProPodcastPlayer";
 import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
+import { isSupabaseConfigured } from "./lib/env";
+import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from "./lib/supabase";
+import { useSession } from "./lib/useSession";
+import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 
 type View =
   | "today"
@@ -208,7 +213,12 @@ function Welcome({
     };
   }, [contentPending]);
 
-  const completePrototypeSignIn = async (provider: string) => {
+  // Real Supabase auth when the project is configured; otherwise the original
+  // local-only prototype flow, so the design stays demoable without a backend.
+  const configured = isSupabaseConfigured;
+  const minPassword = configured ? 6 : 4;
+
+  const runPrototype = async (provider: string) => {
     setFeedback(`Connecting with ${provider}…`);
     setAuthState("loading");
     await request();
@@ -218,13 +228,50 @@ function Welcome({
     onEnter();
   };
 
-  const submitEmail = () => {
-    if (!email.includes("@") || password.length < 4) {
+  const continueWithProvider = async (provider: "google" | "apple", label: string) => {
+    if (!configured) return runPrototype(label);
+    setAuthState("loading");
+    setFeedback(`Redirecting to ${label}…`);
+    try {
+      // Redirects away to the provider and back; the session is then picked up
+      // on return by the auth listener, which swaps in the app shell.
+      await signInWithOAuth(provider);
+    } catch (error) {
       setAuthState("error");
-      setFeedback("Enter a valid email and a password with at least 4 characters.");
+      setFeedback(error instanceof Error ? error.message : `Could not continue with ${label}.`);
+    }
+  };
+
+  const submitEmail = async () => {
+    if (!email.includes("@") || password.length < minPassword) {
+      setAuthState("error");
+      setFeedback(`Enter a valid email and a password with at least ${minPassword} characters.`);
       return;
     }
-    completePrototypeSignIn(accountMode === "signup" ? "your new account" : "email");
+    if (!configured) {
+      return runPrototype(accountMode === "signup" ? "your new account" : "email");
+    }
+    setAuthState("loading");
+    setFeedback(accountMode === "signup" ? "Creating your account…" : "Signing you in…");
+    try {
+      if (accountMode === "signup") {
+        const session = await signUpWithPassword(email, password);
+        if (!session) {
+          // Email confirmation is on: no session yet.
+          setAuthState("success");
+          setFeedback("Check your email to confirm your account, then sign in.");
+          return;
+        }
+      } else {
+        await signInWithPassword(email, password);
+      }
+      setAuthState("success");
+      setFeedback("Welcome. Opening your MyPro space…");
+      // The auth listener in App swaps in the shell once the session lands.
+    } catch (error) {
+      setAuthState("error");
+      setFeedback(error instanceof Error ? error.message : "Authentication failed.");
+    }
   };
 
   const openAccountMode = (mode: "signin" | "signup") => {
@@ -287,7 +334,9 @@ function Welcome({
             <h2>{accountMode === "signup" ? "Create your account." : "Welcome back."}</h2>
             <p>
               {accountMode === "signup"
-                ? "Create a prototype account to enter MyPro."
+                ? configured
+                  ? "Create your account to enter MyPro."
+                  : "Create a prototype account to enter MyPro."
                 : "Sign in to continue with MyPro."}
             </p>
           </div>
@@ -301,14 +350,14 @@ function Welcome({
 
           <button
             className="auth-button auth-primary"
-            onClick={() => completePrototypeSignIn("Apple")}
+            onClick={() => continueWithProvider("apple", "Apple")}
             disabled={authState === "loading"}
           >
             <Apple size={19} fill="currentColor" /> Continue with Apple
           </button>
           <button
             className="auth-button"
-            onClick={() => completePrototypeSignIn("Google")}
+            onClick={() => continueWithProvider("google", "Google")}
             disabled={authState === "loading"}
           >
             <span className="google-mark">G</span> Continue with Google
@@ -404,9 +453,11 @@ function Welcome({
             By continuing, you agree to the <a href="#terms">Terms of Service</a> and{" "}
             <a href="#privacy">Privacy Policy</a>.
           </p>
-          <p className="prototype-note">
-            Authentication interactions are shown as a design prototype.
-          </p>
+          {!configured && (
+            <p className="prototype-note">
+              Authentication interactions are shown as a design prototype.
+            </p>
+          )}
         </aside>
       </section>
       <footer className="login-footer">
@@ -3444,6 +3495,8 @@ function SettingsView({
   books,
   onUpdateBookStorage,
   colorMode,
+  onSignOut,
+  userEmail,
 }: {
   books: LibraryItem[];
   onUpdateBookStorage: (
@@ -3453,6 +3506,8 @@ function SettingsView({
     lastSyncedAt?: string,
   ) => void;
   colorMode: boolean;
+  onSignOut: () => void;
+  userEmail: string | null;
 }) {
   const [showStorage, setShowStorage] = useState(false);
 
@@ -3496,6 +3551,13 @@ function SettingsView({
             <ChevronRight size={17} />
           </button>
         ))}
+      </div>
+      <div className="glass-card settings-card">
+        <button className="settings-signout" onClick={onSignOut}>
+          <LogOut size={17} />
+          <span>Sign out</span>
+          <small>{userEmail ?? ""}</small>
+        </button>
       </div>
     </div>
   );
@@ -3724,7 +3786,17 @@ function runLoginEntrance(root: HTMLElement, phase: "top" | "content"): Animatio
   return animations;
 }
 
-function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleColor: () => void }) {
+function AppShell({
+  colorMode,
+  onToggleColor,
+  onSignOut,
+  userEmail,
+}: {
+  colorMode: boolean;
+  onToggleColor: () => void;
+  onSignOut: () => void;
+  userEmail: string | null;
+}) {
   // `view` drives navigation highlights immediately; `displayedView` is the page on screen.
   const [view, setView] = useState<View>("today");
   const [displayedView, setDisplayedView] = useState<View>("today");
@@ -3956,6 +4028,8 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
           books={libraryItems}
           onUpdateBookStorage={updateBookStorage}
           colorMode={colorMode}
+          onSignOut={onSignOut}
+          userEmail={userEmail}
         />
       );
     return null;
@@ -3991,6 +4065,22 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
             </button>
           ))}
         </nav>
+        {userEmail && (
+          <div className="sidebar-account">
+            <span className="sidebar-account-email" title={userEmail}>
+              {userEmail}
+            </span>
+            <button
+              type="button"
+              className="sidebar-signout"
+              onClick={onSignOut}
+              aria-label="Sign out"
+            >
+              <LogOut size={16} />
+              <span>Sign out</span>
+            </button>
+          </div>
+        )}
       </aside>
       <div className="app-main">
         <header className="mobile-header">
@@ -4132,15 +4222,46 @@ function AppShell({ colorMode, onToggleColor }: { colorMode: boolean; onToggleCo
   );
 }
 
+/** Minimal brand-only screen shown while the stored session is restored. */
+function AuthSplash({ colorMode }: { colorMode: boolean }) {
+  return (
+    <main className={`welcome login-welcome auth-splash ${colorMode ? "color-mode" : ""}`}>
+      <Brand colorMode={colorMode} />
+    </main>
+  );
+}
+
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const { session, loading, configured } = useSession();
   const [colorMode, setColorMode] = useState(false);
   const toggleColorMode = () => setColorMode((active) => !active);
+
+  // When Supabase isn't configured, the Welcome prototype still lets you in via
+  // this local flag so the design stays demoable; with Supabase, the real
+  // session is the single source of truth.
+  const [previewEntered, setPreviewEntered] = useState(false);
+  const authenticated = configured ? Boolean(session) : previewEntered;
+
+  // Presence heartbeat — only meaningful with a real session + core API.
+  useActivityHeartbeat(authenticated && configured);
+
+  const handleSignOut = useCallback(() => {
+    setPreviewEntered(false);
+    void signOut();
+  }, []);
+
+  if (loading) return <AuthSplash colorMode={colorMode} />;
+
   return authenticated ? (
-    <AppShell colorMode={colorMode} onToggleColor={toggleColorMode} />
+    <AppShell
+      colorMode={colorMode}
+      onToggleColor={toggleColorMode}
+      onSignOut={handleSignOut}
+      userEmail={session?.user?.email ?? null}
+    />
   ) : (
     <Welcome
-      onEnter={() => setAuthenticated(true)}
+      onEnter={() => setPreviewEntered(true)}
       colorMode={colorMode}
       onToggleColor={toggleColorMode}
     />
