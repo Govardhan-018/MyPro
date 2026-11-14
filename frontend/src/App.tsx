@@ -75,7 +75,15 @@ import { MyProPodcastPlayer } from "./components/library/MyProPodcastPlayer";
 import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
-import { isSupabaseConfigured } from "./lib/env";
+import { isApiConfigured, isSupabaseConfigured } from "./lib/env";
+import {
+  AgentOfflineError,
+  api,
+  forgetAgentBase,
+  type AssistantSettingsRow,
+  type PendingActionRow,
+  type ReceiptRow,
+} from "./lib/api";
 import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from "./lib/supabase";
 import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
@@ -1506,11 +1514,297 @@ function RollingCubes({
   );
 }
 
+type ChatMessage = {
+  id: string;
+  from: "user" | "ai";
+  text: string;
+  time: string;
+  receipts?: ReceiptRow[];
+};
+
+function receiptTone(status: ReceiptRow["status"]): "ok" | "bad" | "wait" {
+  if (status === "success") return "ok";
+  if (status === "failed" || status === "denied") return "bad";
+  return "wait";
+}
+
+/** A thing the companion did, rendered inline under its reply. */
+function ReceiptCard({ receipt }: { receipt: ReceiptRow }) {
+  const tone = receiptTone(receipt.status);
+  return (
+    <div className={`receipt-card receipt-${tone}`}>
+      <span className="receipt-icon">
+        {tone === "ok" ? <Check size={13} /> : tone === "bad" ? <X size={13} /> : <Clock3 size={13} />}
+      </span>
+      <div className="receipt-body">
+        <span className="receipt-summary">{receipt.summary || receipt.skill}</span>
+        {receipt.error && <span className="receipt-error">{receipt.error}</span>}
+      </div>
+      <span className="receipt-skill">{receipt.skill}</span>
+    </div>
+  );
+}
+
+function fmtTime(iso?: string | null): string {
+  if (!iso) return "Just now";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? "Just now"
+    : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+type Persona = {
+  name?: string;
+  tone?: string;
+  style_notes?: string;
+  check_in_time?: string;
+  inactivity_hours?: number;
+  proactive_enabled?: boolean;
+};
+
+/** Persona/charter + runtime settings editor — both live on the laptop agent. */
+function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<AssistantSettingsRow | null>(null);
+  const [persona, setPersona] = useState<Persona>({});
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.assistant.settings(), api.assistant.persona()])
+      .then(([loadedSettings, loadedPersona]) => {
+        if (!active) return;
+        setSettings(loadedSettings);
+        setPersona((loadedPersona ?? {}) as Persona);
+        setLoading(false);
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setError(
+          caught instanceof AgentOfflineError
+            ? "Wake your laptop to edit the assistant."
+            : caught instanceof Error
+              ? caught.message
+              : "Could not load assistant settings.",
+        );
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const save = async () => {
+    if (!settings) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.assistant.updateSettings({
+        context_message_limit: settings.context_message_limit,
+        temperature: settings.temperature,
+        allow_auto_send_email: settings.allow_auto_send_email,
+        ...(settings.model && settings.model.trim().length >= 3
+          ? { model: settings.model.trim() }
+          : {}),
+      });
+
+      const personaPatch: Record<string, unknown> = {
+        tone: persona.tone ?? "",
+        style_notes: persona.style_notes ?? "",
+      };
+      if (persona.name?.trim()) personaPatch.name = persona.name.trim();
+      if (persona.check_in_time) personaPatch.check_in_time = persona.check_in_time;
+      if (typeof persona.inactivity_hours === "number")
+        personaPatch.inactivity_hours = persona.inactivity_hours;
+      if (typeof persona.proactive_enabled === "boolean")
+        personaPatch.proactive_enabled = persona.proactive_enabled;
+      await api.assistant.updatePersona(personaPatch);
+
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="assistant-settings-overlay" onClick={onClose}>
+      <div
+        className="assistant-settings-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-label="Assistant settings"
+      >
+        <header className="assistant-settings-head">
+          <h2>Assistant settings</h2>
+          <button className="quiet-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </header>
+
+        {loading ? (
+          <div className="assistant-settings-loading">Loading…</div>
+        ) : error && !settings ? (
+          <div className="assistant-settings-loading">{error}</div>
+        ) : (
+          settings && (
+            <div className="assistant-settings-body">
+              <span className="settings-group-label">Persona</span>
+              <label className="settings-row">
+                <span>Name</span>
+                <input
+                  type="text"
+                  value={persona.name ?? ""}
+                  maxLength={60}
+                  onChange={(e) => setPersona((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="MyPro"
+                />
+              </label>
+              <label className="settings-row">
+                <span>Tone</span>
+                <input
+                  type="text"
+                  value={persona.tone ?? ""}
+                  maxLength={400}
+                  onChange={(e) => setPersona((p) => ({ ...p, tone: e.target.value }))}
+                  placeholder="Warm, concise, encouraging"
+                />
+              </label>
+              <label className="settings-row settings-row-stack">
+                <span>Style notes</span>
+                <textarea
+                  value={persona.style_notes ?? ""}
+                  maxLength={4000}
+                  rows={3}
+                  onChange={(e) => setPersona((p) => ({ ...p, style_notes: e.target.value }))}
+                  placeholder="How should it talk to you? What should it avoid?"
+                />
+              </label>
+              <label className="settings-row">
+                <span>Daily check-in</span>
+                <input
+                  type="time"
+                  value={(persona.check_in_time ?? "").slice(0, 5)}
+                  onChange={(e) => setPersona((p) => ({ ...p, check_in_time: e.target.value }))}
+                />
+              </label>
+              <label className="settings-row">
+                <span>Nudge after (hours idle)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={168}
+                  value={persona.inactivity_hours ?? ""}
+                  onChange={(e) =>
+                    setPersona((p) => ({
+                      ...p,
+                      inactivity_hours: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                />
+              </label>
+              <label className="settings-row settings-toggle-row">
+                <span>Proactive check-ins</span>
+                <input
+                  type="checkbox"
+                  checked={persona.proactive_enabled ?? false}
+                  onChange={(e) => setPersona((p) => ({ ...p, proactive_enabled: e.target.checked }))}
+                />
+              </label>
+
+              <span className="settings-group-label">Conversation</span>
+              <div className="settings-row settings-row-stack">
+                <span>
+                  Context window — {settings.context_message_limit} message
+                  {settings.context_message_limit === 1 ? "" : "s"} replayed
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  step={2}
+                  value={settings.context_message_limit}
+                  onChange={(e) =>
+                    setSettings((s) =>
+                      s ? { ...s, context_message_limit: Number(e.target.value) } : s,
+                    )
+                  }
+                />
+              </div>
+              <div className="settings-row settings-row-stack">
+                <span>Temperature — {settings.temperature.toFixed(1)}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={settings.temperature}
+                  onChange={(e) =>
+                    setSettings((s) => (s ? { ...s, temperature: Number(e.target.value) } : s))
+                  }
+                />
+              </div>
+              <label className="settings-row">
+                <span>Model (optional)</span>
+                <input
+                  type="text"
+                  value={settings.model ?? ""}
+                  onChange={(e) =>
+                    setSettings((s) => (s ? { ...s, model: e.target.value } : s))
+                  }
+                  placeholder="Uses the agent default"
+                />
+              </label>
+              <label className="settings-row settings-toggle-row">
+                <span>Let it send email without asking</span>
+                <input
+                  type="checkbox"
+                  checked={settings.allow_auto_send_email}
+                  onChange={(e) =>
+                    setSettings((s) =>
+                      s ? { ...s, allow_auto_send_email: e.target.checked } : s,
+                    )
+                  }
+                />
+              </label>
+
+              {error && <p className="composer-error">{error}</p>}
+            </div>
+          )
+        )}
+
+        <footer className="assistant-settings-foot">
+          <button className="settings-cancel" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="settings-save"
+            onClick={save}
+            disabled={loading || saving || !settings}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 function AssistantView() {
+  // Real agent chat when the backend is configured; otherwise the original
+  // local prototype flow so the design stays demoable without a laptop.
+  const configured = isApiConfigured;
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<{ from: "user" | "ai"; text: string }[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
+  const [pending, setPending] = useState<PendingActionRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
+  const request = useSimulatedRequest();
 
   useEffect(() => {
     conversationRef.current?.scrollTo({
@@ -1519,24 +1813,130 @@ function AssistantView() {
     });
   }, [messages, isThinking]);
 
-  const request = useSimulatedRequest();
+  // Load history, then poll agent presence and the approval queue.
+  useEffect(() => {
+    if (!configured) return;
+    let active = true;
+
+    api.assistant
+      .messages(50)
+      .then((history) => {
+        if (!active) return;
+        setMessages(
+          history
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({
+              id: m.id,
+              from: m.role === "assistant" ? "ai" : "user",
+              text: m.content ?? "",
+              time: fmtTime(m.created_at),
+            })),
+        );
+      })
+      .catch(() => {});
+
+    const poll = async () => {
+      try {
+        const status = await api.nodes.status();
+        if (active) setAgentOnline(Boolean(status.agent?.online));
+      } catch {
+        if (active) setAgentOnline(null);
+      }
+      try {
+        const queue = await api.skills.pending();
+        if (active) setPending(queue);
+      } catch {
+        /* agent asleep — keep the queue as-is */
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [configured]);
 
   const send = async (text = message) => {
-    const cleanMessage = text.trim();
-    if (!cleanMessage || isThinking) return;
-    setMessages((current) => [...current, { from: "user", text: cleanMessage }]);
-    setMessage("");
-    setIsThinking(true);
-    await request(1450);
+    const clean = text.trim();
+    if (!clean || isThinking) return;
     setMessages((current) => [
       ...current,
-      {
-        from: "ai",
-        text: "I’ve reviewed your request alongside your calendar, library, and private records. I can organize the next step and keep everything aligned for you.",
-      },
+      { id: `u-${Date.now()}`, from: "user", text: clean, time: "Just now" },
     ]);
-    setIsThinking(false);
+    setMessage("");
+    setError(null);
+    setIsThinking(true);
+
+    if (!configured) {
+      await request(1450);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `a-${Date.now()}`,
+          from: "ai",
+          text: "I’ve reviewed your request alongside your calendar, library, and private records. I can organize the next step and keep everything aligned for you.",
+          time: "Just now",
+        },
+      ]);
+      setIsThinking(false);
+      return;
+    }
+
+    try {
+      const result = await api.assistant.send(clean);
+      setAgentOnline(true);
+      setMessages((current) => [
+        ...current,
+        {
+          id: result.message.id,
+          from: "ai",
+          text: result.message.content ?? "",
+          time: fmtTime(result.message.created_at),
+          receipts: result.receipts,
+        },
+      ]);
+      // A turn may have queued an outward action for approval.
+      api.skills.pending().then(setPending).catch(() => {});
+    } catch (caught) {
+      if (caught instanceof AgentOfflineError) {
+        setAgentOnline(false);
+        forgetAgentBase();
+        setError("Your laptop agent is asleep, so the assistant can’t reply right now.");
+      } else {
+        setError(caught instanceof Error ? caught.message : "Something went wrong.");
+      }
+    } finally {
+      setIsThinking(false);
+    }
   };
+
+  const resolvePending = async (id: string, action: "approve" | "reject") => {
+    setPending((queue) => queue.filter((item) => item.id !== id));
+    try {
+      if (action === "approve") await api.skills.approve(id);
+      else await api.skills.reject(id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the request.");
+      api.skills.pending().then(setPending).catch(() => {});
+    }
+  };
+
+  const clearConversation = async () => {
+    setMenuOpen(false);
+    if (configured) {
+      try {
+        await api.assistant.clear("wipe");
+      } catch {
+        /* best effort */
+      }
+    }
+    setMessages([]);
+    setError(null);
+  };
+
+  const offline = configured && agentOnline === false;
+
   return (
     <div className="assistant-view">
       <main className="assistant-main">
@@ -1547,28 +1947,70 @@ function AssistantView() {
             </span>{" "}
             MyPro Personal <ChevronDown size={14} />
           </div>
-          <button className="quiet-button">
-            <Ellipsis size={19} />
-          </button>
+          <div className="assistant-top-right">
+            {configured && (
+              <span
+                className={`agent-status ${agentOnline === null ? "unknown" : agentOnline ? "online" : "offline"}`}
+              >
+                <i />
+                {agentOnline === null
+                  ? "Connecting"
+                  : agentOnline
+                    ? "Agent online"
+                    : "Agent asleep"}
+              </span>
+            )}
+            <div className="assistant-menu">
+              <button
+                className="quiet-button"
+                onClick={() => setMenuOpen((open) => !open)}
+                aria-label="Conversation options"
+              >
+                <Ellipsis size={19} />
+              </button>
+              {menuOpen && (
+                <div className="assistant-menu-pop">
+                  {configured && (
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setSettingsOpen(true);
+                      }}
+                    >
+                      Assistant settings
+                    </button>
+                  )}
+                  <button onClick={clearConversation}>Clear conversation</button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
         <div className={`assistant-center ${messages.length > 0 ? "chatting" : ""}`}>
           {messages.length === 0 ? (
             <div className="assistant-intro">
               <RollingCubes thinking={isThinking} />
-              <span className="section-kicker">GOOD MORNING, ALEX</span>
+              <span className="section-kicker">YOUR COMPANION</span>
               <h1>Hi, how can I help you today?</h1>
               <p>I can organize your time, knowledge, and health — all in one thoughtful space.</p>
             </div>
           ) : (
             <div className="conversation" ref={conversationRef}>
-              {messages.map((m, i) => (
-                <div key={`${m.from}-${i}`} className={`message ${m.from}`}>
+              {messages.map((m) => (
+                <div key={m.id} className={`message ${m.from}`}>
                   <div className="message-avatar">
                     {m.from === "ai" ? <Sparkles size={15} /> : "AK"}
                   </div>
                   <div className="message-bubble">
                     <p>{m.from === "ai" ? <AnimatedReply text={m.text} /> : m.text}</p>
-                    <time>Just now</time>
+                    {m.receipts && m.receipts.length > 0 && (
+                      <div className="receipt-cards">
+                        {m.receipts.map((r) => (
+                          <ReceiptCard key={r.id} receipt={r} />
+                        ))}
+                      </div>
+                    )}
+                    <time>{m.time}</time>
                   </div>
                 </div>
               ))}
@@ -1590,8 +2032,34 @@ function AssistantView() {
             </div>
           )}
         </div>
+        {pending.length > 0 && (
+          <div className="approval-queue">
+            {pending.map((item) => (
+              <div key={item.id} className="approval-item">
+                <div className="approval-text">
+                  <strong>{item.summary || item.skill}</strong>
+                  <small>Needs your approval</small>
+                </div>
+                <div className="approval-actions">
+                  <button
+                    className="approval-reject"
+                    onClick={() => resolvePending(item.id, "reject")}
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    className="approval-approve"
+                    onClick={() => resolvePending(item.id, "approve")}
+                  >
+                    Approve
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="composer">
-          <div className="composer-field">
+          <div className={`composer-field ${offline ? "disabled" : ""}`}>
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -1601,7 +2069,8 @@ function AssistantView() {
                   send();
                 }
               }}
-              placeholder="Ask MyPro anything..."
+              placeholder={offline ? "Your laptop agent is asleep…" : "Ask MyPro anything..."}
+              disabled={offline}
             />
             <div className="composer-tools">
               <div>
@@ -1615,14 +2084,23 @@ function AssistantView() {
               <button
                 className={`send-button ${isThinking ? "sending" : ""}`}
                 onClick={() => send()}
-                disabled={isThinking}
+                disabled={isThinking || offline}
               >
                 {isThinking ? <i className="send-loader" /> : <Send size={17} />}
               </button>
             </div>
           </div>
-          <p>MyPro keeps your personal data private and under your control.</p>
+          {error ? (
+            <p className="composer-error">{error}</p>
+          ) : offline ? (
+            <p>Wake your laptop to chat with your companion. Everything else keeps working.</p>
+          ) : (
+            <p>MyPro keeps your personal data private and under your control.</p>
+          )}
         </div>
+        {configured && settingsOpen && (
+          <AssistantSettingsPanel onClose={() => setSettingsOpen(false)} />
+        )}
       </main>
     </div>
   );
