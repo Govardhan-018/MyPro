@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "MyPro",
+    "slug": "mypro",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "mypro",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "platforms": ["android", "ios"],
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.mypro.app"
+    },
+    "newArchEnabled": true
+  }
+}
