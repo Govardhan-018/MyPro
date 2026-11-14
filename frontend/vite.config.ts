@@ -38,8 +38,19 @@ export default defineConfig(({ mode }) => {
       figmaLinkedPackageSourcemaps(),
     ],
     resolve: {
+      // The monorepo contains two React versions — this app on React 19 and the
+      // Expo/Android app on React 18 (required by Expo SDK 52). Under pnpm's
+      // hoisted linker a fresh install (e.g. on Vercel) can otherwise let the
+      // Android React 18 leak into this bundle, mixing react@18 with
+      // react-dom@19 and crashing at runtime ("Cannot read properties of null
+      // (reading 'useState')"). Deduping pins a single copy resolved from this
+      // app's own node_modules.
+      dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(__dirname, "./src"),
+        // Pin React to this app's own copy so no hoisted/nested version wins.
+        react: path.resolve(__dirname, "node_modules/react"),
+        "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
         // Resolve the shared workspace package to its TS source so Vite
         // transpiles it as app code (a node_modules symlink would be skipped).
         "@mypro/shared": path.resolve(__dirname, "../shared/src/index.ts"),
