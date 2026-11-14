@@ -77,7 +77,9 @@ jobs:
         working-directory: android/android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          # --info so a Kotlin/native compile error prints its actual `e:` lines
+          # (a plain run only says "Compilation error. See log").
+          ./gradlew assembleDebug --no-daemon --stacktrace --info
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
