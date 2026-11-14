@@ -89,10 +89,25 @@ import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
+import {
+  entrySource,
+  useKnowledge,
+  type KnowledgeEntry,
+  type KnowledgeKind,
+} from "./lib/useKnowledge";
+import {
+  useHealth,
+  type IllnessDocument,
+  type IllnessMedication,
+  type IllnessRecord,
+} from "./lib/useHealth";
+import { useTasks, type Task } from "./lib/useTasks";
+import { useCalendar, type CalendarEvent as CalEvent, type NewEventInput } from "./lib/useCalendar";
 
 type View =
   | "today"
   | "calendar"
+  | "tasks"
   | "library"
   | "knowledge"
   | "health"
@@ -135,6 +150,7 @@ function Spinner() {
 const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "today", label: "Today", icon: Home },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
+  { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "library", label: "My Library", icon: Library },
   { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
@@ -617,7 +633,343 @@ const week = [
   { day: "FRI", date: 30 },
 ];
 
+function TasksView() {
+  const { tasks, loading, error, addTask, toggleTask, removeTask } = useTasks();
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
+  const [filter, setFilter] = useState<"all" | "open" | "done">("open");
+  const [adding, setAdding] = useState(false);
+
+  const submit = async () => {
+    if (!title.trim() || adding) return;
+    setAdding(true);
+    try {
+      await addTask({ title, dueAt: due || undefined });
+      setTitle("");
+      setDue("");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const fmtDue = (iso?: string) => {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime())
+      ? null
+      : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  const visible = tasks.filter((task) =>
+    filter === "all"
+      ? task.status !== "dropped"
+      : filter === "open"
+        ? task.status === "open"
+        : task.status === "done",
+  );
+
+  return (
+    <div className="page-content foundation-view tasks-view">
+      <header className="page-heading">
+        <div>
+          <div className="eyebrow muted-eyebrow">TASKS</div>
+          <h1>What needs doing.</h1>
+          <p>Quick, flexible to-dos — kept in sync across your space.</p>
+        </div>
+      </header>
+
+      {error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {loading && !error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your tasks…
+        </div>
+      )}
+
+      <div className="task-composer glass-card">
+        <input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit();
+          }}
+          placeholder="Add a task…"
+        />
+        <input
+          type="date"
+          value={due}
+          onChange={(event) => setDue(event.target.value)}
+          aria-label="Due date"
+        />
+        <button className="primary-button" onClick={submit} disabled={adding || !title.trim()}>
+          {adding ? <Spinner /> : <Plus size={16} />} Add
+        </button>
+      </div>
+
+      <div className="task-filters segmented">
+        {(["open", "done", "all"] as const).map((item) => (
+          <button
+            key={item}
+            className={filter === item ? "selected" : ""}
+            onClick={() => setFilter(item)}
+          >
+            {item === "open" ? "Open" : item === "done" ? "Done" : "All"}
+          </button>
+        ))}
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="task-empty">
+          {loading
+            ? ""
+            : filter === "open"
+              ? "Nothing open. Enjoy the calm."
+              : "No tasks here yet."}
+        </p>
+      ) : (
+        <ul className="task-list">
+          {visible.map((task) => (
+            <li key={task.id} className={`task-row ${task.status === "done" ? "done" : ""}`}>
+              <button
+                className="task-check"
+                onClick={() => toggleTask(task)}
+                aria-label={task.status === "done" ? "Mark open" : "Mark done"}
+              >
+                {task.status === "done" ? (
+                  <CheckCircle2 size={18} />
+                ) : (
+                  <span className="task-check-empty" />
+                )}
+              </button>
+              <span className="task-title">{task.title}</span>
+              {fmtDue(task.dueAt) && (
+                <span className="task-due">
+                  <Clock3 size={13} /> {fmtDue(task.dueAt)}
+                </span>
+              )}
+              <button
+                className="task-delete"
+                onClick={() => removeTask(task)}
+                aria-label="Delete task"
+              >
+                <X size={16} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function eventTime(ev: CalEvent): string {
+  if (ev.allDay) return "All day";
+  const start = new Date(ev.startsAt);
+  if (Number.isNaN(start.getTime())) return "";
+  const startLabel = start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!ev.endsAt) return startLabel;
+  const end = new Date(ev.endsAt);
+  if (Number.isNaN(end.getTime())) return startLabel;
+  return `${startLabel} – ${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function dayLabel(key: string): string {
+  const day = new Date(`${key}T00:00:00`);
+  const today = new Date();
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diff = Math.round((day.getTime() - startToday.getTime()) / (24 * 60 * 60 * 1000));
+  const date = day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  if (diff === 0) return `Today · ${date}`;
+  if (diff === 1) return `Tomorrow · ${date}`;
+  return date;
+}
+
+const emptyEventForm: NewEventInput = {
+  title: "",
+  date: "",
+  startTime: "",
+  endTime: "",
+  allDay: false,
+  location: "",
+};
+
 function CalendarView() {
+  const { events, loading, error, createEvent } = useCalendar();
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState<NewEventInput>(emptyEventForm);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const set = <K extends keyof NewEventInput>(key: K, value: NewEventInput[K]) =>
+    setForm((current) => ({ ...current, [key]: value }));
+
+  const openModal = () => {
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate(),
+    ).padStart(2, "0")}`;
+    setForm({ ...emptyEventForm, date: iso });
+    setFormError(null);
+    setShowModal(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setFormError(null);
+    try {
+      await createEvent(form);
+      setShowModal(false);
+      setForm(emptyEventForm);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Could not save the event.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const groups = useMemo(() => {
+    const map = new Map<string, CalEvent[]>();
+    for (const ev of events) {
+      const key = ev.startsAt.slice(0, 10);
+      if (!key) continue;
+      const list = map.get(key) ?? [];
+      list.push(ev);
+      map.set(key, list);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [events]);
+
+  return (
+    <div className="page-content foundation-view calendar-agenda-view">
+      <header className="page-heading">
+        <div>
+          <div className="eyebrow muted-eyebrow">CALENDAR</div>
+          <h1>What’s ahead.</h1>
+          <p>Your upcoming events, in order.</p>
+        </div>
+        <button className="primary-button" onClick={openModal}>
+          <Plus size={17} /> New event
+        </button>
+      </header>
+
+      {error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {loading && !error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your calendar…
+        </div>
+      )}
+
+      {!loading && groups.length === 0 ? (
+        <p className="agenda-empty">No upcoming events. Add one to get started.</p>
+      ) : (
+        <div className="agenda">
+          {groups.map(([key, list]) => (
+            <section className="agenda-day" key={key}>
+              <h2 className="agenda-day-label">{dayLabel(key)}</h2>
+              <div className="agenda-events">
+                {list.map((ev) => (
+                  <div className="agenda-event glass-card" key={ev.id}>
+                    <span className={`agenda-dot tone-${ev.categoryTone || "lavender"}`} />
+                    <div className="agenda-event-body">
+                      <strong>{ev.title}</strong>
+                      {ev.location && <small>{ev.location}</small>}
+                    </div>
+                    <span className="agenda-time">{eventTime(ev)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      {showModal && (
+        <div className="modal-backdrop" onMouseDown={() => !saving && setShowModal(false)}>
+          <div className="glass-card event-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="event-modal-head">
+              <h2>New event</h2>
+              <IconButton label="Close" onClick={() => setShowModal(false)}>
+                <X size={18} />
+              </IconButton>
+            </header>
+            <label className="event-field">
+              <span>Title</span>
+              <input
+                value={form.title}
+                onChange={(event) => set("title", event.target.value)}
+                placeholder="Event title"
+              />
+            </label>
+            <label className="event-field">
+              <span>Date</span>
+              <input type="date" value={form.date} onChange={(event) => set("date", event.target.value)} />
+            </label>
+            <label className="event-field event-toggle">
+              <span>All day</span>
+              <input
+                type="checkbox"
+                checked={form.allDay}
+                onChange={(event) => set("allDay", event.target.checked)}
+              />
+            </label>
+            {!form.allDay && (
+              <div className="event-times">
+                <label className="event-field">
+                  <span>Start</span>
+                  <input
+                    type="time"
+                    value={form.startTime}
+                    onChange={(event) => set("startTime", event.target.value)}
+                  />
+                </label>
+                <label className="event-field">
+                  <span>End</span>
+                  <input
+                    type="time"
+                    value={form.endTime}
+                    onChange={(event) => set("endTime", event.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+            <label className="event-field">
+              <span>Location</span>
+              <input
+                value={form.location}
+                onChange={(event) => set("location", event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+            {formError && <p className="composer-error">{formError}</p>}
+            <div className="event-modal-actions">
+              <button className="secondary-button" onClick={() => setShowModal(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                onClick={save}
+                disabled={saving || !form.title.trim()}
+              >
+                {saving ? <Spinner /> : <Check size={16} />} Save event
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Legacy static mockup — superseded by the data-driven CalendarView above.
+// Retained temporarily; slated for removal.
+function CalendarViewLegacy() {
   const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
   const [showModal, setShowModal] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2818,20 +3170,6 @@ function LibraryView({
   );
 }
 
-type KnowledgeKind = "Note" | "Highlight" | "Quote" | "Summary" | "Question" | "Bookmark";
-
-type KnowledgeEntry = {
-  id: string;
-  kind: KnowledgeKind;
-  text: string;
-  heading?: string;
-  bookTitle: string;
-  page: number;
-  date: string;
-  tone: string;
-  tags: string[];
-};
-
 const seededKnowledge: KnowledgeEntry[] = [
   {
     id: "q-seed-1",
@@ -2889,8 +3227,19 @@ function KnowledgeView({
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Reads /knowledge (all annotations + bookmarks) when configured; otherwise
+  // falls back to the locally-derived entries so the prototype still works.
+  const knowledge = useKnowledge();
 
-  const entries = useMemo(() => {
+  const removeEntry = (entryId: string) => {
+    setDeleted((current) => new Set(current).add(entryId));
+    const source = knowledge.configured ? entrySource(entryId) : null;
+    if (!source) return;
+    if (source.kind === "annotation") api.reader.deleteAnnotation(source.id).catch(() => {});
+    else api.reader.deleteBookmark(source.id).catch(() => {});
+  };
+
+  const localEntries = useMemo(() => {
     const colorToTone: Record<string, string> = {
       lavender: "lavender",
       cyan: "cyan",
@@ -2962,6 +3311,9 @@ function KnowledgeView({
     return [...seededKnowledge, ...derived];
   }, [items]);
 
+  // Real data from /knowledge wins; otherwise the locally-derived entries.
+  const entries = knowledge.entries ?? localEntries;
+
   const visible = entries.filter((entry) => {
     if (deleted.has(entry.id)) return false;
     if (tab !== "All" && entry.kind !== tab) return false;
@@ -2987,6 +3339,17 @@ function KnowledgeView({
           <p>Notes, highlights, quotes, summaries, and questions — organized across your library.</p>
         </div>
       </header>
+
+      {knowledge.error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {knowledge.error}
+        </div>
+      )}
+      {knowledge.loading && !knowledge.error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your knowledge…
+        </div>
+      )}
 
       <div className="library-toolbar">
         <label className="library-search">
@@ -3028,7 +3391,7 @@ function KnowledgeView({
                 </button>
                 <button
                   aria-label="Delete"
-                  onClick={() => setDeleted((current) => new Set(current).add(entry.id))}
+                  onClick={() => removeEntry(entry.id)}
                 >
                   <X size={15} />
                 </button>
@@ -3077,42 +3440,7 @@ function KnowledgeView({
   );
 }
 
-type IllnessMedication = {
-  name: string;
-  dosage?: string;
-  frequency?: string;
-  startDate?: string;
-  endDate?: string;
-  reason?: string;
-  observations?: string;
-};
-
-type IllnessDocument = {
-  name: string;
-  type: string;
-};
-
-type IllnessRecord = {
-  id: number;
-  name: string;
-  startDate?: string;
-  endDate?: string;
-  status: "Recovered" | "Recovery ongoing" | "Incomplete record";
-  severity?: string;
-  symptoms: string[];
-  symptomStart?: string;
-  symptomSeverity?: string;
-  symptomNotes?: string;
-  doctor?: string;
-  diagnosis?: string;
-  consultationDate?: string;
-  medicalNotes?: string;
-  medications: IllnessMedication[];
-  documents: IllnessDocument[];
-  recoveryDate?: string;
-  recoveryHelp?: string;
-  recoveryNotes?: string;
-};
+// IllnessRecord / IllnessMedication / IllnessDocument now live in ./lib/useHealth.
 
 const demoIllnessRecords: IllnessRecord[] = [
   {
@@ -3271,7 +3599,9 @@ function illnessDuration(startDate?: string, endDate?: string) {
 }
 
 function HealthView() {
-  const [records, setRecords] = useState(demoIllnessRecords);
+  // Loaded from /health/records (mapped) when configured; else the demo seed.
+  const health = useHealth(demoIllnessRecords);
+  const records = health.records;
   const [query, setQuery] = useState("");
   const [year, setYear] = useState("All years");
   const [status, setStatus] = useState("All statuses");
@@ -3318,10 +3648,10 @@ function HealthView() {
   const saveIllness = async (asDraft: boolean) => {
     if (savingMode) return;
     setSavingMode(asDraft ? "draft" : "final");
-    await request();
-    setSavingMode(null);
+    const existing = editingId === null ? null : records.find((item) => item.id === editingId);
     const record: IllnessRecord = {
       id: editingId ?? Date.now(),
+      serverId: existing?.serverId,
       name: form.name.trim() || "Untitled illness record",
       startDate: form.startDate || undefined,
       endDate: form.endDate || form.recoveryDate || undefined,
@@ -3361,11 +3691,11 @@ function HealthView() {
       recoveryHelp: form.recoveryHelp || undefined,
       recoveryNotes: form.recoveryNotes || undefined,
     };
-    setRecords((current) =>
-      editingId === null
-        ? [record, ...current]
-        : current.map((item) => (item.id === editingId ? record : item)),
-    );
+    try {
+      await health.saveRecord(record, editingId !== null);
+    } finally {
+      setSavingMode(null);
+    }
     closeForm();
   };
 
@@ -3420,6 +3750,17 @@ function HealthView() {
           <Plus size={17} /> Add Previous Illness
         </button>
       </header>
+
+      {health.error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {health.error}
+        </div>
+      )}
+      {health.loading && !health.error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your health records…
+        </div>
+      )}
 
       <div className="health-privacy-note">
         <Archive size={17} />
@@ -4559,6 +4900,7 @@ function AppShell({
   const renderView = () => {
     if (displayedView === "today") return <TodayView navigate={navigate} />;
     if (displayedView === "calendar") return <CalendarView />;
+    if (displayedView === "tasks") return <TasksView />;
     if (displayedView === "library")
       return (
         <LibraryView

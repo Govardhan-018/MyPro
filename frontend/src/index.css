@@ -1582,6 +1582,248 @@ button {
   border-color: rgba(248, 113, 113, 0.35);
   color: #f8a3a3;
 }
+
+/* Tasks */
+.tasks-view {
+  max-width: 760px;
+}
+.task-composer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.task-composer input[type="text"],
+.task-composer > input:not([type]) {
+  flex: 1;
+}
+.task-composer input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #ffffff;
+  font-size: 14px;
+  min-width: 0;
+}
+.task-composer input[type="date"] {
+  flex: 0 0 auto;
+  color-scheme: dark;
+}
+.task-filters {
+  margin-bottom: 14px;
+  width: fit-content;
+}
+.task-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+.task-check {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  cursor: pointer;
+}
+.task-check-empty {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+}
+.task-title {
+  flex: 1;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  min-width: 0;
+}
+.task-row.done .task-title {
+  color: rgba(255, 255, 255, 0.4);
+  text-decoration: line-through;
+}
+.task-due {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+.task-delete {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 2px;
+}
+.task-delete:hover {
+  color: #f8a3a3;
+}
+.task-empty {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+  padding: 24px 2px;
+}
+
+/* Calendar agenda */
+.calendar-agenda-view {
+  max-width: 820px;
+}
+.agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.agenda-day-label {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.agenda-events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agenda-event {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+}
+.agenda-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+}
+.color-mode .agenda-dot.tone-lavender {
+  background: #a78bfa;
+}
+.color-mode .agenda-dot.tone-cyan {
+  background: #22d3ee;
+}
+.color-mode .agenda-dot.tone-mint {
+  background: #34d399;
+}
+.color-mode .agenda-dot.tone-peach,
+.color-mode .agenda-dot.tone-coral {
+  background: #fb923c;
+}
+.color-mode .agenda-dot.tone-blue {
+  background: #60a5fa;
+}
+.agenda-event-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agenda-event-body strong {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.agenda-event-body small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+.agenda-time {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.agenda-empty {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+  padding: 24px 2px;
+}
+
+/* New-event modal */
+.event-modal {
+  width: 100%;
+  max-width: 440px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.event-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.event-modal-head h2 {
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 600;
+}
+.event-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.event-field > span {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+}
+.event-field input[type="text"],
+.event-field input:not([type]),
+.event-field input[type="date"],
+.event-field input[type="time"] {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #ffffff;
+  font-size: 14px;
+  color-scheme: dark;
+}
+.event-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.event-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: #ffffff;
+}
+.event-times {
+  display: flex;
+  gap: 12px;
+}
+.event-times .event-field {
+  flex: 1;
+}
+.event-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
 .mode-select {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.65);
