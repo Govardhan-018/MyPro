@@ -1,281 +1,195 @@
 # MyPro — Session Handoff
 
-Context for continuing in a new chat. Read `AGENTS.md` and `docs/ROADMAP.md` too,
-but **this file overrides the original architecture where they differ** (the
-auth model changed this session).
+What the last session changed. `docs/PHASES.md` is the durable plan; this file
+is volatile. Read `AGENTS.md` too.
 
-## Where we are
+## This session: Phases 6, 7, 8, 10 and 11 — the clock moved off render
 
-Roadmap Phases 1–5 are essentially done, plus a thin-client re-architecture.
-**Everything is deployed and login works with real data (verified live):**
+The brief was "finish all the pending phases up to 11". Phases 6, 7, 8, 10
+and 11 are now code-complete, so **everything up to and including Phase 11 is
+done** and Phase 12 is next. All four packages pass `npx tsc --noEmit` and the
+web build succeeds.
 
-- Web: Vercel — `https://mypro-by-gova.vercel.app`
-- Core API: Render — `https://mypro-km2k.onrender.com` (base `/api/v1`)
-- Supabase project ref: `kssucdvrfzbdkyzovmjo`
-- Android: release APK built by GitHub Actions on push (installs standalone)
+### Migrations must be applied by hand
 
-## ⚠️ Uncommitted right now — commit first
+A commit does not run them. In the Supabase dashboard:
 
-**PDF → text (Phase 10) is committed** as `0a296f1 PDF to JSON extractor`.
-Two things it needs that a commit cannot do:
-`supabase/migrations/0005_pdf_text_storage.sql` **must be applied to Supabase**
-before the sync half works (extraction and reading work without it; uploads just
-fail silently), and the Android deps include
-`expo-file-system@~18.0.12` — SDK 52's version, do not let it float to 58.
+- `supabase/migrations/0008_pending_action_result.sql` — adds
+  `pending_actions.result`. Without it, **approving an outward action throws**:
+  the approve route writes that column.
+- Earlier ones still pending from previous sessions: `0005`, `0006`, `0007`.
 
-Uncommitted: **Schedules + live notifications (Phases 5 / 6.1)**
+### Phase 11 — the clock (done)
 
-- `shared/src/realtime.ts` (new) — the Realtime notifications stream, shared with
-  Android; `api.profile.realtime()` in `shared/src/api.ts`; `description` added
-  to `ScheduleRow`.
-- `backend-render/src/profile/profile.module.ts` — `GET /me/realtime`.
-- `supabase/migrations/0006_realtime_notifications.sql` (new) — **also needs
-  applying**; without it the socket connects and never delivers anything.
-- `supabase/migrations/0007_schedule_run_deferred.sql` (new) — **also needs
-  applying**; until then deferred runs stay missing from run history.
-- Web: `lib/useSchedules.ts`, `lib/useNotifications.ts`,
-  `components/schedules/SchedulesView.tsx`, `components/NotificationToasts.tsx`
-  (all new), plus `App.tsx` (Schedules view + sidebar bell) and `index.css`.
+The drain loop left render, where the free tier's 15-minute sleep was killing
+it silently, and now lives on the laptop and the phone.
 
-`tsc` passes in frontend/android/backend-render; the web build passes. The
-Schedules view and the toasts were rendered and checked in a browser (empty
-state, the full builder, weekday pills, toasts). Nothing signed-in was tested:
-no live schedule was created, and no Realtime message has actually been
-delivered end to end.
+- **11.1** `backend-local/src/scheduler/` — the drain loop, on boot and every
+  minute. Two deliberate differences from render's version: no deferring (the
+  model is in-process, so a failed generation falls straight through to the
+  plain brief), and a **staleness rule** — a *recurring* job more than
+  `SCHEDULER_STALE_MINUTES` (default 120) late is skipped to its next
+  occurrence, because "here is your day" at 11pm is not a morning brief.
+  One-shots always fire; late beats never.
+- `backend-local/src/schedules/recurrence.ts` is a **deliberate copy** of
+  render's. The backends are separate npm projects (only `shared/`,
+  `frontend/`, `android/` are workspace members). Change one, change both.
+- **11.2** `android/src/lib/notifications.ts` arms local notifications for the
+  next 48h and re-arms on every foreground. Occurrences come from a new
+  `GET /schedules/upcoming?hours=48` (render expands them with
+  `expandOccurrences`), so luxon and the recurrence maths stay off the phone.
+- **11.3** `android/src/lib/brief.ts` composes the plain brief from calendar +
+  tasks. It looks for the generated brief in **`/notifications`**, not the
+  chat: the chat lives behind the laptop, which is the machine that may be
+  asleep. Today's screen says which version you are reading.
+- **11.4** Render's `SchedulerModule` is inert unless `SCHEDULER_ENABLED=true`
+  (default **false**, pinned in `render.yaml`). It logs which half owns the
+  clock at boot. Never run both.
+- **11.5** The `TODO(channels)` fan-out moved with the loop →
+  `backend-local/src/notifications/push.service.ts`.
 
-## Key architecture decisions made this session (differ from the original docs)
+### Phase 6 — notifications (done)
 
-1. **Shared core** — `shared/` workspace package (`@mypro/shared`): platform-injected
-   types, API client, auth, agent discovery. Web + Android both import it.
-   pnpm workspace with the **hoisted** linker (`.npmrc`).
+- **6.2** Web Push. `frontend/public/sw.js` (push + notificationclick only —
+  not a caching worker, deliberately), `frontend/src/lib/usePush.ts`, and a
+  real control in Settings → Notifications. The VAPID **public** key is served
+  by `GET /me/push` so nothing is bundled; the **private** key lives only in
+  `backend-local/.env`, since the laptop is the half that sends.
+- **6.4** `PushService` fans out from `device_tokens`, honours
+  `notification_channels`, and deletes dead subscriptions (410/404,
+  `DeviceNotRegistered`). Android goes through **Expo's** push gateway, which
+  needs no server key — a raw FCM token is refused, because FCM v1 needs a
+  service-account JWT this project chose not to carry.
+- New: `POST /devices/unregister { token }` — a browser that unsubscribes
+  knows its subscription but not the row id, and `GET /devices` does not
+  return tokens.
 
-2. **Thin client (big change from AGENTS.md)** — the client configures **only the
-   Render URL**. Auth is **brokered by Render**: `backend-render/src/auth/auth.module.ts`
-   exposes `POST /auth/signup|login|refresh`; the client holds **no Supabase
-   credentials**. `shared/src/auth.ts` stores the session and refreshes via Render.
-   Web needs only `VITE_API_URL`; Android only `EXPO_PUBLIC_API_URL`.
-   `VITE_SUPABASE_*` are now unused.
-   - **Social sign-in (Google/Apple) is NOT wired** in the thin-client model yet —
-     email/password only.
+### Phase 7 — Gmail (code done; needs your Google Cloud work)
 
-3. **JWKS 401 fix** — both backends' auth guards now **derive the JWKS URL from
-   `SUPABASE_URL`** instead of the separate `SUPABASE_JWKS_URL` env (which pointed at
-   the wrong place and 401'd every token). `SUPABASE_JWKS_URL` is now optional/unused.
+Render owns all of it, because it is the only half holding
+`TOKEN_ENCRYPTION_KEY`.
 
-4. **Android** — Expo SDK 52 app in `android/`; `.github/workflows/android.yml` builds a
-   **release** APK (bundles JS, runs standalone) with `lfs: true` (icon is Git LFS).
-   Android was a thin scaffold; it now has email/password sign-in, a book list and
-   the reader (Phase 10.3). The remaining screens are Phase 8. React 18 (Android) vs React 19
-   (web) → `frontend/vite.config.ts` dedupes/pins React to fix a prod `useState` crash.
+- `common/crypto.service.ts` — AES-256-GCM. Note tokens are stored as Postgres
+  **bytea hex literals** (`\x…`); writing base64 there stores the characters
+  of the encoding and decrypts to nothing.
+- `gmail/google-oauth.service.ts` — consent URL with an **HMAC-signed,
+  10-minute `state`** carrying the user id. The callback arrives from Google
+  with no session, so that signature is the whole CSRF defence.
+- `gmail/gmail-api.service.ts` — list/get/history/send. `format=metadata`
+  only: **message bodies are never stored**. Headers are stripped of CR/LF
+  before sending (header injection).
+- `gmail/gmail-sync.service.ts` — backfill, then incremental by `historyId`;
+  a 404 on history means the cursor expired, so it backfills instead.
+- **7.5** `backend-local/src/gmail/email-insights.service.ts` — summaries on a
+  10-minute tick, on the laptop, where the model is. Email content is fenced
+  and declared as data; no tools are offered on that call.
+- **7.6** `send_email` really sends. The laptop calls
+  `POST /internal/gmail/send` (shared-secret guard) rather than holding a
+  Gmail token. `skills.module.ts` re-validates the parked args, marks the row
+  approved *before* sending, then writes the outcome to `pending_actions.result`.
+- Settings → **Mail**: connect, connect another, sync now, disconnect.
 
-## Frontend wiring status (`frontend/src/App.tsx` + `frontend/src/lib/*`)
+⚠️ **The 7-day trap is real and unavoidable from code.** An OAuth app left in
+*Testing* issues refresh tokens that expire weekly. Start Google's
+verification review for `gmail.readonly` early. Needs on render:
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
+(…/api/v1/gmail/callback), `APP_URL`; and `RENDER_API_URL` on the laptop.
 
-Wired to the API with real data, create/persist, and loading/error states:
+### Phase 8 — Android (done)
 
-- **Library** — `useLibrary.ts` + `libraryMap.ts`
-- **Reader annotations** — `readerSync.ts` (highlights/notes/bookmarks + reading sessions)
-- **Knowledge** — `useKnowledge.ts` (reads `/knowledge`)
-- **Health** — `useHealth.ts` (records read/create/edit; no delete/consent UI yet)
-- **Calendar** — `useCalendar.ts` (Day/Week/Month + mobile agenda; original grid look,
-  real events, create persists, date-driven; grid is 640px tall, 64px/hour from 8 AM)
-- **Today** — real date/greeting/agenda + real "Continue learning" library peek
-- **Assistant** — chat → backend-local, receipt cards, online/offline, approvals, persona
-- **Auth** — Render-brokered sign-in/up, route guard, `/me/activity` heartbeat
+- **8.3** Today, Assistant chat, Calendar, Health (read-only), My Knowledge,
+  More — plus `components/TabBar.tsx`. **No react-navigation**: the web app
+  already drives sections from one `view` state and this mirrors it.
+  `CalendarScreen` keys days by the **local** date, not `toISOString()` — the
+  bug that drew web events on the wrong day.
+- **8.4** Expo push token → `device_tokens`. Needs `extra.eas.projectId` and a
+  Firebase `google-services.json`; without them it reports a reason and the
+  clock carries on regardless.
+- **8.5** Reader touch: swipe to turn (PanResponder, claims only clearly
+  sideways drags so vertical scroll still works), long-press to
+  highlight/note, tap a marked paragraph to see or remove it, star to bookmark,
+  one `reading_sessions` row per sitting. Uses the web's anchoring model
+  unchanged — page + paragraph index + `anchor_text`.
+- Sign-out moved from Library to More.
 
-**Removed:** the separate Tasks page (Calendar covers it) — per the user.
+## Phase 10.4 — OCR for scanned PDFs (done)
 
-## How to work in this repo
+A PDF with no text layer is now read on the device that holds it.
 
-- Typecheck: `npx tsc --noEmit` in each of `frontend/`, `android/`, `backend-render/`,
-  `backend-local/`. Build: `pnpm --dir frontend build` (then `rm -rf frontend/dist`).
-- The sandbox **cannot live-test logged-in views** (needs the user's real Supabase login).
-  Rely on tsc/build and on preserving markup/CSS classes.
-- **Commit only when the user asks.** They deploy by pushing to `main`
-  (Vercel + Android CI auto-deploy). Commit co-author line:
-  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
-- The user values tokens — be concise, avoid broad re-exploration, don't type passwords.
+- `shared/src/pdf.ts` — the seam: `PdfPageImage`, `PdfOcr`,
+  `PdfHandle.renderPage?`, `PdfTextSourceOptions.ocr?`, status `'ocr'`, and
+  `PdfPage.ocr` / `PdfTextDoc.ocr` so nothing downstream mistakes machine-read
+  text for the real thing. `runOcr()` goes front to back, persists every four
+  pages so a closed tab resumes rather than restarting, yields between pages,
+  and falls back to `scanned` if recognition finds nothing either.
+  `ocrParagraphs()` shapes OCR lines into paragraphs on blank lines and
+  stitches hyphenated line breaks.
+- `frontend/src/lib/pdfOcr.ts` — Tesseract (WebAssembly) in a worker, one
+  worker per book, lazily imported so it costs nothing for the sessions that
+  never open a scan. The worker script is served from our own origin via a
+  Vite `?url` import, so **no third-party URL is written down in this repo**;
+  the core WASM and language data fall back to the library's own defaults
+  unless `VITE_OCR_CORE_PATH` / `VITE_OCR_LANG_PATH` are set.
+  `VITE_OCR_LANGUAGE` defaults to `eng`.
+- `frontend/src/lib/pdfEngine.ts` — `renderPage()`, the only place this module
+  draws anything. OffscreenCanvas where available, white fill under the page
+  (a transparent canvas gives Tesseract black text on nothing), PNG not JPEG
+  because JPEG ringing around glyph edges measurably costs accuracy.
+- The reader reports progress: "Reading the scan · 12/240", and says which
+  page is still to come rather than looking stuck. `'ocr'` is styled as
+  progress, not a warning.
 
-## Gotchas
-
-- Images are Git LFS; any CI touching them needs `lfs: true`.
-- `favicon.png` was changed by the user; `vite.config.ts` may still reference `/favicon.png`.
-- A test item **"API Test Book"** sits in the user's real library (Library has no delete UI yet).
-
-## PDF → text, as built (Phase 10)
-
-The extracting device is the one holding the file; everyone else reads its JSON.
-
-- Web: `usePdfText` resolves **IndexedDB cache → cloud JSON → extract here**,
-  shows the open page first and fills the rest in behind, then caches and
-  uploads the finished document. The sample pages are now the fallback for
-  items with no PDF only.
-- Android: no engine, so it reads the cached/cloud JSON. A book nobody has
-  extracted reports `unavailable` and says to open it once in the web app.
-- Ingest was broken and is fixed: the Add-book file input used to keep only the
-  **filename** and throw the bytes away, and page counts were guessed from file
-  size. Both flows now store the blob (keyed by item id, title as the legacy
-  fallback) and read the real page count from the PDF.
-- `performSupabaseUpload` in `utils/pdfStorage.ts` is **still a fake progress
-  simulator** — the "sync file" button does not upload the raw PDF anywhere. Only
-  the extracted JSON really syncs.
-- Not done: OCR for scanned PDFs (10.4), and pdfjs runs without CMaps, so CJK /
-  exotic-encoding PDFs may extract poorly.
-
-## PDF structure + Settings made real
-
-**PDF → JSON now keeps structure, not just paragraphs.** `PdfPage` gained
-`blocks` (`heading` / `subheading` / `paragraph` / `caption`, with a level),
-`heading` and `runningHead`; `PdfTextDoc` gained `info` — the PDF's own header
-block (title, author, subject, keywords, creator, producer, dates, page size)
-read via `getMetadata()`. `paragraphs` stays beside `blocks` because annotation
-anchors are stored against its indices and Android reads it directly.
-
-How the structure is found: type size relative to *that page's* body size, so
-it works whatever a book sets its body in; plus a run-in heading rule for
-short, unpunctuated lines that sit closer to what follows than to what
-precedes. Running heads are dropped by comparing a page's first line with its
-neighbour's, ignoring digits.
-
-Two extraction bugs fixed while testing against a generated PDF:
-- pdfjs emits an empty, zero-size item carrying the EOL flag, positioned on the
-  *next* line. It was being joined into the line, giving lines a width of zero
-  and letting the next line's font bleed into the metrics. It now ends the line
-  without joining it.
-- `fontName` is an internal id (`g_d0_f2`); the real family is in the text
-  content's `styles` map. Note that non-embedded standard fonts still collapse
-  to `sans-serif`, so weight detection only works on embedded fonts — the
-  size-based rules carry the structure.
-
-The reader renders blocks with their real rank (`sheet-block-heading`,
-`-subheading`, `-caption`), and paragraph indices stay aligned with
-`paragraphs` so existing annotations keep their anchors.
-
-**Settings does things now.** It was one working row (Storage) and four dead
-buttons. `lib/useProfile.ts` reads and writes `/me`, and the view has:
-- **Profile** — display name and time zone persisted to the profile row, and
-  Color Mode saved there too (so it follows you between devices; `App` applies
-  it on first load).
-- **Notifications** — the live Realtime status, unread count, mark-all-read and
-  refresh, and a plain statement that push-when-closed is not built.
-- **Privacy** — what is actually enforced (RLS, the health consent gate, the
-  model key staying on the laptop, PDFs never leaving the device), and what is
-  planned (revoking health grants, data export).
-
-Rows that are not built are labelled as such rather than looking tappable.
-
-## Reader redesign, UI fixes, and real YouTube playback
-
-**Reader** (`MyProDarkReader.tsx`, `reading-listening.css`) — rebuilt as one
-scrolling column under a fixed glass bar: continuous is now the default mode,
-pages load as you reach them (`flowStart`/`flowEnd` with an IntersectionObserver
-at the foot, "Load earlier pages" at the head with scroll compensation), the
-page you are looking at drives the dock and the chapter crumb, the sidebar
-slides over instead of occupying a column, and a chapter heading only prints
-where the chapter actually changes. Paged mode is still a setting.
-
-Fixed with it: a failed cloud lookup in `shared/src/pdf.ts` aborted the whole
-boot, so a signed-out or offline reader showed "PDF unreadable" instead of
-falling back to its sample text.
-
-**The logo never loaded in production.** `frontend/public/*.png` is LFS-tracked
-and Vercel does not fetch LFS objects, so the deployed file was its 130-byte
-pointer served as `image/png` (verified against the live URL). `.gitattributes`
-now exempts that folder and the real blobs are staged.
-
-**Other fixes**
-- The notification bell sat under the fixed Settings / Color Mode stack. It is
-  now a member of that stack (`.notifications-fab`), and its panel opens above.
-- Mobile navigation is a drag-up sheet (`components/MobileNavSheet.tsx`): the
-  five-tab bar at rest, every section plus Notifications / Settings / Color Mode
-  / Sign out when raised. Watch the specificity — `.dark-app .bottom-nav`
-  and `.dark-app .bottom-nav button` outrank bare class selectors, so the
-  sheet's rules match that weight deliberately.
-- Every progress bar read 100%: `.progress` (the track) and its fill were both
-  `#ffffff`. The track is translucent now. This is the third instance of the
-  same monochrome-theme mistake, after the calendar events and `.type-switch`.
-
-**Podcasts — real playback (was simulated).** The transport used to drive a
-`setInterval` that counted seconds while nothing played. `lib/youtube.ts` +
-`lib/useYouTubePlayer.ts` put YouTube's IFrame Player API behind the existing
-controls; one player instance serves both modes, and "Audio Only" collapses it
-rather than unmounting it (removing it from the page would stop the audio).
-Verified live in a browser: the API loads, reports a real duration, and the
-clock advances while playing. The audio stream is **not** extracted or
-downloaded — that would breach YouTube's terms; this plays through their
-player.
-
-**Paste a link, get the episode.** YouTube's oEmbed endpoint (no API key, CORS
-works from the browser — verified) fills in title, channel and artwork on
-paste. Duration is not in oEmbed, so the player writes the real length back the
-first time you play. Category and description stay yours, as asked.
-
-## Calendar fixes + the scheduler's silent run-history bug
-
-**Calendar** (`frontend/src/lib/useCalendar.ts`, `App.tsx`, `index.css`). Five
-real defects, all of which made events look missing:
-
-1. **Events were drawn on the wrong day.** `groupByDate` keyed days by
-   `startsAt.slice(0, 10)` — the *UTC* date — while every grid lookup uses the
-   local date. Verified in the browser at Asia/Calcutta: a 02:00 event on the
-   16th is stored `2026-11-15T20:30:00Z` and was keyed to the **15th**. Now
-   `dateKeyOf()` localises timed events and keeps all-day events on their
-   stored UTC date.
-2. **Only ±1 month of data ever loaded**, computed once from *today* and never
-   refetched, so paging to any other month showed an empty calendar. The hook
-   now takes the focused date and reloads when the month changes.
-3. **Events outside 8 AM–6 PM were invisible** — the grid was a fixed 640px
-   window with `overflow: hidden`, so a 9 PM dinner was clipped and a 6 AM run
-   was clamped onto the 8 AM line. The grid is now the full 24 hours (1536px)
-   inside a scroll window that opens parked at 8 AM.
-4. **Saturday and Sunday did not exist** in the week view (5 columns), so
-   weekend events were loaded and never drawn. Now Mon–Sun.
-5. **Every event was a white box with white text.** The tone classes set
-   `background: #ffffff` while the text inherited `#ffffff`; events were only
-   readable in Color Mode, which swaps in a translucent tint. Monochrome now
-   uses `rgba(255,255,255,.1)` with a solid white edge, like `.month-event`.
-
-Also: all-day events now appear (a strip in Week, chips in Day, in the mobile
-agenda), clicking an event opens it for **edit or delete** (the API had
-`updateEvent`/`deleteEvent` all along, with no UI), the category tone embed is
-read under its real key (`event_categories`, not `calendar_categories`), and
-end-before-start is rejected.
-
-**Scheduler** — `deferOrDegrade` wrote `schedule_runs.status = 'deferred'`,
-which 0001's check constraint rejected; the result was never inspected, so
-every defer vanished from run history. `0007_schedule_run_deferred.sql` widens
-the constraint, and all run inserts now go through `recordRun()`, which logs a
-rejection instead of swallowing it.
-
-## Schedules + live notifications, as built (Phases 5 and 6.1)
-
-- **Schedules** — `frontend/src/components/schedules/SchedulesView.tsx` +
-  `lib/useSchedules.ts`, reached from the sidebar ("Schedules"). Builder
-  (daily / weekdays / monthly / once / cron), pause-resume, delete with an
-  inline confirm, and per-schedule run history from `/schedules/:id/runs`.
-  Note the API validates a **whole** schedule on PATCH, so `rowToInput()`
-  rebuilds the row before a one-field edit.
-- **Notifications** — `shared/src/realtime.ts` opens a Supabase Realtime
-  socket on `notifications`; `lib/useNotifications.ts` turns inserts into
-  toasts and feeds the sidebar bell (unread count + a live dot). Marking read
-  is optimistic and echoes to other devices over the same socket.
-- **The one architectural concession:** Realtime needs a Supabase client, so
-  `GET /me/realtime` serves the project URL + **publishable** key at runtime.
-  Nothing is baked into the bundles and the socket still carries the user's JWT,
-  so RLS decides what arrives — but it is a small walk-back of "the client holds
-  no Supabase values".
-- Fixed in passing: `.type-switch button.active` was white-on-white
-  (`--graphite` is `#ffffff`), so the selected segment's label was invisible
-  — in the Add-item modal too, not just the new view.
-- Still open in Phase 6: Web Push (6.2), FCM (8.4), and the `device_tokens`
-  fan-out TODO at `scheduler.service.ts:210`. Realtime only covers an open app.
-
+**Why on-device.** Sending page images to a cloud OCR service would quietly
+break the "PDFs never leave the device" promise for exactly the most private
+documents — the scans — and would cost money per page. Android gets no
+implementation: it has no renderer, so a scan there still reports `scanned`
+and says to open it once on the web.
 ## What's next (in order)
 
-1. **Phase 6 (the rest)** — real push when the app is closed: Web Push (VAPID)
-   and the `device_tokens` fan-out. (Telegram was dropped; the in-app chat is
-   the channel.)
-2. Polish — Library item delete UI, Health delete + assistant-consent-grant UI.
-3. **Phase 7** — Gmail (needs a Google OAuth app).
-4. **Phase 8** — the rest of the Android screens. It now has sign-in, a book
-   list and a reader; Today, Calendar, Health and the assistant chat are still web-only.
-5. **Phase 9** — companion intelligence (commitments, pulse, memory, rhythm).
+1. **Phase 12 — ground under the agent.** 21 skills, still **zero tests**, and
+   Phase 7 just added a path that sends real email to real people. Start with
+   the pure logic that has already bitten: `computeNextRun`, `groupBlocks`,
+   `dateKeyOf`, plus the new `expandOccurrences` and `ocrParagraphs`.
+2. **Phase 13.2** — an offline cache on the phone. Its screens are done; the
+   library list, calendar, brief and chat are still network-only.
+3. **Phase 18.2 — the theme tokens.** `--graphite`, `--medium`, `--soft`,
+   `--accent`, `--deep` and `--secondary` are all `#ffffff`, used ~97 times.
+   That one decision has now caused four invisible-element bugs, and it is why
+   the new reader highlight uses `rgba(255,255,255,.12)` rather than a fill.
+4. **Phase 16** — commitments and the Pulse, the phase that changes how it
+   feels.
+
+## Not verified
+
+**Typecheck and build only.** `npx tsc --noEmit` passes in all four packages
+and `pnpm --dir frontend build` succeeds (the Tesseract worker is emitted as
+its own 111 KB asset; `dist/` was deleted afterwards).
+
+Nothing signed-in was exercised, because a sandbox cannot:
+
+- No notification has been armed on a real phone, and no local notification
+  has fired.
+- No mailbox has been connected, so no OAuth round trip, sync, insight or send
+  has ever run.
+- No push has been delivered to a closed browser.
+- No brief has been generated by the moved drain loop.
+- No scanned PDF has been put through OCR.
+- The Android screens have **never been run** — there is no build here for
+  them, only `tsc`.
+## Still true from earlier sessions
+
+- Web: `https://mypro-by-gova.vercel.app` · Render:
+  `https://mypro-km2k.onrender.com` (base `/api/v1`) · Supabase ref
+  `kssucdvrfzbdkyzovmjo`.
+- Auth is **brokered by Render**; clients hold no Supabase credentials except
+  the publishable key served at runtime by `GET /me/realtime`.
+- Both auth guards derive JWKS from `SUPABASE_URL`; `SUPABASE_JWKS_URL` is
+  unused.
+- `performSupabaseUpload` in `utils/pdfStorage.ts` is **still a fake progress
+  simulator** — only extracted JSON really syncs, never the raw PDF.
+- pdfjs runs without CMaps, so CJK PDFs may extract poorly.
+- Images are Git LFS, except `frontend/public/*.png`, exempted because Vercel
+  does not fetch LFS objects and served the logo as a 130-byte pointer.
+- A test item "API Test Book" sits in the real library; Library has no delete UI.
+- Commit only when asked. Co-author line:
+  `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.

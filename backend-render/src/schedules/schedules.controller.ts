@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard, CurrentUser, type AuthUser } from '../common/auth.guard';
 import { SchedulesService, scheduleInput } from './schedules.service';
 
@@ -15,6 +15,21 @@ export class SchedulesController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     return this.schedules.create(user, scheduleInput.parse(body));
+  }
+
+  /**
+   * Must precede `:id`, or Nest matches 'upcoming' as a schedule id.
+   *
+   * The phone calls this on every launch and arms a local notification per
+   * occurrence (Phase 11.2). 48 hours is the default window: long enough that
+   * a day without opening the app loses nothing, short enough that a schedule
+   * edited today takes effect tomorrow.
+   */
+  @Get('upcoming')
+  upcoming(@CurrentUser() user: AuthUser, @Query('hours') hours?: string) {
+    const parsed = Number(hours);
+    const window = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 168) : 48;
+    return this.schedules.upcoming(user, window);
   }
 
   @Get(':id')

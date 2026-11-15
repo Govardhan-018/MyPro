@@ -796,7 +796,12 @@ const key = `${page}-${idx}`;
       return pdfText?.error || "This PDF could not be read on this device.";
     }
     if (pdfStatus === "scanned") {
-      return "This PDF has no selectable text — it looks scanned. Text recognition is coming in a later release.";
+      return "This PDF has no text in it, and reading it as an image found none either — it may be photographs or a blank scan.";
+    }
+    if (pdfStatus === "ocr") {
+      // Recognition runs front to back and saves as it goes, so saying which
+      // page is being read is the difference between "working" and "stuck".
+      return `No text layer in this PDF, so MyPro is reading the scan itself. Page ${page} is still to come.`;
     }
     if (pdfStatus === "loading") return "Opening the PDF…";
     if (pdfText?.page(page)?.empty) return "This page has no text (it may be an image or a blank page).";
@@ -812,7 +817,14 @@ const key = `${page}-${idx}`;
       const total = pdfText?.pageCount ?? 0;
       return total ? `Extracting text · ${count}/${total}` : "Extracting text…";
     }
-    if (pdfStatus === "scanned") return "Scanned PDF · no text layer";
+    if (pdfStatus === "ocr") {
+      const count = pdfText?.extracted ?? 0;
+      const total = pdfText?.pageCount ?? 0;
+      // Slow enough — seconds a page, not milliseconds — that a count is the
+      // only honest way to show it is progressing.
+      return total ? `Reading the scan · ${count}/${total}` : "Reading the scan…";
+    }
+    if (pdfStatus === "scanned") return "Scanned PDF · no readable text";
     if (pdfStatus === "error") return "PDF unreadable";
     return null;
   };

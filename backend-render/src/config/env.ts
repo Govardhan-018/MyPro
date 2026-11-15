@@ -52,6 +52,39 @@ const schema = z.object({
   /** Encrypts Gmail OAuth tokens at rest. Generate: openssl rand -base64 32 */
   TOKEN_ENCRYPTION_KEY: z.string().min(32),
 
+  /**
+   * Google OAuth for Gmail (Phase 7). All three or nothing — the connect
+   * flow reports "not configured" rather than half-working.
+   *
+   * ⚠️ An OAuth app left in **Testing** in the Google Cloud console issues
+   * refresh tokens that expire after 7 days, so the mailbox silently
+   * disconnects every week. Publishing it needs Google's verification review
+   * for the restricted `gmail.readonly` scope — free, but slow.
+   */
+  GOOGLE_CLIENT_ID: optionalText(),
+  GOOGLE_CLIENT_SECRET: optionalText(),
+  /** Must match the console exactly, e.g. https://…/api/v1/gmail/callback */
+  GOOGLE_REDIRECT_URI: optionalUrl(),
+  /** Where the callback sends the browser once the mailbox is connected. */
+  APP_URL: optionalUrl(),
+
+
+  /**
+   * The in-process clock — **off by default since Phase 11**.
+   *
+   * Render's free instance sleeps after ~15 minutes of inactivity, so a cron
+   * living here silently stops firing: the morning brief, the one thing the
+   * product exists for, simply did not happen. The drain loop moved to
+   * backend-local (the laptop) and the firing moved to the phone's OS.
+   *
+   * Set it to 'true' only for local development, or if render is ever on a
+   * paid always-on instance. Two drain loops against the same table would
+   * race and double-send.
+   */
+  SCHEDULER_ENABLED: blankAsUndefined(
+    z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  ),
+
   TELEGRAM_BOT_TOKEN: optionalText(),
   WEB_PUSH_PUBLIC_KEY: optionalText(),
   WEB_PUSH_PRIVATE_KEY: optionalText(),

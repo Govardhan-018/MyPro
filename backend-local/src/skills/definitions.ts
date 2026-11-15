@@ -538,7 +538,9 @@ const sendEmail = defineSkill({
   name: 'send_email',
   description:
     'Send an email on the user\'s behalf. This always needs their explicit ' +
-    'approval first — it is never sent automatically.',
+    'approval first — it is never sent automatically. Sending really works ' +
+    'once a Gmail account is connected in Settings; with none connected, ' +
+    'approving it reports that there is no mailbox to send from.',
   sideEffect: 'outward',
   schema: z.object({
     to: z.string().email(),

@@ -1,8 +1,9 @@
 /**
- * The reader's PDF text (Roadmap Phase 10.1 / 10.3).
+ * The reader's PDF text (Phases 10.1 / 10.3, and 10.4 for scans).
  *
- * Assembles the three halves the shared core asks for:
+ * Assembles the halves the shared core asks for:
  *   engine → pdfjs on this device
+ *   ocr    → Tesseract, for a PDF with no text layer at all
  *   store  → the IndexedDB vault that already holds the PDF blob
  *   remote → the extracted JSON in Supabase Storage, brokered by Render
  *
@@ -22,6 +23,7 @@ import type { LibraryItem } from "../types/library";
 import { api } from "./api";
 import { isApiConfigured } from "./env";
 import { pdfEngine } from "./pdfEngine";
+import { createPdfOcr } from "./pdfOcr";
 import {
   getPdfBlobByAnyKey,
   loadExtractedText,
@@ -66,6 +68,15 @@ export function usePdfText(book: LibraryItem | null, enabled: boolean): PdfTextS
       key,
       fileName: fileNameRef.current,
       engine: pdfEngine,
+      /**
+       * Text recognition for a PDF with no text layer (Phase 10.4).
+       *
+       * Constructed per book but inert until needed: the shared core only
+       * reaches for it after a full text pass has found nothing anywhere,
+       * and nothing is loaded until then — Tesseract's WebAssembly arrives
+       * on first use, not with the bundle.
+       */
+      ocr: createPdfOcr(),
       store,
       remote: itemId && isApiConfigured ? createPdfTextRemote(api.pdfText, itemId) : undefined,
       bytes: async () => {

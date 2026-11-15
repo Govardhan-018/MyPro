@@ -120,3 +120,40 @@ export interface NodeStatus {
     base_url: string | null;
   };
 }
+
+/**
+ * One moment a schedule will fire, expanded server-side (Phase 11.2).
+ *
+ * The phone registers a local notification per occurrence and re-arms on
+ * every launch, so the OS fires it whether or not the laptop is open and
+ * whether or not render is awake. Flat on purpose: a notification needs a
+ * time, something to say, and a stable id to deduplicate against.
+ */
+export interface ScheduleOccurrence {
+  /** `<schedule id>:<ISO instant>` — stable, so a re-arm replaces rather than duplicates. */
+  id: string;
+  schedule_id: string;
+  name: string;
+  action_type: 'notify' | 'report' | 'email' | 'chat_message';
+  title: string;
+  body: string | null;
+  /** ISO 8601, UTC. */
+  at: string;
+}
+
+/**
+ * A connected mailbox, as the client sees it (Phase 7.2).
+ *
+ * Token columns are never selected, let alone sent. `sync_error` carries the
+ * one thing the user can act on — most often "reconnect this mailbox", which
+ * is what the 7-day Testing-mode trap looks like from the outside.
+ */
+export interface GmailAccountRow {
+  id: string;
+  email: string;
+  sync_state: 'idle' | 'syncing' | 'error' | string;
+  sync_error: string | null;
+  /** Non-null once a first backfill has completed. */
+  history_id: string | null;
+  created_at: string;
+}

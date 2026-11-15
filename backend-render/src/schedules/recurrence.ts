@@ -89,3 +89,37 @@ export function computeNextRun(s: ScheduleShape, from: Date = new Date()): Date 
       return null;
   }
 }
+
+/**
+ * Every time this schedule fires between `from` and `until` (Phase 11.2).
+ *
+ * The phone is the clock: it registers local notifications for the next ~48
+ * hours and re-arms on every launch, so it needs the list of *moments*, not
+ * the rule. Expanding here rather than on the device keeps the recurrence
+ * maths in one place per backend and keeps luxon and cron-parser out of the
+ * Android bundle — the phone stays dumb on purpose.
+ *
+ * `computeNextRun` is strictly increasing (it only ever returns an instant
+ * after the one it was given), so walking it terminates. `cap` is a
+ * belt-and-braces guard against a cron like `* * * * *`, which would
+ * otherwise produce 2,880 occurrences for a two-day window.
+ */
+export function expandOccurrences(
+  s: ScheduleShape,
+  from: Date,
+  until: Date,
+  cap = 64,
+): Date[] {
+  const out: Date[] = [];
+  let cursor = from;
+
+  for (let i = 0; i < cap; i++) {
+    const next = computeNextRun(s, cursor);
+    if (!next || next > until) break;
+    out.push(next);
+    // Guard against a malformed rule that returns the same instant forever.
+    if (next.getTime() <= cursor.getTime()) break;
+    cursor = next;
+  }
+  return out;
+}

@@ -48,6 +48,13 @@ export interface PdfPage {
   /** The first heading on the page, for the contents and the crumb. */
   heading?: string;
   empty?: boolean;
+  /**
+   * This page was read by text recognition, not pulled from a text layer
+   * (Phase 10.4). Recorded so nothing downstream mistakes machine-read text
+   * for the real thing: there are no font metrics behind it, so every line
+   * arrives as a paragraph and `blocks` carries no heading ranks.
+   */
+  ocr?: boolean;
 }
 
 /** The document's own header information, as the file declares it. */
@@ -82,8 +89,13 @@ export interface PdfTextDoc {
   extractedAt: string;
   /** Title, author and the rest of the PDF's own header block. */
   info?: PdfDocInfo;
-  /** True when no page yielded text — i.e. a scanned PDF needing OCR. */
+  /**
+   * True when no page yielded text and nothing could recognise it either —
+   * an image-only PDF that is not readable as text at all.
+   */
   scanned?: boolean;
+  /** This document was read by text recognition (Phase 10.4). */
+  ocr?: boolean;
   fileName?: string;
 }
 
@@ -134,18 +146,51 @@ export interface PdfOutlineNode {
 }
 
 /** One open PDF. */
+/**
+ * A rasterised page, for OCR (Phase 10.4). PNG bytes rather than raw pixels:
+ * every OCR engine takes an encoded image, and it crosses a worker boundary
+ * far more cheaply than an ImageData buffer.
+ */
+export interface PdfPageImage {
+  page: number;
+  bytes: ArrayBuffer;
+  mimeType: string;
+  width: number;
+  height: number;
+}
+
 export interface PdfHandle {
   pageCount: number;
   textItems(page: number): Promise<PdfTextItem[]>;
   outline?(): Promise<PdfOutlineNode[]>;
   /** Title, author, producer… as the file declares them. */
   info?(): Promise<PdfDocInfo>;
+  /**
+   * Render a page to an image, for OCR. Optional: only an engine that can
+   * actually draw (pdfjs on a canvas) implements it, which is why a scanned
+   * book stays `scanned` on Android rather than pretending to recognise it.
+   */
+  renderPage?(page: number, scale?: number): Promise<PdfPageImage | null>;
   close?(): void | Promise<void>;
 }
 
 /** Opens PDF bytes. Web implementation wraps pdfjs-dist. */
 export interface PdfEngine {
   open(bytes: ArrayBuffer): Promise<PdfHandle>;
+}
+
+/**
+ * Text recognition for a page image — Phase 10.4.
+ *
+ * Kept behind a seam for the same reason as {@link PdfEngine}: the recogniser
+ * is large, platform-specific and lazily loaded, and the shared core must not
+ * know which one is in use. It runs on the device, so a scanned PDF is never
+ * uploaded anywhere to be read.
+ */
+export interface PdfOcr {
+  recognize(image: PdfPageImage): Promise<string>;
+  /** Release the worker once a book is done with it. */
+  dispose?(): void | Promise<void>;
 }
 
 /** Device-local cache of the extracted JSON. */
@@ -494,8 +539,14 @@ export type PdfStatus =
   | 'ready'
   /** Readable, and the remaining pages are being extracted in the background. */
   | 'extracting'
-  /** The PDF has no selectable text at all — needs OCR (Phase 10.4). */
+  /**
+   * The PDF has no selectable text at all, and nothing on this device can
+   * recognise it. With an {@link PdfOcr} supplied the source goes to `ocr`
+   * instead and only lands here if recognition finds nothing either.
+   */
   | 'scanned'
+  /** Reading a scanned PDF with text recognition (Phase 10.4). */
+  | 'ocr'
   | 'error';
 
 export interface PdfTextSourceOptions {
@@ -505,6 +556,12 @@ export interface PdfTextSourceOptions {
   bytes?: () => Promise<ArrayBuffer | null>;
   /** Extractor for those bytes. Omit on devices that only read the JSON. */
   engine?: PdfEngine;
+  /**
+   * Text recognition, for a PDF with no text layer (Phase 10.4). Optional:
+   * without it a scanned book reports `scanned` and says so, which is what
+   * Android does — it has no renderer to rasterise pages with.
+   */
+  ocr?: PdfOcr;
   /** Device-local cache of extracted JSON. */
   store?: PdfTextStore;
   /** The cloud copy. */
@@ -632,12 +689,107 @@ export function createPdfTextSource(options: PdfTextSourceOptions): PdfTextSourc
       }
       if (disposed || !doc) return;
       const anyText = Object.values(doc.pages).some((p) => p.paragraphs.length > 0);
+
+      if (!anyText && canOcr()) {
+        // Nothing selectable anywhere: this is a scan. Recognising it is the
+        // difference between a book you can read and a file you cannot.
+        await runOcr();
+        return;
+      }
+
       doc.scanned = !anyText;
       dirty = true;
       await persist();
       setStatus(anyText ? 'ready' : 'scanned');
     } finally {
       backgroundRunning = false;
+    }
+  };
+
+  const canOcr = (): boolean => Boolean(options.ocr && handle?.renderPage);
+
+  /**
+   * Read a scanned book with text recognition — Phase 10.4.
+   *
+   * Front to back, one page at a time, persisting as it goes. OCR is orders
+   * of magnitude slower than pulling out a text layer — seconds per page, not
+   * milliseconds — so three things matter:
+   *
+   *  - **Pages become readable as they finish.** The reader shows page one
+   *    while page forty is still being recognised.
+   *  - **Progress survives a closed tab.** Every page is written to the cache,
+   *    so reopening the book resumes instead of starting again.
+   *  - **The UI keeps breathing.** A yield between pages, as the text pass does.
+   *
+   * Recognised pages carry `ocr: true`, so nothing downstream mistakes
+   * machine-read text for the real thing: the structure heuristics have no
+   * font metrics to work from here, and every line arrives as a paragraph.
+   */
+  const runOcr = async () => {
+    if (!doc || !handle?.renderPage || !options.ocr) return;
+    setStatus('ocr');
+
+    const ocr = options.ocr;
+    const render = handle.renderPage.bind(handle);
+    let recognised = 0;
+
+    try {
+      for (let page = 1; page <= doc.pageCount; page++) {
+        if (disposed || !doc) return;
+        // A page already recognised in an earlier sitting is left alone.
+        if (doc.pages[String(page)]?.paragraphs.length) continue;
+
+        try {
+          // 2× renders text large enough for recognition without making the
+          // image so big that a long book exhausts memory.
+          const image = await render(page, 2);
+          if (!image || disposed || !doc) continue;
+
+          const text = await ocr.recognize(image);
+          if (disposed || !doc) return;
+
+          const paragraphs = ocrParagraphs(text);
+          doc.pages[String(page)] = {
+            page,
+            // One block per paragraph: without font metrics there is no
+            // honest way to tell a heading from a line of body text.
+            blocks: paragraphs.map((paragraph) => ({ kind: 'paragraph', text: paragraph })),
+            paragraphs,
+            ocr: true,
+            ...(paragraphs.length ? {} : { empty: true }),
+          };
+          if (paragraphs.length) recognised += 1;
+          dirty = true;
+          notify();
+        } catch {
+          // A page the recogniser chokes on is marked empty and skipped,
+          // exactly as an unreadable page is in the text pass.
+          doc.pages[String(page)] = { page, blocks: [], paragraphs: [], empty: true, ocr: true };
+          dirty = true;
+          notify();
+        }
+
+        // Persist every few pages rather than every page: the whole document
+        // is rewritten each time, and that cost grows with the book.
+        if (page % 4 === 0) await persist();
+        await yieldToUi();
+      }
+
+      if (disposed || !doc) return;
+      doc.ocr = true;
+      // Still nothing after recognition: an image-only PDF of photographs,
+      // say. `scanned` is then the honest final answer.
+      doc.scanned = recognised === 0;
+      dirty = true;
+      await persist();
+      setStatus(recognised > 0 ? 'ready' : 'scanned');
+    } finally {
+      // The worker holds a few tens of megabytes; let it go.
+      try {
+        await options.ocr?.dispose?.();
+      } catch {
+        /* nothing useful to do if teardown fails */
+      }
     }
   };
 
@@ -748,4 +900,50 @@ export function createPdfTextSource(options: PdfTextSourceOptions): PdfTextSourc
       handle = null;
     },
   };
+}
+
+/**
+ * Shape recognised text into reading paragraphs — Phase 10.4.
+ *
+ * OCR output is lines, and the cues the text pass relies on (leading, indent,
+ * font size, EOL flags) do not exist here. What is left is blank lines, which
+ * Tesseract emits between blocks it believes are separate, plus one rule worth
+ * keeping from the text pass: a line ending in a hyphen is a word split across
+ * the line break, and stitching it back is the difference between "recog-
+ * nition" and "recognition".
+ */
+export function ocrParagraphs(text: string): string[] {
+  const out: string[] = [];
+  let current: string[] = [];
+
+  const flush = () => {
+    if (!current.length) return;
+    let joined = '';
+    for (const line of current) {
+      if (!joined) {
+        joined = line;
+      } else if (joined.endsWith('-')) {
+        // Drop the hyphen and close the word up.
+        joined = `${joined.slice(0, -1)}${line}`;
+      } else {
+        joined = `${joined} ${line}`;
+      }
+    }
+    const cleaned = joined.replace(/\s+/g, ' ').trim();
+    // Single stray characters are recognition noise, not text.
+    if (cleaned.length > 1) out.push(cleaned);
+    current = [];
+  };
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) {
+      flush();
+      continue;
+    }
+    current.push(line);
+  }
+  flush();
+
+  return out;
 }

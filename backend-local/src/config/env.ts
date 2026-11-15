@@ -40,6 +40,15 @@ const schema = z.object({
   INTERNAL_SERVICE_TOKEN: z.string().min(32),
 
   /**
+   * backend-render's API root, e.g. https://mypro-xxxx.onrender.com/api/v1
+   *
+   * Used for the few things render is the only half able to do: sending mail
+   * (Phase 7.6), because the Gmail tokens and the key that decrypts them live
+   * only there. Without it, `send_email` declines clearly rather than failing.
+   */
+  RENDER_API_URL: optionalUrl(),
+
+  /**
    * This machine's public HTTPS origin, heartbeated into node_status so
    * render and the web app can find it. With a Cloudflare quick tunnel this
    * changes on every start — start-agent.bat fills it in automatically.
@@ -49,6 +58,31 @@ const schema = z.object({
   /** Groq (console.groq.com). Never leaves this machine. */
   GROQ_API_KEY: z.string().min(10),
   ASSISTANT_MODEL: z.string().default('openai/gpt-oss-120b'),
+
+  /**
+   * The drain loop (Phase 11.1). On by default: this machine is the clock's
+   * worker now that render's free instance is allowed to sleep. Turn it off to
+   * run a second agent process without two of them racing for the same rows.
+   */
+  SCHEDULER_ENABLED: blankAsUndefined(
+    z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  ),
+  /**
+   * How late a *recurring* job may be and still fire, in minutes. The laptop
+   * may have been shut for days; "here is your day" at 11pm is not a morning
+   * brief, so anything later than this is skipped to its next occurrence.
+   * One-shots ignore this — late beats never. 0 disables the check.
+   */
+  SCHEDULER_STALE_MINUTES: z.coerce.number().int().min(0).default(120),
+
+  /**
+   * Web Push (Phase 6.2). Optional: without them the fan-out simply skips the
+   * web-push channel. Generate a pair with `npx web-push generate-vapid-keys`.
+   */
+  WEB_PUSH_PUBLIC_KEY: optionalText(),
+  WEB_PUSH_PRIVATE_KEY: optionalText(),
+  /** 'mailto:you@example.com' — push services require a contact. */
+  WEB_PUSH_SUBJECT: optionalText(),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),

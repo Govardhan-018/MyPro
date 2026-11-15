@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SupabaseService } from '../common/supabase.service';
 import { AuditService } from '../common/audit.service';
 import { AgentClient, AgentUnavailableError, type AgentPersona } from '../nodes/agent-client.service';
 import { computeNextRun, type Recurrence } from '../schedules/recurrence';
+import { env } from '../config/env';
 
 interface DueSchedule {
   id: string;
@@ -31,12 +32,25 @@ const DEFER_RETRY_MS = 10 * 60_000;
 const MAX_DEFERS = 3;
 
 /**
- * Lives on render because render is always on. Jobs that need generated
- * text are delegated to the laptop agent; while the laptop is asleep they
- * defer a few times and then degrade to a plain, non-AI message.
+ * Lives on render because render used to be the always-on half.
+ *
+ * **Retired in Phase 11; inert unless `SCHEDULER_ENABLED=true`.** Render's
+ * free instance sleeps after ~15 minutes of inactivity, which killed this
+ * cron along with the process — the morning brief silently never arrived. The
+ * drain loop now lives in `backend-local` (the laptop, which holds the model
+ * key anyway) and the on-time firing belongs to the phone's OS.
+ *
+ * The code stays for local development and for the day render is ever on a
+ * paid always-on instance. **Never run both loops at once:** they race for the
+ * same `assistant_schedules` rows and double-send.
+ *
+ * Jobs that need generated text are delegated to the laptop agent; while the
+ * laptop is asleep they defer a few times and then degrade to a plain,
+ * non-AI message. (The laptop's own copy needs none of that — the model is
+ * in-process there.)
  */
 @Injectable()
-export class SchedulerService {
+export class SchedulerService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerService.name);
   private running = false;
 
@@ -46,9 +60,21 @@ export class SchedulerService {
     private readonly agent: AgentClient,
   ) {}
 
+  /** Say which half owns the clock, so a silent scheduler is never a mystery. */
+  onModuleInit(): void {
+    if (env().SCHEDULER_ENABLED) {
+      this.logger.warn(
+        'in-process scheduler is ENABLED on render — make sure backend-local runs with ' +
+          'SCHEDULER_ENABLED=false, or both will drain the same rows',
+      );
+    } else {
+      this.logger.log('scheduler is disabled here (Phase 11) — the laptop owns the drain loop');
+    }
+  }
+
   @Cron(CronExpression.EVERY_MINUTE)
   async tick(): Promise<void> {
-    if (this.running) return;
+    if (!env().SCHEDULER_ENABLED || this.running) return;
     this.running = true;
     try {
       const { data, error } = await this.supabase.admin
@@ -306,6 +332,8 @@ export class SchedulerService {
   /** Nudge if the user has gone quiet past their own threshold. */
   @Cron(CronExpression.EVERY_30_MINUTES)
   async inactivityCheck(): Promise<void> {
+    if (!env().SCHEDULER_ENABLED) return;
+
     const db = this.supabase.admin;
     const { data } = await db
       .from('assistant_persona')

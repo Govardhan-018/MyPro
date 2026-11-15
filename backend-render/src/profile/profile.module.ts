@@ -48,6 +48,26 @@ export class ProfileService {
     return { url: SUPABASE_URL, publishable_key: SUPABASE_PUBLISHABLE_KEY };
   }
 
+  /**
+   * The VAPID **public** key, for `pushManager.subscribe` (Phase 6.2).
+   *
+   * It is served rather than bundled for the same reason as the realtime
+   * config: one configured URL per client, and rotating the key pair needs no
+   * client release. A VAPID public key is meant to be public — it identifies
+   * the sender to the push service and can verify nothing on its own.
+   *
+   * The matching **private** key lives only in `backend-local/.env`, because
+   * since Phase 11 the laptop is the half that actually sends. Render must be
+   * reachable to subscribe, which it is: subscribing happens while you are
+   * looking at the app.
+   *
+   * `key: null` is the honest answer when push is not configured, and the UI
+   * says so rather than offering a button that cannot work.
+   */
+  pushConfig() {
+    return { key: env().WEB_PUSH_PUBLIC_KEY ?? null };
+  }
+
   /** Heartbeat from any client — drives the "you went quiet" nudge. */
   async heartbeat(user: AuthUser, client: string) {
     const db = this.supabase.forUser(user.token);
@@ -75,6 +95,11 @@ export class ProfileController {
   @Get('realtime')
   realtime() {
     return this.profile.realtimeConfig();
+  }
+
+  @Get('push')
+  push() {
+    return this.profile.pushConfig();
   }
 
   @Get()

@@ -5,6 +5,7 @@ import { assertAgentConfigured, assertApiConfigured } from './env';
 import type {
   AnnotationKind,
   AnnotationRow,
+  GmailAccountRow,
   AssistantMessageRow,
   AssistantSettingsRow,
   LibraryItemRow,
@@ -13,6 +14,7 @@ import type {
   NotificationRow,
   PendingActionRow,
   ReceiptRow,
+  ScheduleOccurrence,
   ScheduleRow,
   SendResult,
   SkillRow,
@@ -163,6 +165,12 @@ export function createApi(
        * runtime rather than in the bundle.
        */
       realtime: () => get<RealtimeConfig>('/me/realtime'),
+      /**
+       * The VAPID public key for `pushManager.subscribe`, or `key: null` when
+       * web push is not configured on the server. Served rather than bundled,
+       * for the same reason as the realtime config.
+       */
+      pushKey: () => get<{ key: string | null }>('/me/push'),
     },
 
     library: {
@@ -287,16 +295,47 @@ export function createApi(
         channel_type: 'web_push' | 'fcm' | 'telegram';
         token: string;
         platform?: string;
-      }) => post('/devices', body),
+      }) => post<{ id: string; channel_type: string; platform: string | null }>('/devices', body),
       remove: (id: string) => del(`/devices/${id}`),
+      /**
+       * Withdraw by the token itself — a browser that has just unsubscribed
+       * knows its subscription but not the row id we filed it under.
+       */
+      unregister: (token: string) => post('/devices/unregister', { token }),
       channels: () => get<Record<string, unknown>[]>('/devices/channels'),
       setChannel: (type: string, enabled: boolean) =>
         post('/devices/channels', { type, enabled }),
     },
 
+    /**
+     * Gmail (Phase 7). Render owns all of it: it is the only half holding the
+     * OAuth tokens and the key that decrypts them.
+     */
     gmail: {
-      accounts: () => get<Record<string, unknown>[]>('/gmail/accounts'),
+      /** Whether the server can run a connect flow at all. */
+      status: () => get<{ configured: boolean }>('/gmail/status'),
+      accounts: () => get<GmailAccountRow[]>('/gmail/accounts'),
+      /**
+       * Returns Google's consent URL. The caller navigates to it; Google
+       * redirects back to render, which returns the browser to the app with
+       * `?gmail=connected`.
+       */
+      connect: () => post<{ url: string }>('/gmail/connect'),
       removeAccount: (id: string) => del(`/gmail/accounts/${id}`),
+      /**
+       * Sync now. Request-driven on purpose — render is allowed to sleep, so
+       * there is no cron to be killed by it (the lesson of Phase 11).
+       */
+      sync: () =>
+        post<{
+          results: {
+            account: string;
+            fetched: number;
+            stored: number;
+            mode: string;
+            error?: string;
+          }[];
+        }>('/gmail/sync'),
       messages: (accountId?: string, limit = 50) =>
         get<Record<string, unknown>[]>('/gmail/messages', { accountId, limit }),
     },
@@ -309,6 +348,13 @@ export function createApi(
         patch<ScheduleRow>(`/schedules/${id}`, body),
       remove: (id: string) => del(`/schedules/${id}`),
       runs: (id: string) => get<Record<string, unknown>[]>(`/schedules/${id}/runs`),
+      /**
+       * Flattened firing times for the next `hours` (Phase 11.2). The phone
+       * arms one local notification per occurrence, which is what makes a
+       * brief land on time with the laptop shut and render asleep. Expanded
+       * server-side so the recurrence maths — and luxon — stay off the device.
+       */
+      upcoming: (hours = 48) => get<ScheduleOccurrence[]>('/schedules/upcoming', { hours }),
     },
 
     /** All assistant traffic goes straight to the laptop (backend-local). */

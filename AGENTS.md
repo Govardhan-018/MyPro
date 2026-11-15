@@ -74,3 +74,5 @@ transitions).
 - Never hardcode secrets, URLs, or model names — env only.
 - The architecture contract is `docs/BACKEND_PLAN.md`; update it when the
   topology or schema changes.
+- **What to build next lives in `docs/PHASES.md`** — every phase, its goal and
+  its status, in one file. Keep it current; it is what a new chat reads.

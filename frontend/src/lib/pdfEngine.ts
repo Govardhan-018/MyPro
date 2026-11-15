@@ -12,6 +12,7 @@ import type {
   PdfEngine,
   PdfHandle,
   PdfOutlineNode,
+  PdfPageImage,
   PdfTextItem,
 } from "@mypro/shared";
 
@@ -118,6 +119,62 @@ export const pdfEngine: PdfEngine = {
         }
       },
 
+      /**
+       * Rasterise a page for OCR (Phase 10.4).
+       *
+       * The only place this module draws anything. Extraction is text-only,
+       * but a scanned PDF has no text to extract — there is nothing to read
+       * but the picture, so it has to be rendered before it can be
+       * recognised.
+       *
+       * PNG rather than JPEG: Tesseract reads edges, and JPEG's ringing
+       * around glyph boundaries measurably costs accuracy on body text at
+       * this scale. Returns null rather than throwing, so one unrenderable
+       * page does not abort the pass.
+       */
+      async renderPage(pageNumber: number, scale = 2): Promise<PdfPageImage | null> {
+        const page = await doc.getPage(pageNumber);
+        try {
+          const viewport = page.getViewport({ scale });
+          const width = Math.max(1, Math.floor(viewport.width));
+          const height = Math.max(1, Math.floor(viewport.height));
+
+          // OffscreenCanvas keeps the work off the layout path; a detached
+          // <canvas> is the fallback for browsers without it.
+          const canvas: OffscreenCanvas | HTMLCanvasElement =
+            typeof OffscreenCanvas === "function"
+              ? new OffscreenCanvas(width, height)
+              : Object.assign(document.createElement("canvas"), { width, height });
+
+          const context = canvas.getContext("2d") as
+            | OffscreenCanvasRenderingContext2D
+            | CanvasRenderingContext2D
+            | null;
+          if (!context) return null;
+
+          // A scan rendered onto a transparent canvas gives Tesseract black
+          // text on nothing; it needs a white page under it.
+          context.fillStyle = "#ffffff";
+          context.fillRect(0, 0, width, height);
+
+          await page.render({
+            canvas: canvas as HTMLCanvasElement,
+            canvasContext: context as CanvasRenderingContext2D,
+            viewport,
+          }).promise;
+
+          const bytes = await canvasToPng(canvas);
+          if (!bytes) return null;
+
+          return { page: pageNumber, bytes, mimeType: "image/png", width, height };
+        } catch {
+          return null;
+        } finally {
+          // Rendering *does* hold resources, unlike text extraction.
+          page.cleanup();
+        }
+      },
+
       async outline(): Promise<PdfOutlineNode[]> {
         const raw = (await doc.getOutline()) as RawOutlineItem[] | null;
         if (!raw?.length) return [];
@@ -183,5 +240,29 @@ export async function readPageCount(bytes: ArrayBuffer): Promise<number> {
     return pageCount;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * PNG bytes from either canvas flavour.
+ *
+ * `OffscreenCanvas` gives a Blob from a promise; a DOM canvas gives one
+ * through a callback. Both end up as an ArrayBuffer, which is what crosses
+ * into the OCR worker.
+ */
+async function canvasToPng(
+  canvas: OffscreenCanvas | HTMLCanvasElement,
+): Promise<ArrayBuffer | null> {
+  try {
+    if ("convertToBlob" in canvas) {
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      return await blob.arrayBuffer();
+    }
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((result) => resolve(result), "image/png"),
+    );
+    return blob ? await blob.arrayBuffer() : null;
+  } catch {
+    return null;
   }
 }

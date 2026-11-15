@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SupabaseService } from '../common/supabase.service';
 import { AuditService } from '../common/audit.service';
 import type { AuthUser } from '../common/auth.guard';
-import { computeNextRun } from './recurrence';
+import { computeNextRun, expandOccurrences } from './recurrence';
 
 export const scheduleInput = z
   .object({
@@ -36,6 +36,23 @@ export const scheduleInput = z
   });
 
 export type ScheduleInput = z.infer<typeof scheduleInput>;
+
+
+/** The subset of a schedule row the occurrence expander needs. */
+interface ScheduleRowShape {
+  id: string;
+  name: string;
+  action_type: 'notify' | 'report' | 'email' | 'chat_message';
+  action_payload: Record<string, unknown> | null;
+  recurrence: 'once' | 'daily' | 'weekly' | 'monthly' | 'cron';
+  run_at: string | null;
+  time_of_day: string | null;
+  day_of_month: number | null;
+  cron_expr: string | null;
+  timezone: string;
+  enabled: boolean;
+  assistant_schedule_days: { day_of_week: number }[] | null;
+}
 
 const SELECT = '*, assistant_schedule_days(day_of_week)';
 
@@ -124,6 +141,56 @@ export class SchedulesService {
       targetId: id,
     });
     return { ok: true };
+  }
+
+  /**
+   * Flattened occurrences for the next `hours` (Phase 11.2).
+   *
+   * This is what makes the phone the clock. The app asks for the moments,
+   * registers a local notification for each one, and the OS fires them with
+   * the laptop shut and this very service asleep. Re-arming on every launch
+   * is what keeps the window rolling.
+   *
+   * Deliberately flat and minimal: a notification needs a time, something to
+   * say, and an id to deduplicate against on the next sync. Nothing else
+   * about the schedule belongs on the device.
+   */
+  async upcoming(user: AuthUser, hours: number) {
+    const rows = (await this.list(user)) as ScheduleRowShape[];
+    const from = new Date();
+    const until = new Date(from.getTime() + hours * 3600_000);
+
+    const out = rows
+      .filter((s) => s.enabled)
+      .flatMap((s) =>
+        expandOccurrences(
+          {
+            recurrence: s.recurrence,
+            run_at: s.run_at,
+            time_of_day: s.time_of_day,
+            day_of_month: s.day_of_month,
+            cron_expr: s.cron_expr,
+            timezone: s.timezone,
+            days: (s.assistant_schedule_days ?? []).map((d) => d.day_of_week),
+          },
+          from,
+          until,
+        ).map((at) => ({
+          /* Stable across syncs: the same occurrence keeps the same id, so a
+           * re-arm replaces its notification instead of adding a second. */
+          id: `${s.id}:${at.toISOString()}`,
+          schedule_id: s.id,
+          name: s.name,
+          action_type: s.action_type,
+          /* The body the phone should show if it has to compose one itself. */
+          title: typeof s.action_payload?.title === 'string' ? s.action_payload.title : s.name,
+          body: typeof s.action_payload?.body === 'string' ? s.action_payload.body : null,
+          at: at.toISOString(),
+        })),
+      );
+
+    out.sort((a, b) => a.at.localeCompare(b.at));
+    return out;
   }
 
   async runs(user: AuthUser, id: string) {

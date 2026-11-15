@@ -98,6 +98,8 @@ import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
+import { usePush, type PushStatus } from "./lib/usePush";
+import { useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 import {
@@ -141,6 +143,21 @@ type View =
   | "schedules"
   | "assistant"
   | "settings";
+
+/**
+ * Deeplinks a notification is allowed to open. Narrow on purpose: the string
+ * arrives from a push payload, and a bare whitelist is the whole validation.
+ */
+const NOTIFICATION_VIEWS: readonly View[] = [
+  "today",
+  "calendar",
+  "library",
+  "knowledge",
+  "health",
+  "schedules",
+  "assistant",
+  "settings",
+];
 
 // Lottie is large; load it in its own chunk so the first screen renders immediately.
 const LottieSvg = lazy(() =>
@@ -4298,6 +4315,21 @@ function HealthTextarea({
   );
 }
 
+/**
+ * Web-push state, said plainly. "Blocked" and "Unavailable" are different
+ * problems — one the user can undo in their browser, one they cannot — so the
+ * panel never collapses them into a single "off".
+ */
+const PUSH_LABELS: Record<PushStatus, string> = {
+  checking: "Checking…",
+  unsupported: "Unavailable",
+  idle: "Off",
+  denied: "Blocked",
+  subscribing: "Enabling…",
+  subscribed: "On",
+  error: "Something went wrong",
+};
+
 function SettingsView({
   books,
   onUpdateBookStorage,
@@ -4321,8 +4353,12 @@ function SettingsView({
   notifications: NotificationsState;
 }) {
   const [showStorage, setShowStorage] = useState(false);
-  const [open, setOpen] = useState<"profile" | "notifications" | "privacy" | null>(null);
+  const [open, setOpen] = useState<
+    "profile" | "notifications" | "mail" | "privacy" | null
+  >(null);
   const profile = useProfile(true);
+  const push = usePush(!!userEmail);
+  const gmail = useGmail(!!userEmail);
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [savedNote, setSavedNote] = useState(false);
@@ -4469,11 +4505,141 @@ function SettingsView({
                 Refresh
               </button>
             </div>
+            <div className="settings-status-row">
+              <span
+                className={`settings-status-dot push-${push.status}`}
+                aria-hidden="true"
+              />
+              <div>
+                <strong>When the app is closed — {PUSH_LABELS[push.status]}</strong>
+                <small>
+                  {push.reason ??
+                    (push.status === "subscribed"
+                      ? "This browser will show notifications even with every MyPro tab closed."
+                      : "Allow notifications and this browser will hear from MyPro even when no tab is open.")}
+                </small>
+              </div>
+            </div>
+            <div className="settings-panel-actions">
+              {push.status === "idle" && (
+                <button className="primary-button" onClick={() => void push.subscribe()}>
+                  Enable push
+                </button>
+              )}
+              {push.status === "subscribing" && (
+                <button className="primary-button" disabled>
+                  Enabling…
+                </button>
+              )}
+              {push.status === "subscribed" && (
+                <button className="secondary-button" onClick={() => void push.unsubscribe()}>
+                  Turn push off
+                </button>
+              )}
+              {push.status === "error" && (
+                <button className="secondary-button" onClick={() => void push.subscribe()}>
+                  Try again
+                </button>
+              )}
+            </div>
             <p className="settings-hint">
-              <strong>Not built yet:</strong> push when the app is closed (web push and
-              Android FCM). Until then notifications reach you while MyPro is open, and
-              everything is waiting here when you come back.
+              <strong>Still web-only:</strong> Android notifications arrive through the
+              phone itself, which is what makes a brief land on time with this laptop shut.
             </p>
+          </div>
+        )}
+
+        {/* ---- Mail (Phase 7) ---- */}
+        <button
+          onClick={() => setOpen((current) => (current === "mail" ? null : "mail"))}
+          aria-expanded={open === "mail"}
+        >
+          <span>Mail</span>
+          <small>
+            {gmail.loading
+              ? "Checking…"
+              : !gmail.configured
+                ? "Not available"
+                : gmail.accounts.length
+                  ? `${gmail.accounts.length} connected`
+                  : "Not connected"}
+          </small>
+          <ChevronRight size={17} className={open === "mail" ? "rotated" : ""} />
+        </button>
+        {open === "mail" && (
+          <div className="settings-panel">
+            {!gmail.configured ? (
+              <p className="settings-hint">
+                <strong>Not available yet:</strong> this server has no Google credentials.
+                Connecting Gmail needs an OAuth app in the Google Cloud console, and its{" "}
+                <code>gmail.readonly</code> scope needs Google&rsquo;s review before the
+                connection lasts longer than a week.
+              </p>
+            ) : (
+              <>
+                {gmail.accounts.map((account) => (
+                  <div className="settings-status-row" key={account.id}>
+                    <span
+                      className={`settings-status-dot mail-${account.sync_state}`}
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <strong>{account.email}</strong>
+                      <small>
+                        {account.sync_error
+                          ? account.sync_error
+                          : account.history_id
+                            ? "Synced — new mail arrives on the next sync."
+                            : "Connected. Sync to pull in your recent mail."}
+                      </small>
+                    </div>
+                    <button
+                      className="settings-inline-action"
+                      onClick={() => void gmail.disconnect(account.id)}
+                      disabled={gmail.busy}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
+
+                {!gmail.accounts.length && (
+                  <p className="settings-hint">
+                    Connect a mailbox and your companion can tell you what people have
+                    actually asked you for — and reply, once you approve it.
+                  </p>
+                )}
+
+                <div className="settings-panel-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => void gmail.connect()}
+                    disabled={gmail.busy}
+                  >
+                    {gmail.accounts.length ? "Connect another" : "Connect Gmail"}
+                  </button>
+                  {gmail.accounts.length > 0 && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => void gmail.sync()}
+                      disabled={gmail.busy}
+                    >
+                      {gmail.busy ? "Syncing…" : "Sync now"}
+                    </button>
+                  )}
+                </div>
+
+                {(gmail.note || gmail.error) && (
+                  <p className="settings-hint">{gmail.error ?? gmail.note}</p>
+                )}
+
+                <p className="settings-hint">
+                  MyPro stores who wrote, the subject, and Gmail&rsquo;s own one-line
+                  preview — never the body of a message. Summaries are written on your
+                  laptop, so no email text reaches a model you do not run.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -4881,6 +5047,29 @@ function AppShell({
         exitRef.current = null;
       });
   }, []);
+
+  /**
+   * Tapping a push notification (Phase 6.2) when a tab is already open.
+   *
+   * The service worker focuses that tab and posts the deeplink here rather
+   * than calling `openWindow`, which would open a second copy of the app and
+   * throw away whatever the user was in the middle of. A deeplink we do not
+   * recognise is ignored — the tab is focused either way, which is most of
+   * what the user wanted.
+   */
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; deeplink?: string } | null;
+      if (data?.type !== "mypro:navigate") return;
+      const target = (data.deeplink ?? "").replace(/^\//, "");
+      if (NOTIFICATION_VIEWS.includes(target as View)) navigate(target as View);
+    };
+
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [navigate]);
 
   const openMedia = useCallback(
     (item: LibraryItem) => {

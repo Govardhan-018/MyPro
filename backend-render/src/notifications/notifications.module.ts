@@ -69,6 +69,20 @@ export class NotificationsService {
     return none(await db.from('device_tokens').delete().eq('id', id));
   }
 
+  /**
+   * Withdraw a device by the token itself rather than by row id.
+   *
+   * A browser that unsubscribes knows its own push subscription but not the
+   * `device_tokens.id` we filed it under, and `GET /devices` deliberately does
+   * not return tokens. Without this, unsubscribing in one browser would leave
+   * a dead row that the fan-out retries on every single notification until a
+   * push service finally answers 410.
+   */
+  async removeDeviceByToken(user: AuthUser, token: string) {
+    const db = this.supabase.forUser(user.token);
+    return none(await db.from('device_tokens').delete().eq('user_id', user.id).eq('token', token));
+  }
+
   async channels(user: AuthUser) {
     const db = this.supabase.forUser(user.token);
     return many(await db.from('notification_channels').select('*'));
@@ -120,6 +134,13 @@ export class DevicesController {
   @Post()
   register(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     return this.notifications.registerDevice(user, registerDevice.parse(body));
+  }
+
+  /** Must precede `:id`, or Nest matches 'unregister' as a device id. */
+  @Post('unregister')
+  unregister(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { token } = z.object({ token: z.string().min(4).max(4000) }).parse(body);
+    return this.notifications.removeDeviceByToken(user, token);
   }
 
   @Delete(':id')

@@ -2,18 +2,36 @@
 
 A single intelligent personal space: **Calendar · Library/Reader · Knowledge · Health · AI Assistant**, across **web (now)** and **mobile app (later)**, sharing one backend and one database. The assistant behaves like a friend — it chats, remembers, schedules, and reaches out proactively (morning brief, nudges when you go quiet).
 
-> **Status.** Repo restructured into three deployables (Oracle VM design dropped):
-> - `frontend/` — the web app (Vercel), typed API client with **two base URLs**
-> - `backend-render/` — always-on core: all CRUD, schedules, scheduler, notifications
+> **Status.** Three deployables plus the phone (the Oracle VM design was
+> dropped). `docs/ZERO_COST_PLAN.md` supersedes the hosting assumptions below;
+> `docs/PHASES.md` says what is built.
+>
+> - `frontend/` — the web app (Vercel). Thin client: it configures **one** URL
+>   (render) and discovers the laptop through it.
+> - `android/` — Expo app, importing `shared/`. **It is the clock** (Phase 11):
+>   it arms local notifications for the next 48h, so a brief arrives on time
+>   with the laptop shut and render asleep.
+> - `backend-render/` — the request-driven core: all CRUD, auth brokering,
+>   signed URLs, schedules, Gmail. **May sleep.** Its in-process scheduler was
+>   retired in Phase 11 and is inert unless `SCHEDULER_ENABLED=true`.
 > - `backend-local/` — the personal agent on the laptop: assistant chat + LLM,
->   direct Supabase access, 30s heartbeat, `/internal/ai/complete` for render
-> - `supabase/migrations/` — 0001 schema (4NF) · 0002 RLS + health gate · 0003 node presence
+>   direct Supabase access, 30s heartbeat, `/internal/ai/complete` for render,
+>   **the drain loop**, the notification fan-out, and email summaries.
+> - `shared/` (`@mypro/shared`) — types, API client, auth, agent discovery, PDF
+>   text core, Realtime. Imported by web and Android, so there is never a
+>   second implementation. The backends are *not* workspace members.
+> - `supabase/migrations/` — 0001 schema (4NF) · 0002 RLS + health gate ·
+>   0003 node presence · 0004 skills · 0005 pdf-text storage · 0006 realtime ·
+>   0007 deferred run status · 0008 pending-action result
 >
-> Offline story: laptop closes → heartbeat stale in ~90s → UI greys the assistant,
-> render defers AI jobs (10 min × 3) then sends a plain non-AI message.
+> Offline story: laptop closes → heartbeat stale in ~90s → UI greys the
+> assistant. Scheduled work simply waits for the laptop and is skipped if it
+> went stale; the phone's own alarm still fires, and the app composes the plain
+> brief itself.
 >
-> Decisions taken: NestJS · Supabase Auth · Telegram-first messaging ·
-> Expo later · raw PDFs stay local, JSON + annotations sync.
+> Decisions taken: NestJS · Supabase Auth brokered by render · **Telegram
+> dropped** (the in-app chat is the channel) · Expo · raw PDFs stay local,
+> JSON + annotations sync · scanned PDFs read on-device with Tesseract.
 
 ---
 
@@ -33,32 +51,52 @@ A single intelligent personal space: **Calendar · Library/Reader · Knowledge �
 ```
                                everything except /assistant/*
    Web (Vercel) ───────────────────────────────┐
-   Android app (Expo, later) ──────────────────┤
-        │                                      ▼
-        │ /assistant/*               ┌──────────────────┐        ┌──────────────┐
-        ▼                            │  backend-render   │───────▶│   Supabase   │
- ┌──────────────────┐  /internal/ai/ │  always-on core   │        │  Postgres +  │
- │  backend-local    │◀──────────────│  CRUD · schedules │        │  Auth +      │
- │  laptop agent     │   complete    │  scheduler ·      │        │  Storage +   │
- │  assistant + LLM  │──────────────▶│  notifications    │        │  Realtime    │
- └────────┬─────────┘   heartbeat    └──────────────────┘        └──────────────┘
-          │              (via node_status table)
-   Anthropic Claude API
+   Android app (Expo) ─────────────────────────┤
+     ▲  │                                      ▼
+     │  │ /assistant/*              ┌───────────────────┐        ┌──────────────┐
+  the│  ▼                           │  backend-render    │───────▶│   Supabase   │
+ clock┌──────────────────┐ /internal/│  REQUEST-DRIVEN    │        │  Postgres +  │
+   │  │  backend-local    │◀─────────│  CRUD · auth ·     │        │  Auth +      │
+   │  │  laptop agent     │ ai/      │  signed URLs ·     │        │  Storage +   │
+   │  │  assistant + LLM  │ complete │  schedules · gmail │        │  Realtime    │
+   │  │  THE WORKER       │─────────▶│  MAY SLEEP         │        └──────────────┘
+   │  └────────┬─────────┘ heartbeat └───────────────────┘
+   │           │            (via node_status table)        ▲
+   └───────────┘                        internal/gmail/send│
+      local notifications,              (the laptop never holds
+      armed 48h ahead                    a Gmail token)
+            Groq (the only machine with the model key)
 ```
+
+Three things are already always on and already free: **the phone's OS**, **the
+laptop while it is open**, and **Postgres**. Each has the job it is good at —
+the phone fires on time, the laptop does the work, Postgres holds the truth.
+Render became what a free instance honestly can be: an API that is allowed to
+sleep. `docs/ZERO_COST_PLAN.md` argues this out in full.
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Web host | **Vercel** | Static SPA (`frontend/`). Two base URLs: `VITE_API_URL` (render) + `VITE_AGENT_URL` (laptop). |
-| Mobile | **Expo / React Native** (next) | Shares the TS types + API client; same two base URLs; FCM for push. |
-| Core API | **`backend-render/`** on **Render** | NestJS. All CRUD, schedules + minute-tick scheduler, inactivity nudge, notifications, Gmail. `render.yaml` blueprint at repo root. Free tier sleeps — use Starter or a pinger so the scheduler stays awake. |
-| Personal agent | **`backend-local/`** on **your laptop** | NestJS. `/assistant/*` + `/internal/ai/complete`. Only holder of the Anthropic key. Heartbeats every 30s into `node_status`. |
-| Laptop reachability | **Cloudflare Tunnel** (free) | HTTPS pages cannot call `http://<lan-ip>` (mixed content) and the laptop sits behind NAT — the tunnel gives it a stable HTTPS hostname. |
+| Web host | **Vercel** | Static SPA (`frontend/`). **One** configured URL (`VITE_API_URL` → render); the laptop is discovered through it. `VITE_AGENT_URL` is an override for a fixed tunnel. |
+| Mobile | **Expo / React Native** | `android/`, importing `shared/`. **The clock** (Phase 11): arms local notifications for the next 48h and re-arms on every launch, so the brief fires with the laptop shut. Push goes through Expo's gateway, which needs no server key. |
+| Core API | **`backend-render/`** on **Render** | NestJS. All CRUD, auth brokering, signed URLs, schedules, Gmail. `render.yaml` blueprint at repo root. **The free tier sleeps, and that is now fine:** Phase 11 moved the clock off it, so nothing here needs to stay awake. A pinger was rejected deliberately — `docs/ZERO_COST_PLAN.md` §1. |
+| Personal agent | **`backend-local/`** on **your laptop** | NestJS. `/assistant/*`, `/internal/ai/complete`, **the drain loop**, the notification fan-out and email summaries. Only holder of the model key. Heartbeats every 30s into `node_status`. |
+| Laptop reachability | **Cloudflare Tunnel** (free) | HTTPS pages cannot call `http://<lan-ip>` (mixed content) and the laptop sits behind NAT — the tunnel gives it an HTTPS hostname. A *quick* tunnel's host changes on every start, which is why it is published into `node_status` rather than configured. |
 | Offline story | heartbeat stale >90s | UI greys the assistant (`GET /nodes/status` on render); scheduler defers AI jobs 10 min × 3, then sends a plain non-AI message. |
 | DB / Auth / Storage / Realtime | **Supabase** (managed) | Postgres 15, RLS, Supabase Auth (JWT), Storage; clients subscribe to `notifications` via Realtime so messages land instantly whichever node wrote them. |
-| AI | **Anthropic Claude API** | Only on the laptop. Model from `ASSISTANT_MODEL` / per-user settings — never hardcoded. |
+| AI | **Groq** | Only on the laptop. Model from `ASSISTANT_MODEL` / per-user settings — never hardcoded, because availability shifts (`llama-3.3-70b-versatile` vanished once). The free tier is rate-limited, so every generation has a degrade path. |
 | CI/CD | GitHub → Vercel (frontend) · GitHub → Render blueprint (core) | The laptop pulls + `npm run build` manually or via a small script. |
 
-**Why this split:** Render is the cheap always-on half, so reminders, nudges and data never depend on the laptop; the laptop is the private, powerful half that holds the LLM key and the agent personality, and the system degrades — never breaks — when it sleeps.
+**Why this split:** render is the half that is always *reachable*, so data and
+auth never depend on the laptop; the laptop is the private, powerful half that
+holds the model key and the agent personality; and the phone is the half that
+is awake at 08:30 for nothing. The system degrades — never breaks — when any
+of them sleeps.
+
+An earlier version of this line called render "the cheap always-on half, so
+reminders and nudges never depend on the laptop". That turned out to be false:
+the free instance sleeps after ~15 minutes of inactivity, so the reminders were
+the one thing that *silently did not happen*. Phase 11 is the correction, and
+the reason the clock now lives on the devices.
 
 ---
 
@@ -376,8 +414,16 @@ the JSON it produced. The raw PDF never travels.
    | `POST` | `/library/:itemId/pdf-text/confirm` | record `pdf_json_path` + page count after upload |
 
    Bucket and owner-folder storage policies: `supabase/migrations/0005_pdf_text_storage.sql`.
-5. A PDF with no text layer reports `scanned` and the reader says so. OCR
-   itself is still open (Phase 10.4).
+5. A PDF with **no text layer at all** is read on the device with text
+   recognition (Phase 10.4): pdfjs rasterises each page and Tesseract
+   (WebAssembly, in a worker) reads it, front to back, saving every four pages
+   so a closed tab resumes rather than restarting. Recognised pages carry
+   `ocr: true`, since there are no font metrics behind them — every line
+   arrives as a paragraph and nothing downstream should mistake machine-read
+   text for the real thing. On-device for the same reason as the rest of this
+   pipeline: sending page images to a cloud OCR service would break the
+   promise for exactly the most private documents. Android has no renderer, so
+   a scan there still reports `scanned` and says to open it once on the web.
 
 **Known gap:** pdfjs runs without `cMapUrl`/`standardFontDataUrl`, so PDFs that
 depend on external CMaps (CJK and some exotic encodings) may extract poorly.
@@ -402,19 +448,89 @@ carries the caller's JWT (`realtime.setAuth`). Serving it keeps the thin-client
 property — one configured URL per client — and lets the key rotate without a
 client release.
 
-Web Push (VAPID), FCM and the `device_tokens` fan-out in
-`SchedulerService.notify` are still open: Realtime covers the app while it is
-open, nothing more.
+### Reaching a closed app (implemented — Phase 6.2 / 6.4)
+
+Realtime only covers an app that is open. Two more channels close that gap,
+and both are driven from **the laptop**, since Phase 11 put the drain loop
+there: `backend-local/src/notifications/push.service.ts` writes the
+`notifications` row first — that row is the durable record Realtime carries —
+and only then tries to reach closed apps. A push that fails never fails the
+caller.
+
+| Channel | How | Notes |
+|---|---|---|
+| **Web Push** | VAPID, `web-push` on the laptop | `frontend/public/sw.js` handles `push` and `notificationclick` only; it is deliberately **not** a caching worker, which would mean reasoning about stale bundles on every deploy. The **public** key is served by `GET /me/push` so nothing is bundled; the **private** key lives only in `backend-local/.env`. |
+| **Android** | Expo's push gateway | Filed as `channel_type = 'fcm'` because that is how it is delivered, but the token is an Expo token: their gateway fronts FCM and needs **no server key**, which is what keeps this free. A bare FCM token is refused — FCM v1 wants a signed service-account JWT this project chose not to carry. |
+
+Dead subscriptions are deleted when a push service answers 410/404 or Expo
+says `DeviceNotRegistered`; otherwise every future notification would retry
+them forever. `notification_channels` is honoured, and a channel with **no**
+row counts as enabled — that table records a decision, and its absence is not
+a decision to stay silent.
+
+`POST /devices/unregister { token }` exists because a browser that has just
+unsubscribed knows its own subscription but not the `device_tokens.id` we
+filed it under, and `GET /devices` deliberately never returns tokens.
 
 ---
 
-## 6. Gmail — multiple accounts + processing
+## 6. Gmail — multiple accounts + processing (implemented — Phase 7)
 
-- **Connect:** Google Cloud OAuth app; per-account consent; scopes `gmail.readonly` (upgrade to `gmail.modify` only if we let the assistant archive/label). Tokens encrypted (§3).
-- **Sync:** initial backfill, then **incremental via `historyId`**; prefer Gmail **watch → Pub/Sub push** to the API, with polling fallback (cron every N min) for the free tier.
-- **Process:** a worker runs each new message through Claude for `email_insights` (summary, category, action_needed). Important/action mail can surface on Today and trigger a notification.
-- **Act (confirmed):** "turn this into a task/event" creates a `task`/`calendar_event` + `item_sources` link. Sending replies is a confirmed outward action.
-- **Multiple Gmails:** just multiple `gmail_accounts` rows; the Library/Today/Assistant read across all of them for a user.
+**Render owns all of it**, for one reason: it is the only half holding
+`TOKEN_ENCRYPTION_KEY`, so it is the only half that can decrypt a mailbox
+token. The laptop calls `POST /internal/gmail/send` when the user approves an
+outward action rather than keeping a second copy of the most dangerous
+credential in the system — one place to revoke, one place to audit.
+
+- **Connect:** Google Cloud OAuth app; per-account consent; scopes
+  `gmail.readonly` + `gmail.send` (never `gmail.modify` — the assistant has no
+  need to archive or label, and a scope you cannot use cannot be abused).
+  Tokens encrypted with AES-256-GCM (§3) and stored as Postgres **bytea hex
+  literals**; writing base64 there stores the characters of the encoding and
+  decrypts to nothing.
+  - The callback arrives from `accounts.google.com` as a top-level navigation
+    with **no session and no bearer token**, so the user is identified by an
+    **HMAC-signed, 10-minute `state`** issued at step one. That signature is
+    the entire CSRF defence of the connect flow: without it, a crafted
+    callback URL would attach a stranger's mailbox to this account.
+- **Sync:** initial backfill (4 pages of 50), then **incremental via
+  `historyId`**. A 404 from the history endpoint is not an error but an
+  instruction — the cursor aged out (Gmail keeps about a week), so it
+  backfills instead. The cursor is written *after* the messages it covers, or
+  the incremental path would skip them forever.
+  - **Request-driven, not cron.** Render is allowed to sleep, so there is no
+    tick here to be killed by it; the client syncs when it opens the mail view
+    and the laptop syncs on its own tick. Gmail watch → Pub/Sub push would be
+    better and needs a Cloud project with a topic — out of scope while the
+    OAuth app is unverified.
+- **Stored:** who wrote, to whom, subject, Gmail's own snippet, dates and
+  flags. **Message bodies are never fetched** (`format=metadata` with a header
+  whitelist). Bodies are the bulk of a mailbox and the most sensitive thing in
+  it; the assistant's summaries work from the snippet, so not fetching them
+  keeps the database inside the free tier and the blast radius small.
+- **Process:** `backend-local/src/gmail/email-insights.service.ts` summarises
+  on a 10-minute tick, on the laptop, because that is where the model is.
+  Email content is **data, never instructions**: the snippet is fenced, the
+  system prompt says so, and **no tools are offered on that call**, so even a
+  fully successful injection has nothing to reach.
+- **Act (confirmed):** sending really sends, behind the existing approval
+  gate. The approve route re-validates the parked arguments (a model wrote
+  them into a jsonb column some time ago), marks the row approved *before*
+  sending — a crash between the two must not leave a message sent and an
+  action still pending — then records the outcome in
+  `pending_actions.result`. Header values are stripped of CR/LF, since a
+  newline in a subject is header injection.
+- **Multiple Gmails:** just multiple `gmail_accounts` rows
+  (`unique (user_id, email)`), so connecting a second mailbox adds a row and
+  reconnecting the same one updates its tokens in place. A refresh that
+  returns no new refresh token never overwrites the stored one with null.
+
+⚠️ **The 7-day trap.** An OAuth app left in *Testing* issues refresh tokens
+that expire after a week, so the mailbox silently disconnects and the only
+symptom is mail going stale. `gmail_accounts.sync_error` is what the Settings
+panel reads, so this surfaces as "reconnect this mailbox" rather than an empty
+inbox. No code can work around it: publishing the app needs Google's
+verification review for the restricted `gmail.readonly` scope.
 
 ---
 
@@ -423,12 +539,33 @@ open, nothing more.
 - **Persona/charter:** `assistant_persona` holds name, tone, boundaries, check-in time, inactivity threshold. This is the "character" — warm, casual, WhatsApp-style chat.
 - **Capabilities = tools** (mirror every web feature): `read_calendar`, `create_event`, `read_tasks`, `create_task`, `search_library`, `open_reader_at`, `read_knowledge`, `summarize_email`, `set_reminder`, `send_notification`. **Health tools** (`read_health`) appear only when a live `health_access_grant` exists.
 - **Memory:** `assistant_memory` for durable facts; `assistant_messages` for history; retrieval feeds the prompt.
-- **Proactive engine** (BullMQ/cron jobs writing `notifications` + dispatching):
-  - **Morning brief** at `check_in_time` — today's agenda, important mail, what to continue reading, one friendly line.
-  - **Inactivity nudge** — if `now - last_active_at > inactivity_hours` and not already nudged today, send a friendly "hey, how's it going?" message.
-  - **Event/reminder dispatch** from `scheduled_jobs`.
-  - **Important-email alert** when `email_insights.action_needed`.
-- **Channels:** in-app chat (realtime), **web push** (VAPID) for the browser, **FCM** for the app, and **Telegram bot** as the easy "texts me on my phone like a friend" channel (free, instant, no business verification). *WhatsApp Cloud API is possible later but needs a Meta business app + number + template approval — Telegram first.*
+- **Proactive engine** — the drain loop in `backend-local/src/scheduler/`, not
+  a queue. `next_run_at` in the past *is* the pending queue, so there is no
+  second concept to get out of step with reality. It runs on boot and every
+  minute while the laptop is awake:
+  - **Morning brief** at `check_in_time` — today's agenda and open tasks, in
+    the persona's voice. The *timing* is the phone's: it arms a local
+    notification 48h ahead, so the brief lands at 08:30 with the laptop shut.
+    If nothing generated one, the app composes the plain version itself.
+  - **Inactivity nudge** — if `now - last_active_at > inactivity_hours` and
+    not already nudged in this quiet stretch.
+  - **Scheduled actions** from `assistant_schedules` (`notify`, `report`,
+    `chat_message`, `email`).
+  - A *recurring* job more than `SCHEDULER_STALE_MINUTES` late is **skipped**
+    to its next occurrence; one-shots always fire. Catch-up is right for
+    syncing and summarising, wrong for anything whose value is its timing.
+  - **Important-email alert** when `email_insights.action_needed` — the
+    insights exist (Phase 7.5); the alert is Phase 16's Pulse.
+- **Channels:** in-app chat (Supabase Realtime) while the app is open; **web
+  push** (VAPID) for a closed browser; **Expo push** for the phone; and the
+  phone's own **local notifications** for anything scheduled, which is the only
+  channel that needs nothing awake anywhere. **Telegram was dropped** (Phase
+  6.3): it was chosen as the easy "texts me like a friend" channel, but once
+  the in-app chat was continuous and push reached a closed app, a second
+  messaging surface added a bot token, a third place for conversation history
+  to diverge, and nothing the user actually wanted. WhatsApp Cloud API was
+  never started — it needs a Meta business app, a number and template
+  approval.
 - **Safety:** email/web/PDF content is untrusted; destructive or outward actions (send, delete, post) are confirmed; the assistant reports rather than acts when it hits a wall.
 
 ### 7.1 Chat controls (assistant page)
@@ -454,46 +591,83 @@ channels: `push | telegram | email | in_app`. Full field table in `backend/READM
 
 ## 8. API surface (v1, REST over Supabase JWT)
 
+**render** — everything except `/assistant/*` and `/skills/*`:
+
 ```
-/api/v1/library        GET/POST/PATCH/DELETE   (+ /:id/annotations, /:id/sessions)
-/api/v1/knowledge      GET                      (derived from annotations)
-/api/v1/calendar       GET/POST/PATCH/DELETE
-/api/v1/tasks          GET/POST/PATCH/DELETE
-/api/v1/gmail/accounts GET/POST/DELETE   /api/v1/gmail/messages GET  /sync POST
-/api/v1/health         GET/POST/...  (requires grant)   /api/v1/health/grants POST/DELETE
-/api/v1/assistant/conversations ... /messages (SSE/WebSocket stream)
-/api/v1/notifications  GET/PATCH   /api/v1/devices POST/DELETE
-/api/v1/schedules      GET/POST/PATCH/DELETE
+/api/v1/auth/signup|login|refresh        POST          (auth is brokered here)
+/api/v1/me                               GET/PATCH
+/api/v1/me/activity                      POST          (heartbeat → inactivity nudge)
+/api/v1/me/realtime                      GET           (project URL + publishable key)
+/api/v1/me/push                          GET           (VAPID public key)
+/api/v1/library                          GET/POST/PATCH/DELETE
+    /:id/annotations  /:id/bookmarks  /:id/reading-sessions  /:id/listening-sessions
+    /:id/pdf-text/upload-url|url|confirm POST/GET/POST (signed URLs, brokered)
+/api/v1/collections                      GET/POST/PATCH/DELETE  (+ /items/:id)
+/api/v1/knowledge                        GET           (derived from annotations)
+/api/v1/calendar/events|categories       GET/POST/PATCH/DELETE
+/api/v1/tasks                            GET/POST/PATCH/DELETE
+/api/v1/health/records                   GET/POST/PATCH/DELETE  (requires grant)
+/api/v1/health/grant                     GET/POST/DELETE
+/api/v1/notifications                    GET/PATCH     (+ /read-all, /:id/read)
+/api/v1/devices                          GET/POST/DELETE
+    /unregister                          POST          (withdraw by token)
+    /channels                            GET/POST
+/api/v1/schedules                        GET/POST/PATCH/DELETE
+    /upcoming?hours=48                   GET           (flattened occurrences — the clock)
+    /:id/runs                            GET
+/api/v1/gmail/status|accounts|messages   GET
+    /connect                             POST          (→ Google consent URL)
+    /callback                            GET           (no guard: signed `state` is the auth)
+    /sync                                POST
+    /accounts/:id                        DELETE
+/api/v1/nodes/status                     GET           (is the laptop awake?)
+/api/v1/internal/gmail/send              POST          (node→node, shared secret)
 ```
 
-Simple web reads may hit Supabase directly (RLS-protected); everything involving secrets, AI, Gmail, or cross-user logic goes through the API.
+**backend-local** — the laptop, reached directly by the clients:
+
+```
+/api/v1/assistant/conversation|messages|settings|persona   GET/POST/PATCH
+/api/v1/assistant/clear                                    POST
+/api/v1/skills                                             GET
+/api/v1/skills/invocations|pending                         GET
+/api/v1/skills/pending/:id/approve|reject                  POST
+/api/v1/internal/ai/complete                               POST  (node→node)
+```
+
+Clients hold **no** Supabase credentials, so nothing hits Supabase directly —
+the one exception is the Realtime socket, which uses the publishable key
+served at runtime by `GET /me/realtime` and still carries the user's JWT, so
+RLS decides what arrives.
 
 ---
 
 ## 9. Phased roadmap
 
-| Phase | Deliverable | Depends on |
-|---|---|---|
-| **0** | Supabase project, schema + RLS migrations, Supabase Auth wired into the existing web login | — |
-| **1** | Persist current web features (library, annotations, reader progress, calendar, health) to Supabase — replace in-memory state | 0 |
-| **2** | NestJS API + workers on Oracle VM; JWT verify; `/library` `/calendar` `/tasks` | 0,1 |
-| **3** | Local PDF→JSON pipeline + Storage sync + Storage & Sync screen live | 2 |
-| **4** | Gmail: one account, then multiple; sync + `email_insights` | 2 |
-| **5** | Assistant chat with tools (read/create across features) + persona | 2,4 |
-| **6** | Proactive engine: morning brief, inactivity nudge, reminders; web push + Telegram | 5 |
-| **7** | Mobile app (Expo) reusing the API; FCM push | 2–6 |
+Superseded by **`docs/PHASES.md`**, which carries every phase, its goal and
+its current status in one place. The original seven-phase sketch here assumed
+an Oracle VM and an always-on scheduler; both assumptions are gone.
+
+Where it stands: Phases 0–11 are done, Phase 12 (tests — there are still
+none) is next, and `docs/PHASES.md` §5 explains the ordering.
 
 ---
 
-## 10. Decisions I need from you
+## 10. Decisions taken
 
-1. **Backend framework:** NestJS (recommended, structured + great for this) vs plain Fastify/Express?
-2. **Phone messaging channel first:** **Telegram bot** (recommended — free, instant, easy) vs WhatsApp Cloud API (more setup) vs just web/app push?
-3. **Auth:** use **Supabase Auth** for login (recommended; Gmail stays a *data* connection, separate from login) — or log in *with* Google?
-4. **Mobile stack:** **Expo / React Native** (recommended, shares TS) vs Flutter?
-5. **Do we store raw PDFs in the cloud at all**, or JSON + annotations only (raw PDF always local)?
+The questions this document originally ended with, and how they were answered:
 
-Tell me 1–5 and I'll turn Phase 0 (Supabase schema + RLS migrations + auth wiring) into the first implementation task.
+1. **Backend framework** — NestJS, in both deployables.
+2. **Phone messaging channel** — neither Telegram nor WhatsApp. The in-app
+   chat is the channel, with web push and Expo push to reach a closed app and
+   the phone's own local notifications for anything scheduled.
+3. **Auth** — Supabase Auth, email/password, **brokered by render** so clients
+   hold no Supabase credentials. Gmail stays a *data* connection, separate
+   from login. Social sign-in is not wired in the thin-client model.
+4. **Mobile stack** — Expo / React Native, sharing `shared/` with the web.
+5. **Raw PDFs in the cloud** — no. Only the extracted JSON and annotations
+   sync; the file stays on the device that imported it, and a scanned PDF is
+   read there too rather than being uploaded to an OCR service.
 
 ---
 

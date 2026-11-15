@@ -6836,6 +6836,25 @@ button {
   background: rgba(255, 255, 255, 0.5);
 }
 
+/* Web push (Phase 6.2). Subscribed reads like a live socket; "blocked" is
+   deliberately dimmer than "off", because the user has to undo it in browser
+   settings rather than here. */
+.settings-status-dot.push-subscribed {
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
+}
+
+.settings-status-dot.push-subscribing,
+.settings-status-dot.push-checking {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.settings-status-dot.push-denied,
+.settings-status-dot.push-error {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
 .settings-facts {
   margin: 0;
   padding: 0;
@@ -6873,4 +6892,44 @@ button {
 .settings-view .settings-toggle-row small {
   color: rgba(255, 255, 255, 0.45);
   font-size: 12px;
+}
+
+/* Mail (Phase 7). A mailbox needing re-consent is the one state the user can
+   act on, so it reads differently from "fine" and from "working". */
+.settings-status-dot.mail-idle {
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
+}
+
+.settings-status-dot.mail-syncing {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.settings-status-dot.mail-error {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* A quiet text action at the end of a status row — "Disconnect". Not a
+   button-looking button: it is destructive and should not invite a tap. */
+.settings-inline-action {
+  margin-left: auto;
+  align-self: center;
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
+.settings-inline-action:hover:not(:disabled) {
+  color: #fff;
+}
+
+.settings-inline-action:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

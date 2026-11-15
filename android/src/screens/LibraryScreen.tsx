@@ -29,14 +29,13 @@ function toBook(row: LibraryItemRow): BookSummary {
   };
 }
 
-/** The books in your library, as the phone sees them. */
-export function LibraryScreen({
-  onOpen,
-  onSignOut,
-}: {
-  onOpen: (book: BookSummary) => void;
-  onSignOut: () => void;
-}) {
+/**
+ * The books in your library, as the phone sees them.
+ *
+ * Sign-out moved to the More tab when the tab bar arrived (Phase 8.3) — two
+ * sign-out buttons on one surface is a way to lose a session by accident.
+ */
+export function LibraryScreen({ onOpen }: { onOpen: (book: BookSummary) => void }) {
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,17 +106,6 @@ export function LibraryScreen({
             </Text>
           </Pressable>
         )}
-        ListFooterComponent={
-          <Pressable
-            style={[shared.ghostButton, { marginTop: 24 }]}
-            onPress={async () => {
-              await client.auth.signOut();
-              onSignOut();
-            }}
-          >
-            <Text style={shared.ghostLabel}>Sign out</Text>
-          </Pressable>
-        }
       />
     </View>
   );

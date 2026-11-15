@@ -48,3 +48,32 @@ services:
       # Only set this if you move to a fixed/named tunnel.
       - key: LOCAL_AGENT_URL
         sync: false
+
+      # The in-process clock, retired in Phase 11. Render's free instance
+      # sleeps after ~15 minutes of inactivity, which killed the cron with the
+      # process — the morning brief silently never arrived. The drain loop now
+      # runs on the laptop (backend-local) and the phone's OS does the firing.
+      # Never set this to true while backend-local also has it on.
+      - key: SCHEDULER_ENABLED
+        value: "false"
+
+      # Web Push (Phase 6.2). Only the PUBLIC key belongs here: render serves
+      # it to browsers at GET /me/push so nothing is baked into a bundle. The
+      # private key lives on the laptop, which is the half that sends.
+      - key: WEB_PUSH_PUBLIC_KEY
+        sync: false
+
+      # Gmail (Phase 7). An OAuth client from the Google Cloud console.
+      # ⚠️ An app left in "Testing" issues refresh tokens that expire after
+      # 7 days, so the mailbox silently disconnects weekly. Publishing it
+      # needs Google's review for the restricted gmail.readonly scope.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # Must match the console exactly, including the /api/v1 prefix.
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      # Where the OAuth callback returns the browser.
+      - key: APP_URL
+        sync: false
