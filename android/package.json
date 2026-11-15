@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@expo/vector-icons": "~14.0.4",
     "@mypro/shared": "workspace:*",
     "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "~52.0.0",

@@ -1,15 +1,16 @@
+/**
+ * Email + password sign-in, brokered by Render (the thin-client model). Social
+ * sign-in is deliberately absent: it is not wired on this path yet.
+ */
 import { useState } from 'react';
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView,
   Text, TextInput, View,
 } from 'react-native';
 import { client } from '../lib/client';
-import { colors, shared } from '../theme';
+import { FadeIn } from '../components/ui';
+import { colors, shared, space, type } from '../theme';
 
-/**
- * Email + password sign-in, brokered by Render (the thin-client model). Social
- * sign-in is deliberately absent: it is not wired on this path yet.
- */
 export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const [mode, setMode] = useState<'in' | 'up'>('in');
   const [email, setEmail] = useState('');
@@ -41,53 +42,85 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
       style={shared.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 96, gap: 16 }}>
-        <Text style={shared.title}>MyPro</Text>
-        <Text style={shared.muted}>
-          {mode === 'in' ? 'Sign in to your companion.' : 'Create your account.'}
-        </Text>
+      <ScrollView
+        contentContainerStyle={{ padding: space.lg, paddingTop: 110, gap: 16 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <FadeIn index={0} style={{ gap: 10, marginBottom: 10 }}>
+          <View
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              borderWidth: 2,
+              borderColor: colors.borderStrong,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <View
+              style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.text }}
+            />
+          </View>
+          <Text style={type.title}>MyPro</Text>
+          <Text style={type.support}>
+            {mode === 'in'
+              ? 'Welcome back. Sign in to your companion.'
+              : 'Create your account to get started.'}
+          </Text>
+        </FadeIn>
 
-        <TextInput
-          style={shared.input}
-          placeholder="you@example.com"
-          placeholderTextColor={colors.textFaint}
-          autoCapitalize="none"
-          autoComplete="email"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-        />
-        <TextInput
-          style={shared.input}
-          placeholder="Password"
-          placeholderTextColor={colors.textFaint}
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+        <FadeIn index={1} style={{ gap: 12 }}>
+          <TextInput
+            style={shared.input}
+            placeholder="you@example.com"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            autoComplete="email"
+            keyboardType="email-address"
+            value={email}
+            onChangeText={setEmail}
+            accessibilityLabel="Email"
+          />
+          <TextInput
+            style={shared.input}
+            placeholder="Password"
+            placeholderTextColor={colors.textFaint}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+            accessibilityLabel="Password"
+          />
 
-        {error && <Text style={{ color: '#ff9c8a', fontSize: 13 }}>{error}</Text>}
-        {notice && <Text style={shared.muted}>{notice}</Text>}
+          {error && <Text style={{ color: colors.danger, fontSize: 13 }}>{error}</Text>}
+          {notice && <Text style={type.support}>{notice}</Text>}
 
-        <Pressable
-          style={[shared.button, (busy || !email || !password) && { opacity: 0.5 }]}
-          disabled={busy || !email || !password}
-          onPress={submit}
-        >
-          {busy ? (
-            <ActivityIndicator color={colors.background} />
-          ) : (
-            <Text style={shared.buttonLabel}>{mode === 'in' ? 'Sign in' : 'Create account'}</Text>
-          )}
-        </Pressable>
+          <Pressable
+            style={[shared.button, (busy || !email || !password) && { opacity: 0.5 }]}
+            disabled={busy || !email || !password}
+            onPress={submit}
+            accessibilityRole="button"
+            accessibilityLabel={mode === 'in' ? 'Sign in' : 'Create account'}
+          >
+            {busy ? (
+              <ActivityIndicator color={colors.background} />
+            ) : (
+              <Text style={shared.buttonLabel}>{mode === 'in' ? 'Sign in' : 'Create account'}</Text>
+            )}
+          </Pressable>
+        </FadeIn>
 
-        <View style={{ alignItems: 'center', marginTop: 4 }}>
-          <Pressable onPress={() => setMode(mode === 'in' ? 'up' : 'in')}>
-            <Text style={shared.muted}>
+        <FadeIn index={2} style={{ alignItems: 'center', marginTop: 4 }}>
+          <Pressable
+            onPress={() => setMode(mode === 'in' ? 'up' : 'in')}
+            accessibilityRole="button"
+            accessibilityLabel={mode === 'in' ? 'Create an account instead' : 'Sign in instead'}
+          >
+            <Text style={type.support}>
               {mode === 'in' ? 'No account yet? Create one' : 'Already have an account? Sign in'}
             </Text>
           </Pressable>
-        </View>
+        </FadeIn>
       </ScrollView>
     </KeyboardAvoidingView>
   );

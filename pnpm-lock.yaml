@@ -10,6 +10,9 @@ importers:
 
   android:
     dependencies:
+      '@expo/vector-icons':
+        specifier: ~14.0.4
+        version: 14.0.4
       '@mypro/shared':
         specifier: workspace:*
         version: link:../shared

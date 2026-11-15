@@ -1,11 +1,23 @@
+/**
+ * Today — the daily workspace. MYPRO 2.0.
+ *
+ * Greeting and date, the companion's brief (honest about whether the laptop
+ * wrote it), today's focus as an agenda with a time rail, open tasks, and a
+ * premium continue-reading card with cover and progress. Sections enter
+ * top-to-bottom with the shared stagger.
+ */
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View,
+  ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { LibraryItemRow } from '@mypro/shared';
 import { client } from '../lib/client';
 import { loadBrief, type Brief } from '../lib/brief';
-import { colors, shared } from '../theme';
+import {
+  Card, EmptyState, FadeIn, PlaceholderCover, ProgressBar, SectionLabel,
+} from '../components/ui';
+import { colors, shared, space, type, useTheme } from '../theme';
 import type { BookSummary } from './LibraryScreen';
 
 function greeting(): string {
@@ -20,15 +32,14 @@ const timeLabel = (iso: string | null): string =>
     ? new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : 'All day';
 
-/**
- * Today — Phase 8.3, and where Phase 11.3 shows its face.
- *
- * The brief at the top is either the one the laptop generated or the plain one
- * this device composed from the calendar and tasks it can still reach. It says
- * which, because a companion that quietly substitutes a lesser answer is a
- * companion you stop trusting.
- */
-export function TodayScreen({ onOpenBook }: { onOpenBook: (book: BookSummary) => void }) {
+export function TodayScreen({
+  onOpenBook,
+  onOpenCalendar,
+}: {
+  onOpenBook: (book: BookSummary) => void;
+  onOpenCalendar: () => void;
+}) {
+  const { accent, colorMode } = useTheme();
   const [brief, setBrief] = useState<Brief | null>(null);
   const [reading, setReading] = useState<LibraryItemRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +78,12 @@ export function TodayScreen({ onOpenBook }: { onOpenBook: (book: BookSummary) =>
   return (
     <ScrollView
       style={shared.screen}
-      contentContainerStyle={{ padding: 20, paddingTop: 56, paddingBottom: 40, gap: 18 }}
+      contentContainerStyle={{
+        padding: space.gutter,
+        paddingTop: 8,
+        paddingBottom: 48,
+        gap: space.md + 4,
+      }}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -79,113 +95,176 @@ export function TodayScreen({ onOpenBook }: { onOpenBook: (book: BookSummary) =>
         />
       }
     >
-      <View style={{ gap: 4 }}>
-        <Text style={shared.title}>{greeting()}</Text>
-        <Text style={shared.muted}>
+      <FadeIn index={0} style={{ gap: 4 }}>
+        <Text style={type.title}>{greeting()}</Text>
+        <Text style={type.support}>
           {new Date().toLocaleDateString(undefined, {
             weekday: 'long',
             day: 'numeric',
             month: 'long',
           })}
         </Text>
-      </View>
+      </FadeIn>
 
       {error && (
-        <View style={shared.card}>
-          <Text style={{ color: colors.text, fontSize: 14 }}>{error}</Text>
-        </View>
+        <FadeIn index={1}>
+          <Card>
+            <Text style={type.body}>{error}</Text>
+          </Card>
+        </FadeIn>
       )}
 
       {brief && (
-        <View style={shared.card}>
-          <Text style={{ color: colors.text, fontSize: 16, lineHeight: 23 }}>{brief.text}</Text>
-          <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 4 }}>
-            {brief.source === 'generated'
-              ? `Written by your companion${brief.at ? ` at ${timeLabel(brief.at)}` : ''}`
-              : 'Composed on this phone — your laptop has not written one today'}
-          </Text>
-        </View>
+        <FadeIn index={1}>
+          <Card elevated style={{ gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons
+                name="sparkles"
+                size={14}
+                color={colorMode ? accent : colors.textMuted}
+              />
+              <Text style={type.eyebrow}>MyPro insight</Text>
+            </View>
+            <Text style={{ color: colors.text, fontSize: 16.5, lineHeight: 25 }}>
+              {brief.text}
+            </Text>
+            <Text style={type.label}>
+              {brief.source === 'generated'
+                ? `Written by your companion${brief.at ? ` at ${timeLabel(brief.at)}` : ''}`
+                : 'Composed on this phone — your laptop has not written one today'}
+            </Text>
+          </Card>
+        </FadeIn>
       )}
 
-      <Section title="Agenda">
+      <FadeIn index={2} style={{ gap: 10 }}>
+        <SectionLabel>Today's focus</SectionLabel>
         {brief?.events.length ? (
-          brief.events.map((event, index) => (
-            <View
-              key={`${event.title}-${index}`}
-              style={{ flexDirection: 'row', gap: 14, alignItems: 'baseline' }}
-            >
-              <Text
-                style={{ color: colors.textMuted, fontSize: 12.5, width: 64 }}
-                numberOfLines={1}
+          <Card style={{ gap: 14 }}>
+            {brief.events.map((event, index) => (
+              <View
+                key={`${event.title}-${index}`}
+                style={{ flexDirection: 'row', gap: 14, alignItems: 'flex-start' }}
               >
-                {event.allDay ? 'All day' : timeLabel(event.startsAt)}
-              </Text>
-              <Text style={{ color: colors.text, fontSize: 15, flex: 1 }}>{event.title}</Text>
-            </View>
-          ))
+                <View style={{ width: 64, alignItems: 'flex-start' }}>
+                  <Text
+                    style={{
+                      color: colorMode ? accent : colors.textMuted,
+                      fontSize: 12.5,
+                      fontWeight: '600',
+                    }}
+                    numberOfLines={1}
+                  >
+                    {event.allDay ? 'All day' : timeLabel(event.startsAt)}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    width: 3,
+                    alignSelf: 'stretch',
+                    borderRadius: 2,
+                    backgroundColor: colorMode ? accent : 'rgba(255,255,255,0.18)',
+                    opacity: 0.7,
+                  }}
+                />
+                <Text style={[type.body, { flex: 1, color: colors.text }]}>{event.title}</Text>
+              </View>
+            ))}
+          </Card>
         ) : (
-          <Text style={shared.muted}>Nothing scheduled.</Text>
+          <EmptyState
+            icon="calendar-clear-outline"
+            title="A clear day"
+            body="Nothing scheduled yet. Plan something, or enjoy the room to think."
+            action={
+              <Pressable
+                onPress={onOpenCalendar}
+                accessibilityRole="button"
+                accessibilityLabel="Open calendar"
+                style={[shared.ghostButton, { paddingHorizontal: 20 }]}
+              >
+                <Text style={shared.ghostLabel}>Open calendar</Text>
+              </Pressable>
+            }
+          />
         )}
-      </Section>
+      </FadeIn>
 
       {brief && brief.openTasks > 0 && (
-        <Section title="Open tasks">
-          <Text style={{ color: colors.text, fontSize: 15 }}>
-            {brief.openTasks} task{brief.openTasks === 1 ? '' : 's'} waiting on you.
-          </Text>
-        </Section>
+        <FadeIn index={3} style={{ gap: 10 }}>
+          <SectionLabel>Open tasks</SectionLabel>
+          <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <Ionicons name="checkbox-outline" size={18} color={colors.textMuted} />
+            <Text style={[type.body, { flex: 1, color: colors.text }]}>
+              {brief.openTasks} task{brief.openTasks === 1 ? '' : 's'} waiting on you
+            </Text>
+          </Card>
+        </FadeIn>
       )}
 
       {reading.length > 0 && (
-        <Section title="Continue reading">
-          {reading.map((row) => {
-            const details = (row.book_details ?? {}) as Record<string, unknown>;
-            const total = typeof details.total_pages === 'number' ? details.total_pages : 0;
-            const current =
-              typeof details.current_page === 'number' ? details.current_page : 1;
-            return (
-              <Pressable
-                key={row.id}
-                onPress={() =>
-                  onOpenBook({
-                    id: row.id,
-                    title: row.title,
-                    creator: row.creator ?? '',
-                    currentPage: current,
-                    totalPages: total,
-                    hasText:
-                      typeof details.pdf_json_path === 'string' && !!details.pdf_json_path,
-                  })
-                }
-                style={{ gap: 2 }}
-              >
-                <Text style={{ color: colors.text, fontSize: 15 }}>{row.title}</Text>
-                <Text style={{ color: colors.textFaint, fontSize: 12 }}>
-                  {total ? `Page ${current} of ${total}` : row.creator || 'Book'}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </Section>
+        <FadeIn index={4} style={{ gap: 10 }}>
+          <SectionLabel>Continue reading</SectionLabel>
+          <View style={{ gap: 10 }}>
+            {reading.map((row) => {
+              const details = (row.book_details ?? {}) as Record<string, unknown>;
+              const total = typeof details.total_pages === 'number' ? details.total_pages : 0;
+              const current =
+                typeof details.current_page === 'number' ? details.current_page : 1;
+              const fraction = total ? current / total : 0;
+              return (
+                <Card
+                  key={row.id}
+                  onPress={() =>
+                    onOpenBook({
+                      id: row.id,
+                      title: row.title,
+                      creator: row.creator ?? '',
+                      currentPage: current,
+                      totalPages: total,
+                      hasText:
+                        typeof details.pdf_json_path === 'string' && !!details.pdf_json_path,
+                    })
+                  }
+                  accessibilityLabel={`Resume ${row.title}`}
+                  style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}
+                >
+                  <PlaceholderCover title={row.title} width={52} height={72} />
+                  <View style={{ flex: 1, gap: 5 }}>
+                    <Text style={type.cardTitle} numberOfLines={2}>
+                      {row.title}
+                    </Text>
+                    <Text style={type.label} numberOfLines={1}>
+                      {row.creator || 'Book'}
+                      {total ? ` · Page ${current} of ${total}` : ''}
+                    </Text>
+                    {total > 0 && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <ProgressBar value={fraction} style={{ flex: 1 }} />
+                        <Text style={type.label}>{Math.round(fraction * 100)}%</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 17,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.surfaceHigh,
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: colors.borderStrong,
+                    }}
+                  >
+                    <Ionicons name="play" size={14} color={colorMode ? accent : colors.text} />
+                  </View>
+                </Card>
+              );
+            })}
+          </View>
+        </FadeIn>
       )}
     </ScrollView>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={{ gap: 10 }}>
-      <Text
-        style={{
-          color: colors.textFaint,
-          fontSize: 11,
-          letterSpacing: 1.4,
-          textTransform: 'uppercase',
-        }}
-      >
-        {title}
-      </Text>
-      <View style={[shared.card, { gap: 12 }]}>{children}</View>
-    </View>
   );
 }

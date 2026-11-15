@@ -322,6 +322,24 @@ prose.** Finishes Phase 8.
 - ✅ **13.3** Reader touch interactions — done as 8.5.
 - ✅ **13.4** Push registration into `device_tokens` — done as 8.4 (still
   needs an EAS project id to produce a token).
+- ✅ **13.5** MYPRO 2.0 visual overhaul of the Android app (Nov 2026).
+  New design-token system (`src/theme.tsx`: layered near-black surfaces,
+  type scale, 8px spacing, optional violet Color Mode persisted on-device)
+  and a shared component kit (`src/components/ui.tsx`: cards, chips, sheets,
+  toasts, staggered entrance animation honouring reduce-motion). Bottom nav
+  is now Today / Calendar / AI (raised centre) / Library / Health with
+  Ionicons; the old More tab became a Settings overlay (appearance,
+  notifications state, account) with Knowledge and the new Schedules screen
+  (pause / resume / delete against `/schedules`) behind it. Calendar gained a
+  month grid, day agenda and event create/edit/delete against the existing
+  endpoints. The reader gained four themes (dark/dim/sepia/light), text-size
+  and line-spacing controls, immersive tap-to-hide chrome, a page slider,
+  and Contents / Marks / Notes sheets that jump to pages — same annotation
+  anchors as the web, unchanged. One new JS-only dependency:
+  `@expo/vector-icons` (already shipped inside `expo`, so the APK pipeline
+  is untouched). The reader still renders synced extracted text: original
+  PDF rasterisation on the phone would need the file itself, which never
+  leaves the importing device by design.
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your
 own books and episodes.** The extraction is done and the data sits unused.

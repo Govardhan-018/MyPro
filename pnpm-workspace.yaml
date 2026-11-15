@@ -2,3 +2,9 @@ packages:
   - shared
   - frontend
   - android
+
+# React Native / Metro resolve modules from a flat node_modules, so the
+# workspace uses pnpm's hoisted linker. Declared both here (pnpm 10+ reads
+# settings from this file) and in .npmrc (pnpm 9, which CI pins, reads it
+# there) so every pnpm version produces the same layout.
+nodeLinker: hoisted

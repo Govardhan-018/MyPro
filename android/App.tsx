@@ -1,24 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, AppState, ScrollView, Text, View } from 'react-native';
+import {
+  ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View,
+} from 'react-native';
 import * as Notifications from 'expo-notifications';
+import { Ionicons } from '@expo/vector-icons';
 import { isAgentConfigured, isApiConfigured, type AuthSession } from '@mypro/shared';
 import { client } from './src/lib/client';
 import { armUpcoming, registerForPush } from './src/lib/notifications';
 import { TabBar, type Tab } from './src/components/TabBar';
+import { ToastProvider } from './src/components/ui';
 import { AssistantScreen } from './src/screens/AssistantScreen';
 import { CalendarScreen } from './src/screens/CalendarScreen';
 import { HealthScreen } from './src/screens/HealthScreen';
 import { KnowledgeScreen } from './src/screens/KnowledgeScreen';
 import { LibraryScreen, type BookSummary } from './src/screens/LibraryScreen';
-import { MoreScreen } from './src/screens/MoreScreen';
 import { ReaderScreen } from './src/screens/ReaderScreen';
+import { SchedulesScreen } from './src/screens/SchedulesScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { TodayScreen } from './src/screens/TodayScreen';
-import { colors, shared } from './src/theme';
+import { colors, shared, ThemeProvider, useTheme } from './src/theme';
 
-/** Pushed on top of a tab, with its own close button rather than a back stack. */
-type Overlay = 'health' | 'knowledge' | null;
+/** Pushed on top of a tab, with its own back button rather than a back stack. */
+type Overlay = 'settings' | 'knowledge' | 'schedules' | null;
 
 /**
  * The Android app. Thin client: the only backend it configures is Render,
@@ -31,6 +36,16 @@ type Overlay = 'health' | 'knowledge' | null;
  * reason the morning brief arrives at 08:30 with everything else off.
  */
 export default function App() {
+  return (
+    <ThemeProvider>
+      <ToastProvider>
+        <Root />
+      </ToastProvider>
+    </ThemeProvider>
+  );
+}
+
+function Root() {
   const { env } = client;
   const apiReady = isApiConfigured(env);
   // `undefined` = still restoring the stored session.
@@ -136,8 +151,7 @@ export default function App() {
     );
   }
 
-  // The reader is full-screen: it is the one place the tab bar would be in the
-  // way rather than useful.
+  // The reader is full-screen and distraction-free: no app chrome at all.
   if (book) {
     return (
       <>
@@ -150,31 +164,101 @@ export default function App() {
   return (
     <View style={shared.screen}>
       <StatusBar style="light" />
+
+      {overlay === null && <TopBar onSettings={() => setOverlay('settings')} />}
+
       <View style={{ flex: 1 }}>
-        {overlay === 'health' ? (
-          <HealthScreen />
+        {overlay === 'settings' ? (
+          <SettingsScreen
+            onClose={() => setOverlay(null)}
+            onOpen={(destination) => setOverlay(destination)}
+            onSignOut={() => setSession(null)}
+          />
         ) : overlay === 'knowledge' ? (
-          <KnowledgeScreen />
+          <KnowledgeScreen onClose={() => setOverlay('settings')} />
+        ) : overlay === 'schedules' ? (
+          <SchedulesScreen onClose={() => setOverlay('settings')} />
         ) : tab === 'today' ? (
-          <TodayScreen onOpenBook={setBook} />
-        ) : tab === 'library' ? (
-          <LibraryScreen onOpen={setBook} />
-        ) : tab === 'assistant' ? (
-          <AssistantScreen />
+          <TodayScreen onOpenBook={setBook} onOpenCalendar={() => setTab('calendar')} />
         ) : tab === 'calendar' ? (
           <CalendarScreen />
+        ) : tab === 'assistant' ? (
+          <AssistantScreen />
+        ) : tab === 'library' ? (
+          <LibraryScreen onOpen={setBook} />
         ) : (
-          <MoreScreen onOpen={setOverlay} onSignOut={() => setSession(null)} />
+          <HealthScreen />
         )}
       </View>
-      <TabBar
-        active={tab}
-        onChange={(next) => {
-          // Any tab press closes an overlay — that is the back gesture here.
-          setOverlay(null);
-          setTab(next);
+
+      {overlay === null && <TabBar active={tab} onChange={setTab} />}
+    </View>
+  );
+}
+
+/** One consistent slim header across the main tabs: wordmark + settings. */
+function TopBar({ onSettings }: { onSettings: () => void }) {
+  const { accent, colorMode } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingTop: 52,
+        paddingBottom: 10,
+        paddingHorizontal: 20,
+        gap: 10,
+      }}
+    >
+      <View
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: 12,
+          borderWidth: 1.5,
+          borderColor: colorMode ? accent : colors.textMuted,
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
-      />
+      >
+        <View
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: colorMode ? accent : colors.text,
+          }}
+        />
+      </View>
+      <Text
+        style={{
+          color: colors.text,
+          fontSize: 16,
+          fontWeight: '700',
+          letterSpacing: 0.2,
+          flex: 1,
+        }}
+      >
+        MyPro
+      </Text>
+      <Pressable
+        onPress={onSettings}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+        style={({ pressed }) => ({
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: pressed ? colors.surfaceHigh : 'transparent',
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: pressed ? colors.borderStrong : 'transparent',
+        })}
+      >
+        <Ionicons name="settings-outline" size={19} color={colors.textMuted} />
+      </Pressable>
     </View>
   );
 }
