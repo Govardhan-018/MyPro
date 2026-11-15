@@ -150,12 +150,7 @@ export class SchedulerService {
       })
       .eq('id', s.id);
 
-    await this.supabase.admin.from('schedule_runs').insert({
-      schedule_id: s.id,
-      user_id: s.user_id,
-      status,
-      detail: detail || null,
-    });
+    await this.recordRun(s, status, detail);
 
     await this.audit.record({
       userId: s.user_id,
@@ -180,12 +175,7 @@ export class SchedulerService {
         })
         .eq('id', s.id);
 
-      await this.supabase.admin.from('schedule_runs').insert({
-        schedule_id: s.id,
-        user_id: s.user_id,
-        status: 'deferred',
-        detail: `${reason} — retry ${attempts}/${MAX_DEFERS}`,
-      });
+      await this.recordRun(s, 'deferred', `${reason} — retry ${attempts}/${MAX_DEFERS}`);
       this.logger.warn(`schedule ${s.id} deferred (${attempts}/${MAX_DEFERS}): ${reason}`);
       return;
     }
@@ -193,6 +183,26 @@ export class SchedulerService {
     const fallback = await this.plainBrief(s.user_id);
     await this.chatMessage(s.user_id, fallback, s.id);
     await this.advance(s, 'success', 'laptop offline — sent plain brief');
+  }
+
+  /**
+   * Write a row to the run history.
+   *
+   * The result is checked deliberately: a status the table's check constraint
+   * rejects (as 'deferred' was until migration 0007) otherwise disappears
+   * without a trace, and the run history quietly lies about what happened.
+   * A broken history must not fail the job, so this logs rather than throws.
+   */
+  private async recordRun(s: DueSchedule, status: RunStatus, detail: string): Promise<void> {
+    const { error } = await this.supabase.admin.from('schedule_runs').insert({
+      schedule_id: s.id,
+      user_id: s.user_id,
+      status,
+      detail: detail || null,
+    });
+    if (error) {
+      this.logger.error(`could not record run for schedule ${s.id} (${status}): ${error.message}`);
+    }
   }
 
   // ---- actions ----------------------------------------------------------

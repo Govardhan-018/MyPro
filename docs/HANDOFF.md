@@ -31,6 +31,8 @@ Uncommitted: **Schedules + live notifications (Phases 5 / 6.1)**
 - `backend-render/src/profile/profile.module.ts` — `GET /me/realtime`.
 - `supabase/migrations/0006_realtime_notifications.sql` (new) — **also needs
   applying**; without it the socket connects and never delivers anything.
+- `supabase/migrations/0007_schedule_run_deferred.sql` (new) — **also needs
+  applying**; until then deferred runs stay missing from run history.
 - Web: `lib/useSchedules.ts`, `lib/useNotifications.ts`,
   `components/schedules/SchedulesView.tsx`, `components/NotificationToasts.tsx`
   (all new), plus `App.tsx` (Schedules view + sidebar bell) and `index.css`.
@@ -118,6 +120,43 @@ The extracting device is the one holding the file; everyone else reads its JSON.
   the extracted JSON really syncs.
 - Not done: OCR for scanned PDFs (10.4), and pdfjs runs without CMaps, so CJK /
   exotic-encoding PDFs may extract poorly.
+
+## Calendar fixes + the scheduler's silent run-history bug
+
+**Calendar** (`frontend/src/lib/useCalendar.ts`, `App.tsx`, `index.css`). Five
+real defects, all of which made events look missing:
+
+1. **Events were drawn on the wrong day.** `groupByDate` keyed days by
+   `startsAt.slice(0, 10)` — the *UTC* date — while every grid lookup uses the
+   local date. Verified in the browser at Asia/Calcutta: a 02:00 event on the
+   16th is stored `2026-11-15T20:30:00Z` and was keyed to the **15th**. Now
+   `dateKeyOf()` localises timed events and keeps all-day events on their
+   stored UTC date.
+2. **Only ±1 month of data ever loaded**, computed once from *today* and never
+   refetched, so paging to any other month showed an empty calendar. The hook
+   now takes the focused date and reloads when the month changes.
+3. **Events outside 8 AM–6 PM were invisible** — the grid was a fixed 640px
+   window with `overflow: hidden`, so a 9 PM dinner was clipped and a 6 AM run
+   was clamped onto the 8 AM line. The grid is now the full 24 hours (1536px)
+   inside a scroll window that opens parked at 8 AM.
+4. **Saturday and Sunday did not exist** in the week view (5 columns), so
+   weekend events were loaded and never drawn. Now Mon–Sun.
+5. **Every event was a white box with white text.** The tone classes set
+   `background: #ffffff` while the text inherited `#ffffff`; events were only
+   readable in Color Mode, which swaps in a translucent tint. Monochrome now
+   uses `rgba(255,255,255,.1)` with a solid white edge, like `.month-event`.
+
+Also: all-day events now appear (a strip in Week, chips in Day, in the mobile
+agenda), clicking an event opens it for **edit or delete** (the API had
+`updateEvent`/`deleteEvent` all along, with no UI), the category tone embed is
+read under its real key (`event_categories`, not `calendar_categories`), and
+end-before-start is rejected.
+
+**Scheduler** — `deferOrDegrade` wrote `schedule_runs.status = 'deferred'`,
+which 0001's check constraint rejected; the result was never inspected, so
+every defer vanished from run history. `0007_schedule_run_deferred.sql` widens
+the constraint, and all run inserts now go through `recordRun()`, which logs a
+rejection instead of swallowing it.
 
 ## Schedules + live notifications, as built (Phases 5 and 6.1)
 

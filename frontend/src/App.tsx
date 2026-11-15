@@ -62,6 +62,7 @@ import {
   StickyNote,
   Stethoscope,
   Thermometer,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -119,7 +120,11 @@ import {
   timeLabel,
   durationLabel,
   nowOffset,
+  dateKeyOf,
+  timeInputValue,
   HOUR_LABELS,
+  GRID_HEIGHT,
+  DEFAULT_SCROLL_TOP,
   type CalEvent,
   type NewEventInput,
 } from "./lib/useCalendar";
@@ -523,8 +528,8 @@ function TodayView({
   items: LibraryItem[];
   onOpenMedia: (item: LibraryItem) => void;
 }) {
-  const { events: calEvents } = useCalendar();
   const now = new Date();
+  const { events: calEvents } = useCalendar(now);
   const todaysEvents = (groupByDate(calEvents).get(isoDate(now)) ?? []).filter((e) => !e.allDay);
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning." : hour < 18 ? "Good afternoon." : "Good evening.";
@@ -655,11 +660,14 @@ function TodayView({
 }
 
 function CalendarView() {
-  const { events, loading, error, createEvent } = useCalendar();
   const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
   const [refDate, setRefDate] = useState(() => new Date());
+  // The hook reloads whenever you page into another month.
+  const { events, loading, error, createEvent, updateEvent, deleteEvent } = useCalendar(refDate);
   const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState<NewEventInput>({
     title: "",
@@ -675,7 +683,9 @@ function CalendarView() {
   const eventsByDate = useMemo(() => groupByDate(events), [events]);
 
   const weekStart = startOfWeek(refDate);
-  const weekDays = Array.from({ length: 5 }, (_, i) => {
+  // Saturday and Sunday used to be missing entirely, so weekend events were
+  // invisible in this view even though the data was loaded.
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
     const date = new Date(weekStart);
     date.setDate(date.getDate() + i);
     return { date, iso: isoDate(date), num: date.getDate() };
@@ -694,26 +704,62 @@ function CalendarView() {
     mode === "Day"
       ? refDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
       : mode === "Week"
-        ? `${weekDays[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekDays[4].date.toLocaleDateString(undefined, { day: "numeric" })}`
+        ? `${weekDays[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekDays[6].date.toLocaleDateString(undefined, { day: "numeric" })}`
         : refDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
   const setField = <K extends keyof NewEventInput>(key: K, value: NewEventInput[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
   const openQuickAdd = () => {
+    setEditingId(null);
     setForm({ title: "", date: isoDate(refDate), startTime: "", endTime: "", allDay: false, location: "" });
     setFormError(null);
     setShowModal(true);
+  };
+  /** Clicking an event opens the same sheet, filled in, with a delete. */
+  const openEdit = (ev: CalEvent) => {
+    setEditingId(ev.id);
+    setForm({
+      title: ev.title,
+      date: dateKeyOf(ev),
+      startTime: ev.allDay ? "" : timeInputValue(ev.startsAt),
+      endTime: ev.allDay ? "" : timeInputValue(ev.endsAt),
+      allDay: ev.allDay,
+      location: ev.location ?? "",
+    });
+    setFormError(null);
+    setShowModal(true);
+  };
+  const closeModal = () => {
+    if (saving || deleting) return;
+    setShowModal(false);
+    setEditingId(null);
   };
   const save = async () => {
     setSaving(true);
     setFormError(null);
     try {
-      await createEvent(form);
+      if (editingId) await updateEvent(editingId, form);
+      else await createEvent(form);
       setShowModal(false);
+      setEditingId(null);
     } catch (caught) {
       setFormError(caught instanceof Error ? caught.message : "Could not save the event.");
     } finally {
       setSaving(false);
+    }
+  };
+  const removeEvent = async () => {
+    if (!editingId) return;
+    setDeleting(true);
+    setFormError(null);
+    try {
+      await deleteEvent(editingId);
+      setShowModal(false);
+      setEditingId(null);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Could not delete the event.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -802,7 +848,12 @@ function CalendarView() {
           </aside>
         )}
         {mode === "Week" && (
-          <MobileWeekAgenda weekDays={weekDays} eventsByDate={eventsByDate} todayIso={todayIso} />
+          <MobileWeekAgenda
+            weekDays={weekDays}
+            eventsByDate={eventsByDate}
+            todayIso={todayIso}
+            onOpenEvent={openEdit}
+          />
         )}
         {mode === "Week" && (
           <div className="week-calendar glass-card">
@@ -815,7 +866,29 @@ function CalendarView() {
                 </div>
               ))}
             </div>
-            <div className="week-grid">
+            {weekDays.some((d) => (eventsByDate.get(d.iso) ?? []).some((ev) => ev.allDay)) && (
+              <div className="week-all-day">
+                <span className="week-all-day-label">ALL DAY</span>
+                {weekDays.map((d) => (
+                  <div key={d.iso}>
+                    {(eventsByDate.get(d.iso) ?? [])
+                      .filter((ev) => ev.allDay)
+                      .map((ev) => (
+                        <button
+                          type="button"
+                          className={`week-all-day-chip calendar-${ev.tone}`}
+                          key={ev.id}
+                          onClick={() => openEdit(ev)}
+                          title={ev.title}
+                        >
+                          {ev.title}
+                        </button>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            )}
+            <DayGrid className="week-grid">
               <div className="time-rail">
                 {HOUR_LABELS.map((time) => (
                   <span key={time}>{time}</span>
@@ -835,10 +908,11 @@ function CalendarView() {
                           title={ev.title}
                           meta={eventMeta(ev)}
                           color={ev.tone}
+                          onClick={() => openEdit(ev)}
                         />
                       );
                     })}
-                  {d.iso === todayIso && nowOffset() >= 0 && nowOffset() <= 640 && (
+                  {d.iso === todayIso && nowOffset() >= 0 && nowOffset() <= GRID_HEIGHT && (
                     <div className="current-time" style={{ top: nowOffset() }}>
                       <i />
                       <span>{today.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
@@ -846,7 +920,7 @@ function CalendarView() {
                   )}
                 </div>
               ))}
-            </div>
+            </DayGrid>
           </div>
         )}
         {mode === "Day" && (
@@ -854,21 +928,27 @@ function CalendarView() {
             date={refDate}
             events={eventsByDate.get(isoDate(refDate)) ?? []}
             isToday={isoDate(refDate) === todayIso}
+            onOpenEvent={openEdit}
           />
         )}
         {mode === "Month" && (
-          <MonthCalendar refDate={refDate} eventsByDate={eventsByDate} todayIso={todayIso} />
+          <MonthCalendar
+            refDate={refDate}
+            eventsByDate={eventsByDate}
+            todayIso={todayIso}
+            onOpenEvent={openEdit}
+          />
         )}
       </div>
       {showModal && (
-        <div className="modal-backdrop" onMouseDown={() => !saving && setShowModal(false)}>
+        <div className="modal-backdrop" onMouseDown={closeModal}>
           <div className="event-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-heading">
               <div>
-                <span className="section-kicker">QUICK ADD</span>
-                <h2>Create an event</h2>
+                <span className="section-kicker">{editingId ? "EDIT EVENT" : "QUICK ADD"}</span>
+                <h2>{editingId ? "Change this event" : "Create an event"}</h2>
               </div>
-              <IconButton label="Close" onClick={() => setShowModal(false)}>
+              <IconButton label="Close" onClick={closeModal}>
                 <X size={18} />
               </IconButton>
             </div>
@@ -932,19 +1012,36 @@ function CalendarView() {
             )}
             {formError && <p className="composer-error">{formError}</p>}
             <div className="modal-footer">
-              <button className="secondary-button" onClick={() => setShowModal(false)} disabled={saving}>
+              {editingId && (
+                <button
+                  className="secondary-button event-delete-button"
+                  onClick={removeEvent}
+                  disabled={saving || deleting}
+                  aria-busy={deleting}
+                >
+                  {deleting ? <Spinner /> : <Trash2 size={15} />}
+                  {deleting ? "Deleting…" : "Delete"}
+                </button>
+              )}
+              <button
+                className="secondary-button"
+                onClick={closeModal}
+                disabled={saving || deleting}
+              >
                 Cancel
               </button>
               <button
                 className="primary-button"
                 onClick={save}
-                disabled={saving || !form.title.trim()}
+                disabled={saving || deleting || !form.title.trim()}
                 aria-busy={saving}
               >
                 {saving ? (
                   <>
-                    <Spinner /> Adding…
+                    <Spinner /> Saving…
                   </>
+                ) : editingId ? (
+                  "Save changes"
                 ) : (
                   "Add to calendar"
                 )}
@@ -962,14 +1059,18 @@ function MobileWeekAgenda({
   weekDays,
   eventsByDate,
   todayIso,
+  onOpenEvent,
 }: {
   weekDays: { date: Date; iso: string; num: number }[];
   eventsByDate: Map<string, CalEvent[]>;
   todayIso: string;
+  onOpenEvent: (ev: CalEvent) => void;
 }) {
   const [selected, setSelected] = useState(0);
   const selectedDay = weekDays[selected];
-  const items = (eventsByDate.get(selectedDay?.iso ?? "") ?? []).filter((e) => !e.allDay);
+  // All-day events belong in the agenda too — they used to be filtered out
+  // here and in the grid, so they were invisible everywhere but Month.
+  const items = eventsByDate.get(selectedDay?.iso ?? "") ?? [];
   return (
     <div className="mobile-week-agenda">
       <div className="mobile-day-strip" role="tablist" aria-label="Days this week">
@@ -1013,10 +1114,20 @@ function MobileWeekAgenda({
       <div className="mobile-agenda-list">
         {items.length === 0 && <p className="mobile-month-empty">Nothing scheduled.</p>}
         {items.map((item) => (
-          <article className={`mobile-agenda-event tone-${item.tone}`} key={item.id}>
+          <article
+            className={`mobile-agenda-event tone-${item.tone}`}
+            key={item.id}
+            onClick={() => onOpenEvent(item)}
+          >
             <time>
-              <strong>{timeLabel(item.startsAt).replace(/ ?[AP]M/, "")}</strong>
-              <span>{timeLabel(item.startsAt).slice(-2)}</span>
+              {item.allDay ? (
+                <strong>All day</strong>
+              ) : (
+                <>
+                  <strong>{timeLabel(item.startsAt).replace(/ ?[AP]M/, "")}</strong>
+                  <span>{timeLabel(item.startsAt).slice(-2)}</span>
+                </>
+              )}
             </time>
             <div>
               <strong>{item.title}</strong>
@@ -1030,24 +1141,52 @@ function MobileWeekAgenda({
   );
 }
 
+/**
+ * The scrolling day surface. The grid is a full 24 hours tall so nothing is
+ * clipped, and it opens parked on the working day rather than at midnight.
+ */
+function DayGrid({ className, children }: { className: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTop = Math.min(DEFAULT_SCROLL_TOP, Math.max(0, el.scrollHeight - el.clientHeight));
+  }, []);
+  return (
+    <div className={className} ref={ref}>
+      <div className="day-grid-inner" style={{ height: GRID_HEIGHT }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function CalendarEvent({
   top,
   height,
   title,
   meta,
   color,
+  onClick,
 }: {
   top: number;
   height: number;
   title: string;
   meta: string;
   color: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className={`calendar-event calendar-${color}`} style={{ top, height }}>
+    <button
+      type="button"
+      className={`calendar-event calendar-${color}`}
+      style={{ top, height }}
+      onClick={onClick}
+      title={`${title} — ${meta}`}
+    >
       <strong>{title}</strong>
       <span>{meta}</span>
-    </div>
+    </button>
   );
 }
 
@@ -1055,10 +1194,12 @@ function DayCalendar({
   date,
   events,
   isToday,
+  onOpenEvent,
 }: {
   date: Date;
   events: CalEvent[];
   isToday: boolean;
+  onOpenEvent: (ev: CalEvent) => void;
 }) {
   const timed = events.filter((e) => !e.allDay);
   const allDay = events.filter((e) => e.allDay);
@@ -1091,10 +1232,21 @@ function DayCalendar({
       {allDay.length > 0 && (
         <div className="all-day-row">
           <span>ALL DAY</span>
-          <div>{allDay.map((e) => e.title).join(", ")}</div>
+          <div>
+            {allDay.map((e) => (
+              <button
+                type="button"
+                className={`week-all-day-chip calendar-${e.tone}`}
+                key={e.id}
+                onClick={() => onOpenEvent(e)}
+              >
+                {e.title}
+              </button>
+            ))}
+          </div>
         </div>
       )}
-      <div className="day-timeline">
+      <DayGrid className="day-timeline">
         <div className="time-rail">
           {HOUR_LABELS.map((time) => (
             <span key={time}>{time}</span>
@@ -1111,17 +1263,18 @@ function DayCalendar({
                 title={ev.title}
                 meta={`${eventMeta(ev)}${ev.location ? ` · ${ev.location}` : ""}`}
                 color={ev.tone}
+                onClick={() => onOpenEvent(ev)}
               />
             );
           })}
-          {isToday && nowOffset() >= 0 && nowOffset() <= 640 && (
+          {isToday && nowOffset() >= 0 && nowOffset() <= GRID_HEIGHT && (
             <div className="current-time" style={{ top: nowOffset() }}>
               <i />
               <span>{new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
             </div>
           )}
         </div>
-      </div>
+      </DayGrid>
     </div>
   );
 }
@@ -1130,10 +1283,12 @@ function MonthCalendar({
   refDate,
   eventsByDate,
   todayIso,
+  onOpenEvent,
 }: {
   refDate: Date;
   eventsByDate: Map<string, CalEvent[]>;
   todayIso: string;
+  onOpenEvent: (ev: CalEvent) => void;
 }) {
   const year = refDate.getFullYear();
   const month = refDate.getMonth();
@@ -1169,11 +1324,21 @@ function MonthCalendar({
               <span className="month-day-number">{inMonth ? dayNum : ""}</span>
               <div className="month-day-events">
                 {dayEvents.slice(0, 2).map((event) => (
-                  <div className={`month-event month-event-${event.tone}`} key={event.id}>
+                  <div
+                    className={`month-event month-event-${event.tone}`}
+                    key={event.id}
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation();
+                      onOpenEvent(event);
+                    }}
+                  >
                     <i />
                     <span>{event.title}</span>
                   </div>
                 ))}
+                {dayEvents.length > 2 && (
+                  <span className="month-day-more">+{dayEvents.length - 2} more</span>
+                )}
               </div>
             </div>
           );

@@ -56,6 +56,7 @@ const RUN_LABEL: Record<string, string> = {
   failed: "Failed",
   skipped: "Skipped",
   pending_confirmation: "Waiting for you",
+  deferred: "Waited for your laptop",
 };
 
 const browserTimezone = (): string => {

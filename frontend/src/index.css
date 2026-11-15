@@ -836,7 +836,9 @@ button {
 .week-header {
   height: 66px;
   display: grid;
-  grid-template-columns: 55px repeat(5, 1fr);
+  /* Mon–Sun: the view used to render five columns, so weekend events were
+     loaded but never drawn. */
+  grid-template-columns: 55px repeat(7, 1fr);
   border-bottom: 1px solid var(--line);
 }
 .week-header > div {
@@ -873,13 +875,18 @@ button {
 }
 .week-grid {
   height: 640px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.week-grid .day-grid-inner {
   display: grid;
-  grid-template-columns: 55px repeat(5, 1fr);
-  overflow: hidden;
+  grid-template-columns: 55px repeat(7, 1fr);
 }
 .time-rail {
   display: grid;
-  grid-template-rows: repeat(10, 1fr);
+  /* One row per hour of the full day. */
+  grid-template-rows: repeat(24, 1fr);
 }
 .time-rail span {
   text-align: center;
@@ -901,12 +908,17 @@ button {
   position: absolute;
   left: 5px;
   right: 5px;
+  border: 0;
+  border-left: 2px solid;
   border-radius: 8px;
   padding: 8px;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
   overflow: hidden;
-  border-left: 2px solid;
+  cursor: pointer;
+  font: inherit;
 }
 .calendar-event strong {
   font-size: 9px;
@@ -914,22 +926,21 @@ button {
 .calendar-event span {
   font-size: 7.5px;
   margin-top: 3px;
-  color: var(--medium);
+  /* var(--medium) is #ffffff in this theme; the meta line needs to sit below
+     the title, not match it. */
+  color: rgba(255, 255, 255, 0.62);
 }
-.calendar-lavender {
-  background: #ffffff;
-  border-color: #ffffff;
-}
-.calendar-mint {
-  background: #ffffff;
-  border-color: #ffffff;
-}
-.calendar-blue {
-  background: #ffffff;
-  border-color: #ffffff;
-}
-.calendar-peach {
-  background: #ffffff;
+/* Monochrome mode: a translucent surface with a solid white edge, the same
+   language as .month-event. These used to be solid #ffffff while the text
+   inherited #ffffff too, so every event rendered as a blank white block —
+   readable only once Color Mode swapped in a tinted background. */
+.calendar-lavender,
+.calendar-mint,
+.calendar-blue,
+.calendar-peach,
+.calendar-cyan,
+.calendar-coral {
+  background: rgba(255, 255, 255, 0.1);
   border-color: #ffffff;
 }
 .current-time {
@@ -1012,9 +1023,13 @@ button {
 }
 .day-timeline {
   height: 640px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.day-timeline .day-grid-inner {
   display: grid;
   grid-template-columns: 55px 1fr;
-  overflow: hidden;
 }
 .day-column-expanded .calendar-event {
   left: 14px;
@@ -5189,7 +5204,7 @@ button {
   .all-day-row {
     font-size: 12px;
   }
-  .day-timeline {
+  .day-timeline .day-grid-inner {
     grid-template-columns: 50px 1fr;
   }
   .time-rail span {
@@ -6366,4 +6381,86 @@ button {
   .schedule-row-actions {
     justify-content: flex-end;
   }
+}
+
+
+/* ---- calendar: all-day strip, overflow count, destructive action ---- */
+
+.week-all-day {
+  display: grid;
+  grid-template-columns: 55px repeat(7, 1fr);
+  align-items: start;
+  gap: 4px 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.week-all-day-label {
+  color: var(--soft);
+  font-size: 7px;
+  text-align: center;
+  align-self: center;
+}
+
+.week-all-day > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 4px;
+  min-width: 0;
+}
+
+.week-all-day-chip {
+  display: block;
+  width: 100%;
+  padding: 4px 7px;
+  border: 0;
+  border-left: 2px solid;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 9px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.all-day-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: none;
+  border-left: 0;
+  padding: 0;
+}
+
+.all-day-row .week-all-day-chip {
+  width: auto;
+  font-size: 11px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-left: 2px solid #ffffff;
+}
+
+.month-day-more {
+  color: var(--soft);
+  font-size: 7px;
+  padding-left: 2px;
+}
+
+.month-event {
+  cursor: pointer;
+}
+
+.event-delete-button {
+  margin-right: auto;
+  color: #f8a3a3;
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.color-mode .all-day-row > div {
+  background: none;
+  border-left: 0;
+  padding: 0;
 }

@@ -337,6 +337,12 @@ notifications(
 )
 ```
 
+**Run history:** `schedule_runs.status` is
+`success | failed | skipped | pending_confirmation | deferred`. `deferred` was
+added in `0007_schedule_run_deferred.sql` — the scheduler had always written it
+when a job waited for the sleeping laptop, but the original constraint rejected
+it and the error was discarded, so those runs were never recorded.
+
 **4NF notes:** multivalued facts (a message's labels, an event's reminders, a record's medications/symptoms/documents, a task's tags, a user's phones) each live in their own table — no arrays, no repeating columns, no type-discriminated nullable blobs. Subtype tables keep `library_items` lean. Junctions (`*_tags`, `collection_items`, `email_message_labels`) carry only the relationship.
 
 ---

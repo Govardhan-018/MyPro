@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from './api';
 import { isApiConfigured } from './env';
 
@@ -21,10 +21,21 @@ export interface NewEventInput {
   location?: string;
 }
 
-/* ---- grid geometry (matches the CSS: 640px tall, 64px/hour from 8 AM) ---- */
-export const GRID_START_HOUR = 8;
-export const GRID_END_HOUR = 18;
-const PX_PER_MIN = 64 / 60;
+/* ---- grid geometry ----------------------------------------------------
+ * The grid covers the whole day at 64px/hour and scrolls inside a 640px
+ * window. It used to run 8 AM–6 PM with `overflow: hidden`, which silently
+ * ate every event outside office hours — an 8 PM dinner simply was not
+ * drawn, and a 6 AM run was clamped on top of the 8 AM slot.
+ * -------------------------------------------------------------------- */
+export const GRID_START_HOUR = 0;
+export const GRID_END_HOUR = 24;
+const PX_PER_HOUR = 64;
+const PX_PER_MIN = PX_PER_HOUR / 60;
+/** Full height of the scrollable day (24 × 64). */
+export const GRID_HEIGHT = (GRID_END_HOUR - GRID_START_HOUR) * PX_PER_HOUR;
+/** Where the grid parks itself when opened — the working day, as before. */
+export const DEFAULT_SCROLL_TOP = 8 * PX_PER_HOUR;
+
 export const HOUR_LABELS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => {
   const h = GRID_START_HOUR + i;
   const suffix = h >= 12 ? 'PM' : 'AM';
@@ -58,8 +69,10 @@ export function positionOf(ev: CalEvent): { top: number; height: number } {
   const start = minutesInto(ev.startsAt);
   const end = ev.endsAt ? minutesInto(ev.endsAt) : start + 60;
   const top = Math.max(0, (start - GRID_START_HOUR * 60) * PX_PER_MIN);
-  const height = Math.max(26, (Math.max(end, start + 15) - start) * PX_PER_MIN);
-  return { top, height };
+  // An event ending before it starts (or crossing midnight) still has to be
+  // drawable: clamp to the end of the day rather than render a negative box.
+  const span = end > start ? end - start : Math.max(15, 24 * 60 - start);
+  return { top, height: Math.max(26, Math.min(span, GRID_HEIGHT - top) * PX_PER_MIN) };
 }
 
 export function nowOffset(): number {
@@ -98,7 +111,8 @@ function clean(obj: Record<string, unknown>): Record<string, unknown> {
 }
 
 function toneFor(row: Record<string, unknown>, id: string): string {
-  const ref = row.calendar_categories ?? row.category;
+  // The API embeds the category as `event_categories(name, tone)`.
+  const ref = row.event_categories ?? row.calendar_categories ?? row.category;
   const obj = (Array.isArray(ref) ? ref[0] : ref) as Record<string, unknown> | undefined;
   const tone = str(obj?.tone);
   if (tone && TONES.includes(tone)) return tone;
@@ -129,31 +143,87 @@ function combine(date: string, time?: string): string | undefined {
 
 const byStart = (a: CalEvent, b: CalEvent) => a.startsAt.localeCompare(b.startsAt);
 
+/**
+ * The day an event belongs to, as the grid keys days (local YYYY-MM-DD).
+ *
+ * Timed events are converted from their stored UTC instant into *this*
+ * device's day — slicing the ISO string instead (the old behaviour) returned
+ * the UTC day, so in any non-UTC zone events near the date boundary were
+ * drawn a day off. An all-day event has no instant to localise: it is pinned
+ * to the calendar date it was stored as, read in UTC.
+ */
+export function dateKeyOf(ev: CalEvent): string {
+  if (!ev.startsAt) return '';
+  if (ev.allDay) return ev.startsAt.slice(0, 10);
+  const d = new Date(ev.startsAt);
+  return Number.isNaN(d.getTime()) ? ev.startsAt.slice(0, 10) : isoDate(d);
+}
+
+/** An event's local start time, in the shape an <input type="time"> wants. */
+export function timeInputValue(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** The months to keep loaded around the date being viewed. */
+function windowAround(focus: Date): { from: string; to: string; key: string } {
+  const from = new Date(focus.getFullYear(), focus.getMonth() - 1, 1);
+  const to = new Date(focus.getFullYear(), focus.getMonth() + 2, 0, 23, 59, 59, 999);
+  return {
+    from: from.toISOString(),
+    to: to.toISOString(),
+    key: `${focus.getFullYear()}-${focus.getMonth()}`,
+  };
+}
+
+export interface EventPatch {
+  title?: string;
+  date?: string;
+  startTime?: string;
+  endTime?: string;
+  allDay?: boolean;
+  location?: string;
+}
+
 export interface CalendarState {
   events: CalEvent[];
   loading: boolean;
   error: string | null;
   configured: boolean;
   createEvent: (input: NewEventInput) => Promise<void>;
+  updateEvent: (id: string, input: NewEventInput) => Promise<void>;
+  deleteEvent: (id: string) => Promise<void>;
+  reload: () => void;
 }
 
-export function useCalendar(): CalendarState {
+/**
+ * Loads the events around `focus` and reloads whenever you page to another
+ * month. The window used to be computed once from *today*, so navigating
+ * beyond a month either way showed an empty calendar — the data was simply
+ * never requested.
+ */
+export function useCalendar(focus: Date): CalendarState {
   const configured = isApiConfigured;
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [loading, setLoading] = useState<boolean>(configured);
   const [error, setError] = useState<string | null>(null);
+  const { from, to, key } = windowAround(focus);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
-    if (!configured) return;
+    if (!configured) {
+      setLoading(false);
+      return;
+    }
     let active = true;
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-    const to = new Date(now.getFullYear(), now.getMonth() + 2, 0).toISOString();
+    setLoading(true);
     api.calendar
       .events({ from, to })
       .then((rows) => {
         if (!active) return;
         setEvents(rows.map(rowToEvent).sort(byStart));
+        setError(null);
         setLoading(false);
       })
       .catch((caught) => {
@@ -164,25 +234,44 @@ export function useCalendar(): CalendarState {
     return () => {
       active = false;
     };
-  }, [configured]);
+    // `key` is the month being viewed: panning within a month reuses the data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured, key, reloadToken]);
 
-  const createEvent = async (input: NewEventInput) => {
+  /** Shared validation + shaping for create and update. */
+  const toBody = (input: NewEventInput): Record<string, unknown> => {
     const title = input.title.trim();
     if (!title) throw new Error('Give the event a title.');
     const starts_at = combine(input.date, input.allDay ? '00:00' : input.startTime);
     if (!starts_at) throw new Error('Pick a date for the event.');
-    const body = clean({
+    const ends_at = input.allDay ? undefined : combine(input.date, input.endTime);
+    if (ends_at && new Date(ends_at) <= new Date(starts_at)) {
+      throw new Error('The end time has to be after the start time.');
+    }
+    return clean({
       title,
       starts_at,
-      ends_at: input.allDay ? undefined : combine(input.date, input.endTime),
+      ends_at,
       all_day: input.allDay,
       location: input.location,
     });
+  };
+
+  const createEvent = async (input: NewEventInput) => {
+    const body = toBody(input);
     if (!configured) {
       setEvents((cur) =>
         [
           ...cur,
-          { id: `tmp-${Date.now()}`, title, startsAt: starts_at, allDay: input.allDay, location: input.location, tone: 'lavender' },
+          {
+            id: `tmp-${Date.now()}`,
+            title: String(body.title),
+            startsAt: String(body.starts_at),
+            endsAt: body.ends_at ? String(body.ends_at) : undefined,
+            allDay: input.allDay,
+            location: input.location,
+            tone: 'lavender',
+          },
         ].sort(byStart),
       );
       return;
@@ -191,14 +280,58 @@ export function useCalendar(): CalendarState {
     setEvents((cur) => [...cur, rowToEvent(row as Record<string, unknown>)].sort(byStart));
   };
 
-  return { events, loading, error, configured, createEvent };
+  const updateEvent = async (id: string, input: NewEventInput) => {
+    const body = toBody(input);
+    // An unset end time has to be sent explicitly, or the old one survives.
+    if (!('ends_at' in body)) body.ends_at = null;
+    if (!('location' in body)) body.location = null;
+    if (!configured) {
+      setEvents((cur) =>
+        cur
+          .map((ev) =>
+            ev.id === id
+              ? {
+                  ...ev,
+                  title: String(body.title),
+                  startsAt: String(body.starts_at),
+                  endsAt: body.ends_at ? String(body.ends_at) : undefined,
+                  allDay: input.allDay,
+                  location: input.location,
+                }
+              : ev,
+          )
+          .sort(byStart),
+      );
+      return;
+    }
+    const row = await api.calendar.updateEvent(id, body);
+    setEvents((cur) =>
+      cur.map((ev) => (ev.id === id ? rowToEvent(row as Record<string, unknown>) : ev)).sort(byStart),
+    );
+  };
+
+  const deleteEvent = async (id: string) => {
+    if (configured) await api.calendar.deleteEvent(id);
+    setEvents((cur) => cur.filter((ev) => ev.id !== id));
+  };
+
+  return {
+    events,
+    loading,
+    error,
+    configured,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    reload: useCallback(() => setReloadToken((t) => t + 1), []),
+  };
 }
 
-/** Group events by their local YYYY-MM-DD. */
+/** Group events by the local day they fall on. */
 export function groupByDate(events: CalEvent[]): Map<string, CalEvent[]> {
   const map = new Map<string, CalEvent[]>();
   for (const ev of events) {
-    const key = ev.startsAt.slice(0, 10);
+    const key = dateKeyOf(ev);
     if (!key) continue;
     const list = map.get(key);
     if (list) list.push(ev);
