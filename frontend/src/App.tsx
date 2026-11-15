@@ -13,9 +13,11 @@ import {
 } from "react";
 import type { LottieHandle } from "lottie-react";
 import {
+  AlarmClock,
   Apple,
   Archive,
   ArrowLeft,
+  Bell,
   ArrowRight,
   BookOpen,
   Bookmark,
@@ -75,6 +77,8 @@ import { MyProPodcastPlayer } from "./components/library/MyProPodcastPlayer";
 import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
+import { SchedulesView } from "./components/schedules/SchedulesView";
+import { NotificationToasts } from "./components/NotificationToasts";
 import { isApiConfigured } from "./lib/env";
 import { storePdfLocally } from "./utils/pdfStorage";
 import { readPageCount } from "./lib/pdfEngine";
@@ -90,6 +94,7 @@ import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from
 import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
+import { useNotifications } from "./lib/useNotifications";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 import {
   entrySource,
@@ -125,6 +130,7 @@ type View =
   | "library"
   | "knowledge"
   | "health"
+  | "schedules"
   | "assistant"
   | "settings";
 
@@ -167,6 +173,7 @@ const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "library", label: "My Library", icon: Library },
   { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
+  { id: "schedules", label: "Schedules", icon: AlarmClock },
   { id: "assistant", label: "AI Assistant", icon: Sparkles },
 ];
 
@@ -4384,6 +4391,9 @@ function AppShell({
   onSignOut: () => void;
   userEmail: string | null;
 }) {
+  // Live notifications (Realtime) — toasts plus the sidebar bell.
+  const notifications = useNotifications(!!userEmail);
+  const [bellOpen, setBellOpen] = useState(false);
   // `view` drives navigation highlights immediately; `displayedView` is the page on screen.
   const [view, setView] = useState<View>("today");
   const [displayedView, setDisplayedView] = useState<View>("today");
@@ -4664,6 +4674,7 @@ function AppShell({
         />
       );
     if (displayedView === "health") return <HealthView />;
+    if (displayedView === "schedules") return <SchedulesView />;
     if (displayedView === "settings")
       return (
         <SettingsView
@@ -4708,6 +4719,72 @@ function AppShell({
           ))}
         </nav>
         {userEmail && (
+          <div className="sidebar-notifications">
+            <button
+              type="button"
+              className={`sidebar-bell ${bellOpen ? "active" : ""}`}
+              onClick={() => setBellOpen((open) => !open)}
+              aria-expanded={bellOpen}
+              aria-label={
+                notifications.unread
+                  ? `Notifications, ${notifications.unread} unread`
+                  : "Notifications"
+              }
+            >
+              <Bell size={16} />
+              <span>Notifications</span>
+              {notifications.unread > 0 && (
+                <span className="sidebar-bell-count">{notifications.unread}</span>
+              )}
+              <span
+                className={`sidebar-bell-live live-${notifications.live}`}
+                title={
+                  notifications.live === "live"
+                    ? "Live"
+                    : notifications.live === "connecting"
+                      ? "Connecting…"
+                      : "Not live — reload to reconnect"
+                }
+                aria-hidden="true"
+              />
+            </button>
+
+            {bellOpen && (
+              <div className="notification-panel">
+                <div className="notification-panel-head">
+                  <span className="section-kicker">NOTIFICATIONS</span>
+                  {notifications.unread > 0 && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void notifications.markAllRead()}
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                {!notifications.items.length ? (
+                  <p className="notification-panel-empty">
+                    Nothing yet. Scheduled briefs and your companion’s nudges land here.
+                  </p>
+                ) : (
+                  <ul className="notification-panel-list">
+                    {notifications.items.slice(0, 12).map((item) => (
+                      <li key={item.id} className={item.read_at ? "read" : "unread"}>
+                        <button type="button" onClick={() => void notifications.markRead(item.id)}>
+                          <strong>{item.title}</strong>
+                          {item.body && <small>{item.body}</small>}
+                          <span>{new Date(item.created_at).toLocaleString()}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {userEmail && (
           <div className="sidebar-account">
             <span className="sidebar-account-email" title={userEmail}>
               {userEmail}
@@ -4725,6 +4802,11 @@ function AppShell({
         )}
       </aside>
       <div className="app-main">
+        <NotificationToasts
+          toasts={notifications.toasts}
+          onRead={(id) => void notifications.markRead(id)}
+          onDismiss={notifications.dismiss}
+        />
         <header className="mobile-header">
           <Brand compact colorMode={colorMode} />
           <div className="mobile-header-actions">

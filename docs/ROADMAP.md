@@ -82,13 +82,16 @@ most valuable thing currently being thrown away on refresh.
 
 ## Phase 5 — Schedules UI
 
-- [ ] **5.1** Visual builder: "report me every weekday at 08:30"
-- [ ] **5.2** List, enable/disable, delete
-- [ ] **5.3** Run history from `schedule_runs` (including `deferred` when the laptop was asleep)
+- [x] **5.1** Visual builder: "report me every weekday at 08:30"
+- [x] **5.2** List, enable/disable, delete
+- [x] **5.3** Run history from `schedule_runs` (status is one of `success` /
+      `failed` / `skipped` / `pending_confirmation` — there is no `deferred`
+      status in the schema)
 
 ## Phase 6 — Notifications that actually reach you
 
-- [ ] **6.1** **Supabase Realtime** on `notifications` → in-app toast. One mechanism, works on web *and* Android.
+- [x] **6.1** **Supabase Realtime** on `notifications` → in-app toast (web). The
+      stream lives in `shared/src/realtime.ts`, so Android reuses it in Phase 8.
 - [ ] **6.2** Web Push (VAPID) for the browser
 - [ ] **6.3** **Telegram bot** — the "texts me like a friend" channel; by far the easiest real push to a phone
 - [ ] **6.4** Fan-out in `SchedulerService.notify` using `device_tokens` (currently a TODO)

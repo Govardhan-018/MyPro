@@ -779,7 +779,9 @@ button {
 .segmented button.selected,
 .type-switch button.active {
   background: #ffffff;
-  color: var(--graphite);
+  /* Not var(--graphite): in this theme that token *is* white, which left the
+     selected segment's label invisible on its white pill. */
+  color: #0b0b0b;
   box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
 }
 .calendar-layout {
@@ -5790,5 +5792,578 @@ button {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+/* =====================================================================
+   Schedules (Phase 5) + live notifications (Phase 6.1)
+   ===================================================================== */
+
+.schedules-view .schedule-form {
+  padding: 22px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.schedule-form-head h2 {
+  margin: 6px 0 0;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.schedule-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.schedule-action-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 13px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.schedule-action-option strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.schedule-action-option small {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.schedule-action-option:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.schedule-action-option.selected {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.schedule-textarea {
+  margin-top: 8px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: #fff;
+  font-size: 13.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.schedule-recurrence {
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-when-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.schedule-when-row .field-label {
+  min-width: 170px;
+}
+
+.schedule-day-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.schedule-day-pills button {
+  min-width: 46px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.schedule-day-pills button.selected {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.schedule-day-pills .schedule-day-preset {
+  margin-left: 6px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.schedule-confirm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  cursor: pointer;
+}
+
+.schedule-confirm-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.schedule-confirm-row strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.schedule-confirm-row small {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11.5px;
+}
+
+.schedule-timezone-note {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+
+.schedule-timezone-note strong {
+  color: rgba(255, 255, 255, 0.65);
+  font-weight: 600;
+}
+
+.schedule-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.schedule-spin {
+  animation: schedule-spin 0.9s linear infinite;
+}
+
+@keyframes schedule-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- the list ---- */
+
+.schedule-list-card {
+  padding: 22px;
+}
+
+.schedule-empty {
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.schedule-empty strong {
+  display: block;
+  color: #fff;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.schedule-empty p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.schedule-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.schedule-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.2s ease, opacity 0.2s ease;
+}
+
+.schedule-row:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.schedule-row.paused {
+  opacity: 0.55;
+}
+
+.schedule-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.schedule-row-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.schedule-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.schedule-row-text strong {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.schedule-row-text small {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12.5px;
+}
+
+.schedule-row-meta {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11.5px;
+}
+
+.schedule-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.schedule-icon-button.danger {
+  color: #f8a3a3;
+}
+
+.schedule-icon-button .rotated {
+  transform: rotate(180deg);
+}
+
+.schedule-delete-confirm {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 10px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+.schedule-runs {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}
+
+.schedule-run {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.schedule-run-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.schedule-run.status-success .schedule-run-dot {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.schedule-run.status-failed .schedule-run-dot {
+  background: #f8a3a3;
+}
+
+.schedule-run-when {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.schedule-run-status {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.schedule-run-detail {
+  color: rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- the sidebar bell ---- */
+
+.sidebar-notifications {
+  position: relative;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.sidebar-notifications + .sidebar-account {
+  margin-top: 0;
+}
+
+.sidebar-bell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.sidebar-bell:hover,
+.sidebar-bell.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-bell-count {
+  min-width: 19px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.sidebar-bell-live {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sidebar-bell-live.live-live {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.sidebar-bell-live.live-connecting {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.notification-panel {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% - 4px);
+  z-index: 40;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0c0c0c;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+}
+
+.notification-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.notification-panel-empty {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notification-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notification-panel-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notification-panel-list button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.notification-panel-list strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notification-panel-list small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.notification-panel-list span {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+}
+
+.notification-panel-list li.read strong {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 500;
+}
+
+/* ---- toasts ---- */
+
+.notification-toasts {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 36px));
+}
+
+.notification-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 13px 13px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(14, 14, 14, 0.96);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px);
+  animation: notification-toast-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes notification-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+.notification-toast-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.notification-toast-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.notification-toast-body strong {
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.notification-toast-body small {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notification-toast-close {
+  flex: none;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+}
+
+.notification-toast-close:hover {
+  color: #fff;
+}
+
+@media (max-width: 767px) {
+  .notification-toasts {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+  .schedule-row {
+    grid-template-columns: 1fr;
+  }
+  .schedule-row-actions {
+    justify-content: flex-end;
   }
 }

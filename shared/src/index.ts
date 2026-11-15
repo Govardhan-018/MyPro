@@ -61,6 +61,13 @@ export {
   type PdfTocEntry,
 } from './pdf';
 export { createPdfTextRemote, type PdfTextApi } from './pdfRemote';
+export {
+  createNotificationStream,
+  type NotificationStream,
+  type NotificationStreamOptions,
+  type RealtimeConfig,
+  type RealtimeState,
+} from './realtime';
 export type {
   AnnotationKind,
   LibraryType,

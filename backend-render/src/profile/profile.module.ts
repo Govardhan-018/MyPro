@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Injectable, Module, Patch, Post, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { SupabaseService } from '../common/supabase.service';
+import { env } from '../config/env';
 import { AuthGuard, CurrentUser, type AuthUser } from '../common/auth.guard';
 import { one } from '../common/crud';
 
@@ -31,6 +32,22 @@ export class ProfileService {
     );
   }
 
+  /**
+   * What a client needs to open a Supabase Realtime socket for its own
+   * notifications: the project URL and the *publishable* key.
+   *
+   * This is the one Supabase value a client ever receives, and deliberately
+   * so — the publishable key is designed to be public, every table it can
+   * reach is behind default-deny RLS, and the socket additionally carries the
+   * caller's own JWT. Serving it here instead of baking it into the web and
+   * Android bundles keeps the thin-client property: one configured URL, and
+   * rotating the key needs no client release.
+   */
+  realtimeConfig() {
+    const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = env();
+    return { url: SUPABASE_URL, publishable_key: SUPABASE_PUBLISHABLE_KEY };
+  }
+
   /** Heartbeat from any client — drives the "you went quiet" nudge. */
   async heartbeat(user: AuthUser, client: string) {
     const db = this.supabase.forUser(user.token);
@@ -54,6 +71,11 @@ export class ProfileService {
 @UseGuards(AuthGuard)
 export class ProfileController {
   constructor(private readonly profile: ProfileService) {}
+
+  @Get('realtime')
+  realtime() {
+    return this.profile.realtimeConfig();
+  }
 
   @Get()
   get(@CurrentUser() user: AuthUser) {

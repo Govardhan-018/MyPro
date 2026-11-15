@@ -16,26 +16,30 @@ Roadmap Phases 1–5 are essentially done, plus a thin-client re-architecture.
 
 ## ⚠️ Uncommitted right now — commit first
 
-The working tree holds **PDF → text (Phase 10)**, not yet committed:
+**PDF → text (Phase 10) is committed** as `0a296f1 PDF to JSON extractor`.
+Two things it needs that a commit cannot do:
+`supabase/migrations/0005_pdf_text_storage.sql` **must be applied to Supabase**
+before the sync half works (extraction and reading work without it; uploads just
+fail silently), and the Android deps include
+`expo-file-system@~18.0.12` — SDK 52's version, do not let it float to 58.
 
-- `shared/src/pdf.ts` (new) — platform-free core: the `PdfTextDoc` JSON shape,
-  paragraph/TOC shaping, and the lazy extraction service. `shared/src/pdfRemote.ts`
-  (new), plus `api.pdfText.*` in `shared/src/api.ts`.
-- `backend-render/src/library/pdf-text.module.ts` (new) + `app.module.ts`.
-- `supabase/migrations/0005_pdf_text_storage.sql` (new) — **must be applied to
-  Supabase before the sync half works.**
-- Web: `frontend/src/lib/pdfEngine.ts`, `lib/usePdfText.ts` (new),
-  `utils/pdfStorage.ts` (IndexedDB v2: extracted-text store),
-  `components/library/MyProDarkReader.tsx`, `BookOptionsModal.tsx`, `App.tsx`,
-  `reading-listening.css`. New dep: `pdfjs-dist` (lazy chunk, 444 KB).
-- Android: `App.tsx` rewired, new `src/theme.ts`, `src/lib/pdfTextStore.ts`,
-  `src/lib/useBookText.ts`, `src/screens/{SignInScreen,LibraryScreen,ReaderScreen}.tsx`.
-  New dep: `expo-file-system@~18.0.12` (SDK 52's version — do not let it float to 58).
+Uncommitted: **Schedules + live notifications (Phases 5 / 6.1)**
 
-`tsc` passes in frontend/android/backend-render; the web build passes. Extraction
-was verified end-to-end against a generated PDF in Node (paragraphs, hyphen
-stitching, heading split, page-number removal). The logged-in reader itself is
-untested from the sandbox.
+- `shared/src/realtime.ts` (new) — the Realtime notifications stream, shared with
+  Android; `api.profile.realtime()` in `shared/src/api.ts`; `description` added
+  to `ScheduleRow`.
+- `backend-render/src/profile/profile.module.ts` — `GET /me/realtime`.
+- `supabase/migrations/0006_realtime_notifications.sql` (new) — **also needs
+  applying**; without it the socket connects and never delivers anything.
+- Web: `lib/useSchedules.ts`, `lib/useNotifications.ts`,
+  `components/schedules/SchedulesView.tsx`, `components/NotificationToasts.tsx`
+  (all new), plus `App.tsx` (Schedules view + sidebar bell) and `index.css`.
+
+`tsc` passes in frontend/android/backend-render; the web build passes. The
+Schedules view and the toasts were rendered and checked in a browser (empty
+state, the full builder, weekday pills, toasts). Nothing signed-in was tested:
+no live schedule was created, and no Realtime message has actually been
+delivered end to end.
 
 ## Key architecture decisions made this session (differ from the original docs)
 
@@ -115,10 +119,34 @@ The extracting device is the one holding the file; everyone else reads its JSON.
 - Not done: OCR for scanned PDFs (10.4), and pdfjs runs without CMaps, so CJK /
   exotic-encoding PDFs may extract poorly.
 
+## Schedules + live notifications, as built (Phases 5 and 6.1)
+
+- **Schedules** — `frontend/src/components/schedules/SchedulesView.tsx` +
+  `lib/useSchedules.ts`, reached from the sidebar ("Schedules"). Builder
+  (daily / weekdays / monthly / once / cron), pause-resume, delete with an
+  inline confirm, and per-schedule run history from `/schedules/:id/runs`.
+  Note the API validates a **whole** schedule on PATCH, so `rowToInput()`
+  rebuilds the row before a one-field edit.
+- **Notifications** — `shared/src/realtime.ts` opens a Supabase Realtime
+  socket on `notifications`; `lib/useNotifications.ts` turns inserts into
+  toasts and feeds the sidebar bell (unread count + a live dot). Marking read
+  is optimistic and echoes to other devices over the same socket.
+- **The one architectural concession:** Realtime needs a Supabase client, so
+  `GET /me/realtime` serves the project URL + **publishable** key at runtime.
+  Nothing is baked into the bundles and the socket still carries the user's JWT,
+  so RLS decides what arrives — but it is a small walk-back of "the client holds
+  no Supabase values".
+- Fixed in passing: `.type-switch button.active` was white-on-white
+  (`--graphite` is `#ffffff`), so the selected segment's label was invisible
+  — in the Add-item modal too, not just the new view.
+- Still open in Phase 6: Web Push (6.2), FCM (8.4), and the `device_tokens`
+  fan-out TODO at `scheduler.service.ts:210`. Realtime only covers an open app.
+
 ## What's next (in order)
 
-1. **Phase 6** — Schedules UI + Supabase Realtime in-app notifications (Telegram bot was
-   dropped; the in-app chat is the channel).
+1. **Phase 6 (the rest)** — real push when the app is closed: Web Push (VAPID)
+   and the `device_tokens` fan-out. (Telegram was dropped; the in-app chat is
+   the channel.)
 2. Polish — Library item delete UI, Health delete + assistant-consent-grant UI.
 3. **Phase 7** — Gmail (needs a Google OAuth app).
 4. **Phase 8** — the rest of the Android screens. It now has sign-in, a book

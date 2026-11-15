@@ -1,4 +1,5 @@
 import type { EnvConfig } from './platform';
+import type { RealtimeConfig } from './realtime';
 import type { Auth } from './auth';
 import { assertAgentConfigured, assertApiConfigured } from './env';
 import type {
@@ -156,6 +157,12 @@ export function createApi(
       get: () => get<Record<string, unknown>>('/me'),
       update: (patchBody: Record<string, unknown>) => patch('/me', patchBody),
       heartbeat: (client = 'web') => post('/me/activity', { client }),
+      /**
+       * Connection details for the notifications socket. The publishable key
+       * is the only Supabase value a client ever holds, and it arrives at
+       * runtime rather than in the bundle.
+       */
+      realtime: () => get<RealtimeConfig>('/me/realtime'),
     },
 
     library: {

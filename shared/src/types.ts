@@ -40,6 +40,7 @@ export interface AnnotationRow {
 export interface ScheduleRow {
   id: string;
   name: string;
+  description?: string | null;
   action_type: 'notify' | 'report' | 'email' | 'chat_message';
   action_payload: Record<string, unknown>;
   channel: string;

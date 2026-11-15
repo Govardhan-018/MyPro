@@ -381,6 +381,27 @@ No server CPU spent on PDF parsing — it scales for free on the client.
 
 ---
 
+## 5b. Live notifications (implemented)
+
+`notifications` is in the `supabase_realtime` publication with
+`replica identity full` (`supabase/migrations/0006_realtime_notifications.sql`),
+so a client sees its own rows appear the moment any node writes one — the
+scheduler on Render, or the laptop agent. RLS is evaluated per subscriber, so a
+socket can only ever carry its owner's rows.
+
+Clients hold no Supabase credentials, so `GET /me/realtime` hands out the
+project URL and the **publishable** key at runtime. That key is designed to be
+public, every table behind it is default-deny RLS, and the socket additionally
+carries the caller's JWT (`realtime.setAuth`). Serving it keeps the thin-client
+property — one configured URL per client — and lets the key rotate without a
+client release.
+
+Web Push (VAPID), FCM and the `device_tokens` fan-out in
+`SchedulerService.notify` are still open: Realtime covers the app while it is
+open, nothing more.
+
+---
+
 ## 6. Gmail — multiple accounts + processing
 
 - **Connect:** Google Cloud OAuth app; per-account consent; scopes `gmail.readonly` (upgrade to `gmail.modify` only if we let the assistant archive/label). Tokens encrypted (§3).
