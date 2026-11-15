@@ -158,9 +158,9 @@ export function MyProDarkReader({
   const [currentPage, setCurrentPage] = useState<number>(book.currentPage || 128);
   const [theme, setTheme] = useState<ReaderTheme>("dark");
   const [zoomLevel, setZoomLevel] = useState<number>(100);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(
-    () => !(typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches),
-  );
+  // The panel slides over the page at every width now, so it starts closed —
+  // reading is the default state of a reader.
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<
     "toc" | "thumbnails" | "bookmarks" | "annotations"
   >("toc");
@@ -171,7 +171,9 @@ export function MyProDarkReader({
   const [fontSize, setFontSize] = useState<number>(17);
   const [lineSpacing, setLineSpacing] = useState<number>(1.7);
   const [readingWidth, setReadingWidth] = useState<number>(720);
-  const [readingMode, setReadingMode] = useState<ReadingMode>("paginated");
+  // Continuous is the default: one column you scroll top to bottom, pages
+  // loading in as you reach them. Paged mode is still a setting.
+  const [readingMode, setReadingMode] = useState<ReadingMode>("continuous");
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>(
@@ -203,6 +205,16 @@ export function MyProDarkReader({
     body: string;
     tags: string;
   } | null>(null);
+
+  // The continuous column runs from `flowStart` to `flowEnd`; the end grows as
+  // you approach the bottom, and jumping (TOC, scrubber, page box) restarts
+  // the flow at that page rather than rendering a whole book at once.
+  const [flowStart, setFlowStart] = useState<number>(book.currentPage || 1);
+  const [flowEnd, setFlowEnd] = useState<number>((book.currentPage || 1) + 3);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const bottomSentinel = useRef<HTMLDivElement>(null);
+  /** Set while we scroll the canvas ourselves, so the observer stays quiet. */
+  const programmaticScroll = useRef(false);
 
   const [activeMarker, setActiveMarker] = useState<string | null>(null);
   const [emphasis, setEmphasis] = useState<string | null>(null);
@@ -340,8 +352,11 @@ export function MyProDarkReader({
         const extracted = pdfText?.page(page);
         return {
           pageNumber: page,
-          chapterTitle: chapter?.title || book.title,
+          // A heading found on the page itself beats the outline's guess.
+          chapterTitle: extracted?.heading || chapter?.title || book.title,
           partTitle: chapter?.part,
+          blocks: extracted?.blocks,
+          runningHead: extracted?.runningHead,
           // Empty until this page is extracted; the sheet shows the state.
           paragraphs: extracted?.paragraphs ?? [],
         };
@@ -393,13 +408,93 @@ export function MyProDarkReader({
   const currentChapter = useMemo(() => chapterForPage(currentPage), [currentPage, chapterForPage]);
   const progressPercent = Math.round((currentPage / totalPages) * 100);
 
-  // Pages visible in the reading canvas (one for paginated, a small window for continuous).
+  // Pages in the canvas: one when paged, the loaded flow when continuous.
   const visiblePages = useMemo(() => {
     if (readingMode === "paginated") return [currentPage];
     const pages: number[] = [];
-    for (let p = currentPage; p <= Math.min(totalPages, currentPage + 2); p++) pages.push(p);
-    return pages;
-  }, [readingMode, currentPage, totalPages]);
+    for (let p = Math.max(1, flowStart); p <= Math.min(totalPages, flowEnd); p++) pages.push(p);
+    return pages.length ? pages : [1];
+  }, [readingMode, currentPage, flowStart, flowEnd, totalPages]);
+
+  /** Restart the continuous column at `page` (a jump, not a scroll). */
+  const flowTo = useCallback(
+    (page: number) => {
+      const target = Math.min(Math.max(1, page), totalPages);
+      setCurrentPage(target);
+      if (readingMode !== "continuous") return;
+      setFlowStart(target);
+      setFlowEnd(target + 3);
+      programmaticScroll.current = true;
+      requestAnimationFrame(() => {
+        canvasRef.current?.scrollTo({ top: 0 });
+        // Let the scroll settle before the observer is trusted again.
+        setTimeout(() => {
+          programmaticScroll.current = false;
+        }, 300);
+      });
+    },
+    [readingMode, totalPages],
+  );
+
+  /** Prepend a few pages, holding your place: growing upward moves the
+   *  content under you, so the scroll position is compensated by hand. */
+  const loadEarlier = useCallback(() => {
+    const root = canvasRef.current;
+    const before = root?.scrollHeight ?? 0;
+    const scrollTop = root?.scrollTop ?? 0;
+    setFlowStart((start) => Math.max(1, start - 4));
+    requestAnimationFrame(() => {
+      if (!root) return;
+      root.scrollTop = scrollTop + (root.scrollHeight - before);
+    });
+  }, []);
+
+  // Starting a continuous read, or switching into it, anchors on the page you
+  // were reading.
+  useEffect(() => {
+    if (readingMode !== "continuous") return;
+    setFlowStart((start) => (currentPage < start || currentPage > flowEnd ? currentPage : start));
+    setFlowEnd((end) => Math.max(end, currentPage + 3));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readingMode]);
+
+  // Load the next pages as the bottom of the column comes into view.
+  useEffect(() => {
+    if (!isOpen || readingMode !== "continuous") return;
+    const sentinel = bottomSentinel.current;
+    const root = canvasRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+        setFlowEnd((end) => (end >= totalPages ? end : Math.min(totalPages, end + 4)));
+      },
+      { root, rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [isOpen, readingMode, totalPages, flowEnd]);
+
+  // Which page you are actually looking at, so the dock, chapter crumb and
+  // progress follow the scroll rather than lagging behind it.
+  useEffect(() => {
+    if (!isOpen || readingMode !== "continuous") return;
+    const root = canvasRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (programmaticScroll.current) return;
+        const top = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        const page = Number((top?.target as HTMLElement | undefined)?.dataset.sheetPage);
+        if (page) setCurrentPage(page);
+      },
+      { root, threshold: [0.1, 0.5], rootMargin: "-20% 0px -60% 0px" },
+    );
+    root.querySelectorAll<HTMLElement>("[data-sheet-page]").forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [isOpen, readingMode, visiblePages.length]);
 
   // ----- Bookmarks -----
   const isCurrentPageBookmarked = bookmarks.some((b) => b.page === currentPage);
@@ -526,7 +621,9 @@ export function MyProDarkReader({
   // ----- Jump to an annotation's original passage -----
   const jumpToAnnotation = (a: Annotation) => {
     setActiveMarker(a.id);
-    if (a.page !== currentPage && readingMode === "paginated") setCurrentPage(a.page);
+    // Either mode needs the page actually rendered before we can scroll to it.
+    const loaded = readingMode === "continuous" && a.page >= flowStart && a.page <= flowEnd;
+    if (a.page !== currentPage && !loaded) flowTo(a.page);
     setPendingScroll(`${a.page}|${a.paragraph}|${a.id}`);
     if (isNarrow()) setIsSidebarOpen(false);
   };
@@ -534,17 +631,25 @@ export function MyProDarkReader({
   useEffect(() => {
     if (!pendingScroll) return;
     const [page, para, id] = pendingScroll.split("|");
+    let attempts = 0;
+    let timer = 0;
+    // The target page may still be loading into the flow, so look for the
+    // paragraph a few times before giving up rather than once at 120ms.
     const run = () => {
       const el = paraRefs.current.get(`${page}-${para}`);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         setEmphasis(`${page}-${para}`);
         setTimeout(() => setEmphasis(null), 1700);
+      } else if (attempts < 8) {
+        attempts += 1;
+        timer = window.setTimeout(run, 120);
+        return;
       }
       setActiveMarker(id);
       setPendingScroll(null);
     };
-    const timer = window.setTimeout(run, 120);
+    timer = window.setTimeout(run, 120);
     return () => window.clearTimeout(timer);
   }, [pendingScroll]);
 
@@ -629,6 +734,62 @@ export function MyProDarkReader({
     );
   };
 
+  /** One body paragraph, with its annotation markers. Shared by the block
+   *  renderer (real PDFs) and the flat renderer (sample pages). */
+  const renderParagraph = (
+    page: number,
+    pText: string,
+    idx: number,
+    content: BookPageContent,
+  ) => {
+const key = `${page}-${idx}`;
+    const paraAnns = annotations.filter((a) => a.page === page && a.paragraph === idx);
+    return (
+      <div
+        className={`sheet-para-row ${emphasis === key ? "emphasized" : ""}`}
+        key={key}
+      >
+        <p
+          className="sheet-body-text"
+          data-page={page}
+          data-para={idx}
+          ref={(el) => {
+            if (el) paraRefs.current.set(key, el);
+            else paraRefs.current.delete(key);
+          }}
+        >
+          {renderParagraphContent(pText, page, idx, idx === 0 && !content.quote)}
+        </p>
+        {paraAnns.length > 0 && (
+          <div className="para-marker-gutter" aria-hidden={false}>
+            {paraAnns.map((a, markerIndex) => {
+              const meta = ANNOTATION_META[a.kind];
+              return (
+                <button
+                  type="button"
+                  key={a.id}
+                  className={`annotation-marker marker-${a.color || meta.color} ${
+                    activeMarker === a.id ? "active" : ""
+                  }`}
+                  style={{ marginTop: markerIndex === 0 ? 0 : -4 }}
+                  title={`${meta.label} · page ${a.page}`}
+                  onClick={() => {
+                    setActiveMarker(a.id);
+                    setEmphasis(key);
+                    setTimeout(() => setEmphasis(null), 1700);
+                  }}
+                  aria-label={`${meta.label} marker on page ${a.page}`}
+                >
+                  <meta.Icon size={11} />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   /** What to say on a page whose text is not there (yet, or at all). */
   const pageStatusMessage = (page: number): string => {
     if (pdfStatus === "error") {
@@ -658,9 +819,17 @@ export function MyProDarkReader({
 
   const renderSheet = (page: number) => {
     const content = getPageContent(page);
+    // Scrolling through a chapter should not re-announce it on every page;
+    // the heading appears only where the chapter actually changes.
+    const previous = page > 1 ? getPageContent(page - 1) : null;
+    const showHeading =
+      readingMode === "paginated" ||
+      !previous ||
+      previous.chapterTitle !== content.chapterTitle;
     return (
       <article
         key={page}
+        data-sheet-page={page}
         className={`reader-page-sheet ${theme}`}
         style={{ fontSize: `${fontSize}px`, lineHeight: lineSpacing }}
       >
@@ -672,10 +841,12 @@ export function MyProDarkReader({
           <span className="sheet-page-marker">{page}</span>
         </div>
 
-        <header className="sheet-heading">
-          <h2>{content.chapterTitle}</h2>
-          <div className="sheet-divider" />
-        </header>
+        {showHeading && (
+          <header className="sheet-heading">
+            <h2>{content.chapterTitle}</h2>
+            <div className="sheet-divider" />
+          </header>
+        )}
 
         {content.quote && (
           <blockquote className="sheet-quote-callout">
@@ -691,56 +862,38 @@ export function MyProDarkReader({
           </div>
         )}
 
+        {content.blocks?.length ? (
+          <div className="sheet-paragraphs">
+            {(() => {
+              // Paragraph indices must stay aligned with `paragraphs`, since
+              // annotations are anchored to that index.
+              let paragraphIndex = -1;
+              return content.blocks.map((block, blockIndex) => {
+                if (block.kind === "heading" || block.kind === "subheading") {
+                  const Tag = block.level === 1 ? "h3" : "h4";
+                  return (
+                    <Tag className={`sheet-block-${block.kind}`} key={`b-${blockIndex}`}>
+                      {block.text}
+                    </Tag>
+                  );
+                }
+                if (block.kind === "caption") {
+                  return (
+                    <p className="sheet-block-caption" key={`b-${blockIndex}`}>
+                      {block.text}
+                    </p>
+                  );
+                }
+                paragraphIndex += 1;
+                return renderParagraph(page, block.text, paragraphIndex, content);
+              });
+            })()}
+          </div>
+        ) : (
         <div className="sheet-paragraphs">
-          {content.paragraphs.map((pText, idx) => {
-            const key = `${page}-${idx}`;
-            const paraAnns = annotations.filter((a) => a.page === page && a.paragraph === idx);
-            return (
-              <div
-                className={`sheet-para-row ${emphasis === key ? "emphasized" : ""}`}
-                key={key}
-              >
-                <p
-                  className="sheet-body-text"
-                  data-page={page}
-                  data-para={idx}
-                  ref={(el) => {
-                    if (el) paraRefs.current.set(key, el);
-                    else paraRefs.current.delete(key);
-                  }}
-                >
-                  {renderParagraphContent(pText, page, idx, idx === 0 && !content.quote)}
-                </p>
-                {paraAnns.length > 0 && (
-                  <div className="para-marker-gutter" aria-hidden={false}>
-                    {paraAnns.map((a, markerIndex) => {
-                      const meta = ANNOTATION_META[a.kind];
-                      return (
-                        <button
-                          type="button"
-                          key={a.id}
-                          className={`annotation-marker marker-${a.color || meta.color} ${
-                            activeMarker === a.id ? "active" : ""
-                          }`}
-                          style={{ marginTop: markerIndex === 0 ? 0 : -4 }}
-                          title={`${meta.label} · page ${a.page}`}
-                          onClick={() => {
-                            setActiveMarker(a.id);
-                            setEmphasis(key);
-                            setTimeout(() => setEmphasis(null), 1700);
-                          }}
-                          aria-label={`${meta.label} marker on page ${a.page}`}
-                        >
-                          <meta.Icon size={11} />
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {content.paragraphs.map((pText, idx) => renderParagraph(page, pText, idx, content))}
         </div>
+        )}
 
         {content.diagram && (
           <div className="sheet-diagram-container">
@@ -1025,7 +1178,7 @@ export function MyProDarkReader({
                     type="button"
                     key={chap.id}
                     className={`toc-item ${currentPage === chap.page ? "current" : ""} ${currentPage >= chap.page ? "visited" : ""}`}
-                    onClick={() => setCurrentPage(chap.page)}
+                    onClick={() => { flowTo(chap.page); if (isNarrow()) setIsSidebarOpen(false); }}
                   >
                     <div className="toc-item-info">
                       <strong>{chap.title}</strong>
@@ -1046,7 +1199,7 @@ export function MyProDarkReader({
                       type="button"
                       key={pageNum}
                       className={`thumbnail-card ${pageNum === currentPage ? "active" : ""}`}
-                      onClick={() => setCurrentPage(pageNum)}
+                      onClick={() => { flowTo(pageNum); if (isNarrow()) setIsSidebarOpen(false); }}
                     >
                       <div className="thumbnail-paper">
                         <span className="thumb-lines" />
@@ -1073,7 +1226,7 @@ export function MyProDarkReader({
                       .sort((a, b) => a.page - b.page)
                       .map((bm) => (
                         <div key={bm.id} className="bookmark-item-row">
-                          <button type="button" className="bookmark-jump-btn" onClick={() => setCurrentPage(bm.page)}>
+                          <button type="button" className="bookmark-jump-btn" onClick={() => { flowTo(bm.page); if (isNarrow()) setIsSidebarOpen(false); }}>
                             <BookmarkCheck size={14} className="bm-icon" />
                             <div>
                               <strong>Page {bm.page}</strong>
@@ -1134,7 +1287,7 @@ export function MyProDarkReader({
                     ? [...bookmarks]
                         .sort((a, b) => a.page - b.page)
                         .map((bm) => (
-                          <button key={bm.id} className="annotation-entry" onClick={() => setCurrentPage(bm.page)}>
+                          <button key={bm.id} className="annotation-entry" onClick={() => { flowTo(bm.page); if (isNarrow()) setIsSidebarOpen(false); }}>
                             <span className="entry-dot marker-yellow">
                               <Bookmark size={11} />
                             </span>
@@ -1185,7 +1338,7 @@ export function MyProDarkReader({
         </aside>
 
         {/* ================= MAIN READING CANVAS ================= */}
-        <main className="reader-main-canvas">
+        <main className="reader-main-canvas" ref={canvasRef}>
           {readingMode === "paginated" && (
             <button
               type="button"
@@ -1202,7 +1355,27 @@ export function MyProDarkReader({
             className={`reader-page-wrapper ${readingMode}`}
             style={{ maxWidth: readingWidth, transform: readingMode === "paginated" ? `scale(${zoomLevel / 100})` : undefined }}
           >
+            {readingMode === "continuous" && flowStart > 1 && (
+              <button type="button" className="reader-load-earlier" onClick={loadEarlier}>
+                <ChevronLeft size={14} />
+                Load earlier pages
+              </button>
+            )}
+
             {visiblePages.map((page) => renderSheet(page))}
+
+            {readingMode === "continuous" && (
+              <div className="reader-flow-foot" ref={bottomSentinel}>
+                {flowEnd < totalPages ? (
+                  <span className="reader-flow-loading">
+                    <span className="reader-flow-dot" aria-hidden="true" />
+                    Loading page {Math.min(totalPages, flowEnd + 1)}…
+                  </span>
+                ) : (
+                  <span className="reader-flow-end">End of {book.title}</span>
+                )}
+              </div>
+            )}
           </div>
 
           {readingMode === "paginated" && (
@@ -1222,7 +1395,7 @@ export function MyProDarkReader({
       {/* ================= BOTTOM DOCK ================= */}
       <footer className="reader-bottom-dock glass-card">
         <div className="dock-left">
-          <button type="button" className="dock-icon-btn" onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1} title="Previous Page">
+          <button type="button" className="dock-icon-btn" onClick={() => flowTo(currentPage - 1)} disabled={currentPage <= 1} title="Previous Page">
             <ChevronLeft size={18} />
           </button>
           <div className="page-indicator-pill">
@@ -1234,12 +1407,12 @@ export function MyProDarkReader({
               value={currentPage}
               onChange={(e) => {
                 const val = parseInt(e.target.value);
-                if (!isNaN(val) && val >= 1 && val <= totalPages) setCurrentPage(val);
+                if (!isNaN(val) && val >= 1 && val <= totalPages) flowTo(val);
               }}
             />
             <span className="total-of">of {totalPages}</span>
           </div>
-          <button type="button" className="dock-icon-btn" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} title="Next Page">
+          <button type="button" className="dock-icon-btn" onClick={() => flowTo(currentPage + 1)} disabled={currentPage >= totalPages} title="Next Page">
             <ChevronRight size={18} />
           </button>
         </div>
@@ -1251,7 +1424,7 @@ export function MyProDarkReader({
               min={1}
               max={totalPages}
               value={currentPage}
-              onChange={(e) => setCurrentPage(Number(e.target.value))}
+              onChange={(e) => flowTo(Number(e.target.value))}
               className="reader-scrubber-slider"
             />
             <div className="scrubber-fill" style={{ width: `${progressPercent}%` }} />

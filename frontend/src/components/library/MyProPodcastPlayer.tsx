@@ -25,6 +25,8 @@ import {
   Video,
 } from "lucide-react";
 import type { LibraryItem } from "../../types/library";
+import { extractVideoId } from "../../lib/youtube";
+import { useYouTubePlayer } from "../../lib/useYouTubePlayer";
 
 function YoutubeIcon({ size = 16, className = "" }: { size?: number; className?: string }) {
   return (
@@ -67,7 +69,8 @@ export function MyProPodcastPlayer({
   colorMode = false,
 }: MyProPodcastPlayerProps) {
   // Playback state
-  const totalDuration = podcast.durationSeconds || 3852; // Default 1h 04m 12s
+  const [detectedDuration, setDetectedDuration] = useState<number>(0);
+  const totalDuration = detectedDuration || podcast.durationSeconds || 3852;
   const [currentTime, setCurrentTime] = useState<number>(
     podcast.currentTimeSeconds || 1475, // Default 24m 35s
   );
@@ -123,26 +126,39 @@ export function MyProPodcastPlayer({
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // Playback tick
+  const videoId = extractVideoId(youtubeUrl);
+
+  // Real playback. The clock, the scrubber and the speed control all describe
+  // what the YouTube player is actually doing — this used to be a setInterval
+  // counting seconds while nothing played.
+  const playback = useYouTubePlayer({
+    videoId,
+    startAt: podcast.currentTimeSeconds || 0,
+    rate: playbackSpeed,
+    onEnded: () => setIsPlaying(false),
+  });
+
+  // Mirror the player's state into the existing UI state.
   useEffect(() => {
-    if (isPlaying) {
-      timerRef.current = window.setInterval(() => {
-        setCurrentTime((prev) => {
-          const next = prev + playbackSpeed;
-          if (next >= totalDuration) {
-            setIsPlaying(false);
-            return totalDuration;
-          }
-          return next;
-        });
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isPlaying, playbackSpeed, totalDuration]);
+    setIsPlaying(playback.playing);
+  }, [playback.playing]);
+
+  useEffect(() => {
+    if (playback.ready) setCurrentTime(playback.currentTime);
+  }, [playback.currentTime, playback.ready]);
+
+  // YouTube knows the real length; the stored one is a guess until it loads.
+  useEffect(() => {
+    if (playback.duration > 0) setDetectedDuration(playback.duration);
+  }, [playback.duration]);
+
+  useEffect(() => {
+    playback.setRate(playbackSpeed);
+  }, [playbackSpeed, playback]);
+
+  useEffect(() => {
+    playback.setVolume(volume, isMuted);
+  }, [volume, isMuted, playback]);
 
   // Synchronize progress to parent on time change
   useEffect(() => {
@@ -158,12 +174,12 @@ export function MyProPodcastPlayer({
 
   // Skip handlers
   const handleSkipBackward = () => {
-    setCurrentTime((t) => Math.max(0, t - 15));
+    playback.skip(-15);
     triggerToast("Skipped back 15s");
   };
 
   const handleSkipForward = () => {
-    setCurrentTime((t) => Math.min(totalDuration, t + 15));
+    playback.skip(15);
     triggerToast("Skipped forward 15s");
   };
 
@@ -202,6 +218,7 @@ export function MyProPodcastPlayer({
   // Manual Sync Save
   const handleApplyManualSync = () => {
     const totalSec = Math.max(0, Math.min(totalDuration, syncMinutes * 60 + syncSeconds));
+    playback.seekTo(totalSec);
     setCurrentTime(totalSec);
     setShowManualSync(false);
     triggerToast(`Progress updated to ${formatTime(totalSec)}`);
@@ -236,14 +253,6 @@ export function MyProPodcastPlayer({
     Math.max(0, Math.round((currentTime / totalDuration) * 100)),
   );
   const remainingSeconds = totalDuration - currentTime;
-
-  // Extract embed video ID from YouTube URL
-  const extractVideoId = (url: string) => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return match && match[2].length === 11 ? match[2] : "dQw4w9WgXcQ";
-  };
-  const videoId = extractVideoId(youtubeUrl);
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -373,21 +382,22 @@ export function MyProPodcastPlayer({
         ) : (
           /* ================= PLAYER VIEW ================= */
           <div className="podcast-player-content">
-            {/* Main Stage: Artwork / Embedded Player */}
+            {/* Main Stage: Artwork / Embedded Player.
+                One player instance serves both modes — "Audio Only" shrinks it
+                rather than unmounting it, so switching never interrupts what
+                you are listening to. */}
             <div className="player-stage">
-              {playMode === "embedded" ? (
-                <div className="embedded-youtube-frame">
-                  <iframe
-                    src={`https://www.youtube-nocookie.com/embed/${videoId}?start=${Math.round(
-                      currentTime,
-                    )}&autoplay=1&enablejsapi=1`}
-                    title={episodeTitle}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    className="yt-iframe"
-                  />
-                </div>
-              ) : (
+              <div
+                className={`yt-player-mount ${playMode === "embedded" ? "visible" : "audio-only"}`}
+                ref={playback.containerRef}
+                aria-hidden={playMode !== "embedded"}
+              />
+              {playback.error && playMode !== "embedded" && (
+                <p className="player-error" role="alert">
+                  {playback.error}
+                </p>
+              )}
+              {playMode === "embedded" ? null : (
                 <div className="vinyl-artwork-display">
                   <div
                     className={`artwork-container ${isPlaying ? "playing" : ""}`}
@@ -427,7 +437,7 @@ export function MyProPodcastPlayer({
                   min={0}
                   max={totalDuration}
                   value={Math.round(currentTime)}
-                  onChange={(e) => setCurrentTime(Number(e.target.value))}
+                  onChange={(e) => playback.seekTo(Number(e.target.value))}
                   className="timeline-slider"
                 />
                 <div
@@ -474,7 +484,7 @@ export function MyProPodcastPlayer({
               <button
                 type="button"
                 className="master-play-btn"
-                onClick={() => setIsPlaying((p) => !p)}
+                onClick={playback.toggle}
                 title={isPlaying ? "Pause" : "Play inside MyPro"}
               >
                 {isPlaying ? (
@@ -532,7 +542,7 @@ export function MyProPodcastPlayer({
                   className={`primary-button action-btn ${
                     isPlaying ? "active-listening" : ""
                   }`}
-                  onClick={() => setIsPlaying((p) => !p)}
+                  onClick={playback.toggle}
                 >
                   {isPlaying ? (
                     <>

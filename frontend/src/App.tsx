@@ -80,8 +80,10 @@ import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
 import { NotificationToasts } from "./components/NotificationToasts";
+import { MobileNavSheet } from "./components/MobileNavSheet";
 import { isApiConfigured } from "./lib/env";
 import { storePdfLocally } from "./utils/pdfStorage";
+import { extractVideoId, fetchYouTubeMeta } from "./lib/youtube";
 import { readPageCount } from "./lib/pdfEngine";
 import {
   AgentOfflineError,
@@ -95,7 +97,8 @@ import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from
 import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
-import { useNotifications } from "./lib/useNotifications";
+import { useNotifications, type NotificationsState } from "./lib/useNotifications";
+import { browserTimezone, useProfile } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 import {
   entrySource,
@@ -2446,6 +2449,7 @@ const emptyAddForm = {
   duration: "",
   timestamp: "",
   fileName: "",
+  coverUrl: "",
 };
 
 function LibraryView({
@@ -2474,6 +2478,10 @@ function LibraryView({
   const [addType, setAddType] = useState<AddKind>("Digital Book");
   /** The PDF picked in the add form, kept until the item exists to key it by. */
   const pendingPdfRef = useRef<File | null>(null);
+  /** Set while a pasted YouTube link is being looked up. */
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupNote, setLookupNote] = useState<string | null>(null);
+  const lookupToken = useRef(0);
   const [form, setForm] = useState(emptyAddForm);
   const [addingItem, setAddingItem] = useState(false);
   const [toast, setToast] = useState("");
@@ -2492,6 +2500,36 @@ function LibraryView({
     if (parts.some(Number.isNaN) || parts.length === 0) return 0;
     return parts.reduce((total, part) => total * 60 + part, 0);
   };
+
+  /**
+   * Fill the episode in from the link. YouTube's oEmbed endpoint gives the
+   * title, the channel and the artwork without an API key; the length is not
+   * in oEmbed, so the player writes it back the first time you play.
+   * Category and description stay yours.
+   */
+  const lookUpYouTube = useCallback(
+    async (url: string) => {
+      if (!extractVideoId(url)) return;
+      const token = ++lookupToken.current;
+      setLookingUp(true);
+      setLookupNote(null);
+      const meta = await fetchYouTubeMeta(url);
+      if (token !== lookupToken.current) return; // a newer paste won
+      setLookingUp(false);
+      if (!meta) {
+        setLookupNote("Couldn't read that link — fill the details in yourself.");
+        return;
+      }
+      setForm((current) => ({
+        ...current,
+        title: current.title.trim() || meta.title,
+        channel: current.channel.trim() || meta.channel,
+        coverUrl: meta.thumbnail,
+      }));
+      setLookupNote(`Found “${meta.title}”. Length fills in when you first play it.`);
+    },
+    [],
+  );
 
   const addLibraryItem = async () => {
     const tone =
@@ -2538,6 +2576,7 @@ function LibraryView({
       if (base.progress > 0) base.status = "In Progress";
     } else if (addType === "Podcast") {
       base.youtubeUrl = form.url.trim();
+      if (form.coverUrl) base.image = form.coverUrl;
       base.podcastName = form.channel.trim() || "Podcast";
       base.episodeTitle = title;
       base.durationSeconds = parseTimestamp(form.duration) || 3600;
@@ -2951,7 +2990,11 @@ function LibraryView({
                   <ExternalLink size={15} />
                   <input
                     value={form.url}
-                    onChange={(event) => setField("url", event.target.value)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setField("url", value);
+                      if (addType === "Podcast") void lookUpYouTube(value);
+                    }}
                     placeholder={
                       addType === "Podcast"
                         ? "Paste a YouTube link"
@@ -2959,7 +3002,12 @@ function LibraryView({
                     }
                   />
                 </div>
-              </label>
+                {addType === "Podcast" && (lookingUp || lookupNote) && (
+                  <span className="lookup-note">
+                    {lookingUp ? "Reading the link…" : lookupNote}
+                  </span>
+                )}
+                </label>
             )}
 
             <label className="field-label">
@@ -4254,8 +4302,10 @@ function SettingsView({
   books,
   onUpdateBookStorage,
   colorMode,
+  onToggleColor,
   onSignOut,
   userEmail,
+  notifications,
 }: {
   books: LibraryItem[];
   onUpdateBookStorage: (
@@ -4265,10 +4315,30 @@ function SettingsView({
     lastSyncedAt?: string,
   ) => void;
   colorMode: boolean;
+  onToggleColor: () => void;
   onSignOut: () => void;
   userEmail: string | null;
+  notifications: NotificationsState;
 }) {
   const [showStorage, setShowStorage] = useState(false);
+  const [open, setOpen] = useState<"profile" | "notifications" | "privacy" | null>(null);
+  const profile = useProfile(true);
+  const [name, setName] = useState("");
+  const [timezone, setTimezone] = useState("");
+  const [savedNote, setSavedNote] = useState(false);
+
+  // Fill the fields once the server's copy arrives.
+  useEffect(() => {
+    if (!profile.loaded) return;
+    setName(profile.profile.display_name);
+    setTimezone(profile.profile.timezone);
+  }, [profile.loaded, profile.profile.display_name, profile.profile.timezone]);
+
+  const saveProfile = async () => {
+    await profile.save({ display_name: name.trim(), timezone: timezone.trim() || browserTimezone() });
+    setSavedNote(true);
+    setTimeout(() => setSavedNote(false), 2200);
+  };
 
   if (showStorage) {
     return (
@@ -4283,8 +4353,15 @@ function SettingsView({
     );
   }
 
+  const liveLabel =
+    notifications.live === "live"
+      ? "Connected"
+      : notifications.live === "connecting"
+        ? "Connecting…"
+        : "Not connected";
+
   return (
-    <div className="page-content foundation-view">
+    <div className="page-content foundation-view settings-view">
       <header className="page-heading">
         <div>
           <div className="eyebrow muted-eyebrow">SETTINGS</div>
@@ -4292,25 +4369,159 @@ function SettingsView({
           <p>Manage connected sources, preferences, and privacy.</p>
         </div>
       </header>
+
+      {profile.error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {profile.error}
+        </div>
+      )}
+
       <div className="glass-card settings-card">
+        {/* ---- Profile & preferences ---- */}
+        <button
+          onClick={() => setOpen((current) => (current === "profile" ? null : "profile"))}
+          aria-expanded={open === "profile"}
+        >
+          <span>Profile &amp; preferences</span>
+          <small>{profile.loading ? "Loading…" : name || userEmail || "Set up"}</small>
+          <ChevronRight size={17} className={open === "profile" ? "rotated" : ""} />
+        </button>
+        {open === "profile" && (
+          <div className="settings-panel">
+            <label className="field-label">
+              DISPLAY NAME
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="What should your companion call you?"
+              />
+            </label>
+            <label className="field-label">
+              TIME ZONE
+              <input
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+                placeholder={browserTimezone()}
+              />
+            </label>
+            <p className="settings-hint">
+              Schedules and briefs are timed against this. Your browser says{" "}
+              <strong>{browserTimezone()}</strong>.
+            </p>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+                checked={colorMode}
+                onChange={() => {
+                  onToggleColor();
+                  void profile.save({ color_mode: !colorMode });
+                }}
+              />
+              <span>
+                <strong>Color Mode</strong>
+                <small>Accents warm up across the app. Saved to your profile.</small>
+              </span>
+            </label>
+            <div className="settings-panel-actions">
+              {savedNote && <span className="settings-saved">Saved</span>}
+              <button className="primary-button" onClick={saveProfile} disabled={profile.saving}>
+                {profile.saving ? "Saving…" : "Save profile"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ---- Notifications ---- */}
+        <button
+          onClick={() =>
+            setOpen((current) => (current === "notifications" ? null : "notifications"))
+          }
+          aria-expanded={open === "notifications"}
+        >
+          <span>Notifications</span>
+          <small>
+            {liveLabel}
+            {notifications.unread > 0 ? ` · ${notifications.unread} unread` : ""}
+          </small>
+          <ChevronRight size={17} className={open === "notifications" ? "rotated" : ""} />
+        </button>
+        {open === "notifications" && (
+          <div className="settings-panel">
+            <div className="settings-status-row">
+              <span className={`settings-status-dot live-${notifications.live}`} aria-hidden="true" />
+              <div>
+                <strong>In-app notifications — {liveLabel}</strong>
+                <small>
+                  Scheduled briefs and your companion’s nudges arrive the moment they are
+                  written, over Supabase Realtime.
+                </small>
+              </div>
+            </div>
+            <div className="settings-panel-actions">
+              <button
+                className="secondary-button"
+                onClick={() => void notifications.markAllRead()}
+                disabled={notifications.unread === 0}
+              >
+                Mark all read
+              </button>
+              <button className="secondary-button" onClick={notifications.reload}>
+                Refresh
+              </button>
+            </div>
+            <p className="settings-hint">
+              <strong>Not built yet:</strong> push when the app is closed (web push and
+              Android FCM). Until then notifications reach you while MyPro is open, and
+              everything is waiting here when you come back.
+            </p>
+          </div>
+        )}
+
+        {/* ---- Storage ---- */}
         <button onClick={() => setShowStorage(true)}>
           <span>Storage &amp; sync</span>
           <small>Manage</small>
           <ChevronRight size={17} />
         </button>
-        {[
-          "Profile & preferences",
-          "Notifications",
-          "Connected calendars",
-          "Privacy & security",
-        ].map((x, i) => (
-          <button key={x}>
-            <span>{x}</span>
-            <small>{i === 3 ? "Protected" : "Configure"}</small>
-            <ChevronRight size={17} />
-          </button>
-        ))}
+
+        {/* ---- Privacy ---- */}
+        <button
+          onClick={() => setOpen((current) => (current === "privacy" ? null : "privacy"))}
+          aria-expanded={open === "privacy"}
+        >
+          <span>Privacy &amp; security</span>
+          <small>Protected</small>
+          <ChevronRight size={17} className={open === "privacy" ? "rotated" : ""} />
+        </button>
+        {open === "privacy" && (
+          <div className="settings-panel">
+            <ul className="settings-facts">
+              <li>
+                <strong>Your rows are yours.</strong> Every table is default-deny with
+                row-level security, so a query can only ever return your own data.
+              </li>
+              <li>
+                <strong>Health needs consent.</strong> The assistant cannot read health
+                records without a time-boxed grant, enforced in the database rather than in
+                app code.
+              </li>
+              <li>
+                <strong>The model key never leaves your laptop.</strong> Chat runs on the
+                agent at home; the always-on server brokers but never sees it.
+              </li>
+              <li>
+                <strong>PDFs stay on the device you added them on.</strong> Only the
+                extracted text is synced, so your files are not uploaded anywhere.
+              </li>
+            </ul>
+            <p className="settings-hint">
+              <strong>Planned:</strong> reviewing and revoking assistant health grants from
+              here, and a one-click export of everything MyPro holds.
+            </p>
+          </div>
+        )}
       </div>
+
       <div className="glass-card settings-card">
         <button className="settings-signout" onClick={onSignOut}>
           <LogOut size={17} />
@@ -4846,8 +5057,10 @@ function AppShell({
           books={libraryItems}
           onUpdateBookStorage={updateBookStorage}
           colorMode={colorMode}
+          onToggleColor={onToggleColor}
           onSignOut={onSignOut}
           userEmail={userEmail}
+          notifications={notifications}
         />
       );
     return null;
@@ -4883,72 +5096,6 @@ function AppShell({
             </button>
           ))}
         </nav>
-        {userEmail && (
-          <div className="sidebar-notifications">
-            <button
-              type="button"
-              className={`sidebar-bell ${bellOpen ? "active" : ""}`}
-              onClick={() => setBellOpen((open) => !open)}
-              aria-expanded={bellOpen}
-              aria-label={
-                notifications.unread
-                  ? `Notifications, ${notifications.unread} unread`
-                  : "Notifications"
-              }
-            >
-              <Bell size={16} />
-              <span>Notifications</span>
-              {notifications.unread > 0 && (
-                <span className="sidebar-bell-count">{notifications.unread}</span>
-              )}
-              <span
-                className={`sidebar-bell-live live-${notifications.live}`}
-                title={
-                  notifications.live === "live"
-                    ? "Live"
-                    : notifications.live === "connecting"
-                      ? "Connecting…"
-                      : "Not live — reload to reconnect"
-                }
-                aria-hidden="true"
-              />
-            </button>
-
-            {bellOpen && (
-              <div className="notification-panel">
-                <div className="notification-panel-head">
-                  <span className="section-kicker">NOTIFICATIONS</span>
-                  {notifications.unread > 0 && (
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => void notifications.markAllRead()}
-                    >
-                      Mark all read
-                    </button>
-                  )}
-                </div>
-                {!notifications.items.length ? (
-                  <p className="notification-panel-empty">
-                    Nothing yet. Scheduled briefs and your companion’s nudges land here.
-                  </p>
-                ) : (
-                  <ul className="notification-panel-list">
-                    {notifications.items.slice(0, 12).map((item) => (
-                      <li key={item.id} className={item.read_at ? "read" : "unread"}>
-                        <button type="button" onClick={() => void notifications.markRead(item.id)}>
-                          <strong>{item.title}</strong>
-                          {item.body && <small>{item.body}</small>}
-                          <span>{new Date(item.created_at).toLocaleString()}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        )}
         {userEmail && (
           <div className="sidebar-account">
             <span className="sidebar-account-email" title={userEmail}>
@@ -5011,6 +5158,72 @@ function AppShell({
         </div>
       </div>
       <div className="global-controls">
+        {userEmail && (
+          <div className="notifications-control">
+            <button
+              type="button"
+              className={`notifications-fab ${bellOpen ? "active" : ""}`}
+              onClick={() => setBellOpen((open) => !open)}
+              aria-expanded={bellOpen}
+              aria-label={
+                notifications.unread
+                  ? `Notifications, ${notifications.unread} unread`
+                  : "Notifications"
+              }
+            >
+              <Bell size={16} />
+              <span>Notifications</span>
+              {notifications.unread > 0 && (
+                <span className="notifications-fab-count">{notifications.unread}</span>
+              )}
+              <span
+                className={`notifications-fab-live live-${notifications.live}`}
+                title={
+                  notifications.live === "live"
+                    ? "Live"
+                    : notifications.live === "connecting"
+                      ? "Connecting…"
+                      : "Not live — reload to reconnect"
+                }
+                aria-hidden="true"
+              />
+            </button>
+
+            {bellOpen && (
+              <div className="notification-panel">
+                <div className="notification-panel-head">
+                  <span className="section-kicker">NOTIFICATIONS</span>
+                  {notifications.unread > 0 && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void notifications.markAllRead()}
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                {!notifications.items.length ? (
+                  <p className="notification-panel-empty">
+                    Nothing yet. Scheduled briefs and your companion’s nudges land here.
+                  </p>
+                ) : (
+                  <ul className="notification-panel-list">
+                    {notifications.items.slice(0, 12).map((item) => (
+                      <li key={item.id} className={item.read_at ? "read" : "unread"}>
+                        <button type="button" onClick={() => void notifications.markRead(item.id)}>
+                          <strong>{item.title}</strong>
+                          {item.body && <small>{item.body}</small>}
+                          <span>{new Date(item.created_at).toLocaleString()}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <button
           className={`settings-fab ${view === "settings" ? "active" : ""}`}
           onClick={() => navigate("settings")}
@@ -5029,41 +5242,17 @@ function AppShell({
           <i />
         </button>
       </div>
-      <nav className="bottom-nav">
-        {(["today", "calendar", "assistant", "library", "health"] as const).map((id) => {
-          const item = navItems.find((navItem) => navItem.id === id)!;
-          const Icon = item.icon;
-          const label = {
-            today: "Today",
-            calendar: "Calendar",
-            assistant: "Assistant",
-            library: "Library",
-            health: "Health",
-          }[id];
-          return id === "assistant" ? (
-            <button
-              key={id}
-              className={`assistant-tab ${view === id ? "active" : ""}`}
-              onClick={() => navigate(id)}
-              aria-label="AI Assistant"
-            >
-              <span>
-                <Sparkles size={20} />
-              </span>
-            </button>
-          ) : (
-            <button
-              key={id}
-              className={view === id ? "active" : ""}
-              onClick={() => navigate(id)}
-              aria-current={view === id ? "page" : undefined}
-            >
-              <Icon size={20} />
-              <span>{label}</span>
-            </button>
-          );
-        })}
-      </nav>
+      <MobileNavSheet
+        items={navItems}
+        tabIds={["today", "calendar", "assistant", "library", "health"]}
+        view={view}
+        onNavigate={(id) => navigate(id as View)}
+        colorMode={colorMode}
+        onToggleColor={onToggleColor}
+        unreadCount={notifications.unread}
+        onOpenNotifications={() => setBellOpen(true)}
+        onSignOut={onSignOut}
+      />
 
       {reader && (
         <MyProDarkReader
@@ -5133,6 +5322,14 @@ export default function App() {
 
   // Presence heartbeat — only meaningful with a real session + core API.
   useActivityHeartbeat(authenticated && configured);
+
+  // Color Mode is stored on the profile, so it follows you between devices.
+  const rootProfile = useProfile(authenticated && configured);
+  useEffect(() => {
+    if (rootProfile.loaded) setColorMode(rootProfile.profile.color_mode);
+    // Only on the first read: after that this device's toggle is the truth.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootProfile.loaded]);
 
   const handleSignOut = useCallback(() => {
     setPreviewEntered(false);

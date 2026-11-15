@@ -17,11 +17,50 @@
 // The extracted document (this is the JSON that lands in Supabase Storage)
 // ---------------------------------------------------------------------------
 
+/**
+ * What a run of text is, structurally. Derived from type size relative to the
+ * page's body text, not from guessing at the words.
+ */
+export type PdfBlockKind = "heading" | "subheading" | "paragraph" | "caption";
+
+export interface PdfBlock {
+  kind: PdfBlockKind;
+  text: string;
+  /** 1 or 2 for headings — the outline depth the size implies. */
+  level?: number;
+}
+
 /** One extracted page. `empty` means the page carried no selectable text. */
 export interface PdfPage {
   page: number;
+  /**
+   * The page as structured blocks. The reader renders from this.
+   */
+  blocks?: PdfBlock[];
+  /**
+   * Body paragraphs only, flattened. Kept alongside `blocks` because the
+   * annotation anchors (page + paragraph index) are stored against it, and
+   * Android reads it directly.
+   */
   paragraphs: string[];
+  /** The running header this page carried, if it had one. */
+  runningHead?: string;
+  /** The first heading on the page, for the contents and the crumb. */
+  heading?: string;
   empty?: boolean;
+}
+
+/** The document's own header information, as the file declares it. */
+export interface PdfDocInfo {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string;
+  creator?: string;
+  producer?: string;
+  created?: string;
+  modified?: string;
+  pageSize?: { width: number; height: number };
 }
 
 export interface PdfTocEntry {
@@ -41,6 +80,8 @@ export interface PdfTextDoc {
   pages: Record<string, PdfPage>;
   toc: PdfTocEntry[];
   extractedAt: string;
+  /** Title, author and the rest of the PDF's own header block. */
+  info?: PdfDocInfo;
   /** True when no page yielded text — i.e. a scanned PDF needing OCR. */
   scanned?: boolean;
   fileName?: string;
@@ -82,6 +123,8 @@ export interface PdfTextItem {
   height: number;
   /** The engine knows this run ends its line (pdfjs: `hasEOL`). */
   eol?: boolean;
+  /** The font this run is set in — "...Bold" is how weight is detectable. */
+  font?: string;
 }
 
 export interface PdfOutlineNode {
@@ -95,6 +138,8 @@ export interface PdfHandle {
   pageCount: number;
   textItems(page: number): Promise<PdfTextItem[]>;
   outline?(): Promise<PdfOutlineNode[]>;
+  /** Title, author, producer… as the file declares them. */
+  info?(): Promise<PdfDocInfo>;
   close?(): void | Promise<void>;
 }
 
@@ -125,6 +170,7 @@ interface Line {
   x: number;
   height: number;
   width: number;
+  font?: string;
 }
 
 const median = (values: number[]): number => {
@@ -166,6 +212,7 @@ function toLines(items: PdfTextItem[]): Line[] {
         x: first.x,
         height: median(buffer.map((item) => item.height)) || first.height,
         width: last.x + last.width - first.x,
+        font: first.font,
       });
     }
     buffer = [];
@@ -173,6 +220,13 @@ function toLines(items: PdfTextItem[]): Line[] {
 
   if (hasEol) {
     for (const item of usable) {
+      // pdfjs emits a zero-size, empty item carrying the EOL flag, positioned
+      // on the *next* line. Joining it would give the line a width of zero
+      // and let the next line's font bleed into this one's metrics.
+      if (!item.text) {
+        if (item.eol) flush();
+        continue;
+      }
       buffer.push(item);
       if (item.eol) flush();
     }
@@ -273,6 +327,124 @@ export function groupParagraphs(items: PdfTextItem[]): string[] {
   return paragraphs;
 }
 
+/**
+ * Turn one page's positioned text into structured blocks.
+ *
+ * Headings are found by type size relative to the page's own body text, so it
+ * works whatever the book sets its body in. Everything that is not a heading
+ * is merged into reading paragraphs exactly as before.
+ */
+export function groupBlocks(items: PdfTextItem[]): PdfBlock[] {
+  const all = toLines(items);
+  if (!all.length) return [];
+
+  const lines = all.filter(
+    (line, index) =>
+      !((index === 0 || index === all.length - 1) && isPageFurniture(line.text)),
+  );
+  if (!lines.length) return [];
+
+  // The body is whatever size most of the page is set in.
+  const bodySize = median(lines.map((line) => line.height)) || lines[0].height;
+  const maxWidth = Math.max(...lines.map((line) => line.width));
+
+  const gaps: number[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const gap = Math.abs(lines[i - 1].y - lines[i].y);
+    if (gap > 0) gaps.push(gap);
+  }
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const leading = sortedGaps.length
+    ? sortedGaps[Math.floor((sortedGaps.length - 1) * 0.25)]
+    : bodySize * 1.2;
+  const bodyIndent = median(lines.map((line) => line.x));
+
+  const gapAbove = (index: number) =>
+    index === 0 ? Infinity : Math.abs(lines[index - 1].y - lines[index].y);
+  const gapBelow = (index: number) =>
+    index === lines.length - 1 ? Infinity : Math.abs(lines[index].y - lines[index + 1].y);
+
+  const kindOf = (line: Line, index: number): PdfBlockKind => {
+    const ratio = line.height / bodySize;
+    const bold = /bold|black|heavy|semibold/i.test(line.font ?? "");
+    if (ratio >= 1.42) return "heading";
+    if (ratio >= 1.15) return "subheading";
+    if (ratio <= 0.84) return "caption";
+    // Same size as the body, but set apart: a short line with no terminal
+    // punctuation that sits closer to what follows than to what precedes it
+    // is a run-in heading, not the last line of the paragraph above.
+    const short = line.width < maxWidth * 0.62;
+    const unpunctuated = !/[.!?;:,—]$/.test(line.text);
+    const belongsBelow = gapAbove(index) > gapBelow(index) * 1.25;
+    if (short && unpunctuated && (bold || belongsBelow)) return "subheading";
+    return "paragraph";
+  };
+
+  const blocks: PdfBlock[] = [];
+  let current = "";
+  let currentKind: PdfBlockKind | null = null;
+
+  const flush = () => {
+    const text = current.replace(/\s+/g, " ").trim();
+    if (text && currentKind) {
+      blocks.push({
+        kind: currentKind,
+        text,
+        ...(currentKind === "heading"
+          ? { level: 1 }
+          : currentKind === "subheading"
+            ? { level: 2 }
+            : {}),
+      });
+    }
+    current = "";
+  };
+
+  lines.forEach((line, index) => {
+    const kind = kindOf(line, index);
+    if (index === 0) {
+      current = line.text;
+      currentKind = kind;
+      return;
+    }
+    const previous = lines[index - 1];
+    const gap = Math.abs(previous.y - line.y);
+    const wideGap = gap > leading * 1.45;
+    const indented = line.x > bodyIndent + line.height * 0.6;
+    const previousWasStub = previous.width < maxWidth * 0.5;
+    const sentenceEnded = /[.!?"”’:]$/.test(previous.text);
+    const previousWasShort = previous.width < maxWidth * 0.72;
+
+    // A change of kind always starts a new block; otherwise the usual
+    // paragraph signals apply.
+    if (
+      kind !== currentKind ||
+      wideGap ||
+      indented ||
+      previousWasStub ||
+      (previousWasShort && sentenceEnded)
+    ) {
+      flush();
+      current = line.text;
+      currentKind = kind;
+      return;
+    }
+    if (/[\p{L}]-$/u.test(current)) {
+      current = `${current.slice(0, -1)}${line.text}`;
+    } else {
+      current = `${current} ${line.text}`;
+    }
+  });
+  flush();
+
+  return blocks;
+}
+
+/** The body paragraphs of a page, in reading order. */
+export function paragraphsOf(blocks: PdfBlock[]): string[] {
+  return blocks.filter((block) => block.kind === "paragraph").map((block) => block.text);
+}
+
 /** Flatten an engine outline into the reader's flat TOC (top level → part). */
 export function outlineToToc(nodes: PdfOutlineNode[]): PdfTocEntry[] {
   const out: PdfTocEntry[] = [];
@@ -287,6 +459,17 @@ export function outlineToToc(nodes: PdfOutlineNode[]): PdfTocEntry[] {
   };
   walk(nodes);
   return out;
+}
+
+/**
+ * Two page-top lines are the same running head when they differ only by their
+ * page numbers ("The Creative Act   128" vs "The Creative Act   129").
+ */
+function sameRunningHead(a: string, b: string): boolean {
+  const normalise = (text: string) =>
+    text.replace(/\d+/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const left = normalise(a);
+  return left.length > 2 && left === normalise(b);
 }
 
 /** The TOC chapter covering a page (the last entry at or before it). */
@@ -400,18 +583,34 @@ export function createPdfTextSource(options: PdfTextSourceOptions): PdfTextSourc
     if (doc.pages[String(page)]) return;
     if (page < 1 || page > doc.pageCount) return;
     try {
-      const paragraphs = groupParagraphs(await handle.textItems(page));
+      const blocks = groupBlocks(await handle.textItems(page));
       if (disposed || !doc) return;
+
+      // A line repeated at the top of consecutive pages is the running head
+      // (book or chapter title), not part of the text.
+      const previous = doc.pages[String(page - 1)] ?? doc.pages[String(page + 1)];
+      let runningHead: string | undefined;
+      const first = blocks[0];
+      if (first && previous?.blocks?.[0] && sameRunningHead(first.text, previous.blocks[0].text)) {
+        runningHead = first.text;
+        blocks.shift();
+      }
+
+      const paragraphs = paragraphsOf(blocks);
+      const heading = blocks.find((block) => block.kind === "heading")?.text;
       doc.pages[String(page)] = {
         page,
+        blocks,
         paragraphs,
-        ...(paragraphs.length ? {} : { empty: true }),
+        ...(runningHead ? { runningHead } : {}),
+        ...(heading ? { heading } : {}),
+        ...(blocks.length ? {} : { empty: true }),
       };
       dirty = true;
       notify();
     } catch (err) {
       // One unreadable page must not take the whole book down.
-      doc.pages[String(page)] = { page, paragraphs: [], empty: true };
+      doc.pages[String(page)] = { page, blocks: [], paragraphs: [], empty: true };
       dirty = true;
       notify();
       if (!(err instanceof Error)) return;
@@ -448,6 +647,13 @@ export function createPdfTextSource(options: PdfTextSourceOptions): PdfTextSourc
     if (!bytes || disposed) return false;
     handle = await options.engine.open(bytes);
     doc = emptyDoc(handle.pageCount, options.fileName);
+    if (handle.info) {
+      try {
+        doc.info = await handle.info();
+      } catch {
+        /* a PDF without an info dictionary is normal */
+      }
+    }
     if (handle.outline) {
       try {
         doc.toc = outlineToToc(await handle.outline());
@@ -472,7 +678,17 @@ export function createPdfTextSource(options: PdfTextSourceOptions): PdfTextSourc
         setStatus(cached.scanned ? 'scanned' : 'ready');
         return;
       }
-      const remote = cached ? null : ((await options.remote?.load()) ?? null);
+      // A cloud miss (offline, signed out, nothing uploaded yet) is ordinary:
+      // it must not abort the boot and leave the reader claiming the PDF is
+      // unreadable when it can still extract locally or fall back.
+      let remote: PdfTextDoc | null = null;
+      if (!cached) {
+        try {
+          remote = (await options.remote?.load()) ?? null;
+        } catch {
+          remote = null;
+        }
+      }
       if (disposed) return;
       if (remote && isPdfTextDoc(remote) && isComplete(remote)) {
         doc = remote;

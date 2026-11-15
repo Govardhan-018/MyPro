@@ -11,8 +11,14 @@ export const creativeActToc: TocChapter[] = [
   { id: "ch-31", part: "Part IV: Liberation", title: "31. Freedom and Stillness", page: 302, preview: "Creative freedom is the absence of resistance." },
 ];
 
+import type { PdfBlock } from "@mypro/shared";
+
 export interface BookPageContent {
   pageNumber: number;
+  /** Structured blocks from a real PDF; absent for the sample pages. */
+  blocks?: PdfBlock[];
+  /** The running header the page carried, if any. */
+  runningHead?: string;
   chapterTitle: string;
   partTitle?: string;
   quote?: string;

@@ -41,6 +41,8 @@ export {
 export { createApi, type ApiClient, ApiError, AgentOfflineError } from './api';
 export {
   createPdfTextSource,
+  groupBlocks,
+  paragraphsOf,
   groupParagraphs,
   outlineToToc,
   chapterAt,
@@ -50,6 +52,9 @@ export {
   type PdfEngine,
   type PdfHandle,
   type PdfOutlineNode,
+  type PdfBlock,
+  type PdfBlockKind,
+  type PdfDocInfo,
   type PdfPage,
   type PdfStatus,
   type PdfTextDoc,

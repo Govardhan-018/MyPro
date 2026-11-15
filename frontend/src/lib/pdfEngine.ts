@@ -8,6 +8,7 @@
  */
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import type {
+  PdfDocInfo,
   PdfEngine,
   PdfHandle,
   PdfOutlineNode,
@@ -94,6 +95,10 @@ export const pdfEngine: PdfEngine = {
         const page = await doc.getPage(pageNumber);
         try {
           const content = await page.getTextContent();
+          // `fontName` is an internal id ("g_d0_f2"); the real family is in
+          // the styles map. Embedded fonts keep their name there, which is
+          // what makes weight detectable.
+          const styles = (content.styles ?? {}) as Record<string, { fontFamily?: string }>;
           return content.items.filter(isTextItem).map((item) => ({
             text: item.str,
             // transform = [a, b, c, d, e, f]; e/f are the device-space origin.
@@ -102,6 +107,9 @@ export const pdfEngine: PdfEngine = {
             width: item.width ?? 0,
             height: item.height || Math.abs(item.transform[3] ?? 0) || 10,
             eol: item.hasEOL,
+            // The font name is how weight is detectable ("...-Bold"), which
+            // the block pass uses to spot run-in headings.
+            font: styles[item.fontName]?.fontFamily ?? item.fontName,
           }));
         } finally {
           // Text extraction holds no render resources, but pdfjs still caches
@@ -114,6 +122,48 @@ export const pdfEngine: PdfEngine = {
         const raw = (await doc.getOutline()) as RawOutlineItem[] | null;
         if (!raw?.length) return [];
         return toOutlineNodes(doc, raw);
+      },
+
+      async info(): Promise<PdfDocInfo> {
+        const meta = (await doc.getMetadata()) as {
+          info?: Record<string, unknown>;
+        };
+        const raw = meta.info ?? {};
+        const str = (key: string): string | undefined => {
+          const value = raw[key];
+          return typeof value === "string" && value.trim() ? value.trim() : undefined;
+        };
+        // PDF dates look like D:20240115103000+01'00' — keep the readable part.
+        const date = (key: string): string | undefined => {
+          const value = str(key);
+          if (!value) return undefined;
+          const match = value.match(/^D:(\d{4})(\d{2})?(\d{2})?/);
+          if (!match) return value;
+          const [, year, month = "01", day = "01"] = match;
+          return `${year}-${month}-${day}`;
+        };
+
+        let pageSize: PdfDocInfo["pageSize"];
+        try {
+          const first = await doc.getPage(1);
+          const [, , width, height] = first.view as number[];
+          pageSize = { width: Math.round(width), height: Math.round(height) };
+          first.cleanup();
+        } catch {
+          /* a size is a nicety, not a requirement */
+        }
+
+        return {
+          title: str("Title"),
+          author: str("Author"),
+          subject: str("Subject"),
+          keywords: str("Keywords"),
+          creator: str("Creator"),
+          producer: str("Producer"),
+          created: date("CreationDate"),
+          modified: date("ModDate"),
+          pageSize,
+        };
       },
 
       close() {

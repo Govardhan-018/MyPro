@@ -4475,3 +4475,663 @@ button.learning-thumbnail {
     display: none;
   }
 }
+
+/* =====================================================================
+   READER — 2026 redesign
+   One scrolling column under a fixed glass bar, in the app's own language:
+   pure black, graphite glass, white type with size-based hierarchy, thin
+   translucent borders. Everything below deliberately overrides the older
+   reader chrome above; the panels' internals are reused as they were.
+   ===================================================================== */
+
+.mypro-dark-reader {
+  --reader-bar: 58px;
+  --reader-glass: rgba(10, 10, 10, 0.72);
+  --reader-edge: rgba(255, 255, 255, 0.1);
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: block;
+  background: #000;
+  color: #fff;
+}
+
+/* ---- the fixed bar ---- */
+
+.mypro-dark-reader .reader-top-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  height: var(--reader-bar);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--reader-edge);
+  background: var(--reader-glass);
+  backdrop-filter: blur(22px) saturate(1.1);
+  -webkit-backdrop-filter: blur(22px) saturate(1.1);
+}
+
+.mypro-dark-reader .toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mypro-dark-reader .toolbar-center {
+  flex: none;
+}
+
+.mypro-dark-reader .toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.mypro-dark-reader .reader-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--reader-edge);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.mypro-dark-reader .reader-back-button:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.mypro-dark-reader .reader-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mypro-dark-reader .reader-book-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28vw;
+}
+
+.mypro-dark-reader .reader-crumb-separator {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.mypro-dark-reader .reader-chapter-title {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30vw;
+}
+
+.mypro-dark-reader .toolbar-pill-button,
+.mypro-dark-reader .toolbar-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.mypro-dark-reader .toolbar-icon-button {
+  padding: 0;
+}
+
+.mypro-dark-reader .toolbar-pill-button:hover,
+.mypro-dark-reader .toolbar-icon-button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.mypro-dark-reader .toolbar-icon-button.active,
+.mypro-dark-reader .toolbar-icon-button.bookmarked {
+  color: #000;
+  background: #fff;
+}
+
+.mypro-dark-reader .reader-inline-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  width: min(420px, 42vw);
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--reader-edge);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.mypro-dark-reader .reader-inline-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+
+.mypro-dark-reader .reader-pdf-status {
+  flex: none;
+}
+
+/* ---- the reading surface ---- */
+
+.mypro-dark-reader .reader-body {
+  position: absolute;
+  inset: var(--reader-bar) 0 0 0;
+  display: block;
+}
+
+.mypro-dark-reader .reader-main-canvas {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 34px 20px 150px;
+  scroll-behavior: smooth;
+}
+
+.mypro-dark-reader .reader-page-wrapper {
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* The page is a sheet of glass on black, not a paper rectangle. */
+.mypro-dark-reader .reader-page-sheet {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  padding: 44px clamp(22px, 5vw, 56px) 36px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.022);
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.mypro-dark-reader .reader-page-sheet.sepia {
+  background: rgba(244, 232, 211, 0.92);
+  border-color: rgba(60, 46, 30, 0.12);
+  color: #3a2f22;
+}
+
+.mypro-dark-reader .reader-page-sheet.original {
+  background: #fbfbfa;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #15130f;
+}
+
+.mypro-dark-reader .sheet-top-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 26px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-top-meta,
+.mypro-dark-reader .reader-page-sheet.original .sheet-top-meta {
+  color: rgba(60, 46, 30, 0.45);
+}
+
+.mypro-dark-reader .sheet-heading h2 {
+  margin: 0;
+  font-size: clamp(20px, 2.4vw, 25px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.mypro-dark-reader .sheet-divider {
+  width: 42px;
+  height: 1px;
+  margin: 16px 0 24px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-divider,
+.mypro-dark-reader .reader-page-sheet.original .sheet-divider {
+  background: rgba(60, 46, 30, 0.25);
+}
+
+.mypro-dark-reader .sheet-quote-callout {
+  margin: 0 0 26px;
+  padding: 16px 20px;
+  border-left: 2px solid rgba(255, 255, 255, 0.5);
+  border-radius: 0 12px 12px 0;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.mypro-dark-reader .sheet-paragraphs {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mypro-dark-reader .sheet-body-text {
+  margin: 0;
+  letter-spacing: 0.002em;
+}
+
+.mypro-dark-reader .sheet-bottom-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 34px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* ---- the flow's head and foot ---- */
+
+.mypro-dark-reader .reader-load-earlier {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--reader-edge);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.mypro-dark-reader .reader-load-earlier:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.mypro-dark-reader .reader-flow-foot {
+  display: flex;
+  justify-content: center;
+  padding: 26px 0 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.mypro-dark-reader .reader-flow-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.mypro-dark-reader .reader-flow-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  animation: reader-flow-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reader-flow-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.mypro-dark-reader .reader-flow-end {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10.5px;
+}
+
+/* ---- the sidebar slides over, at every width ---- */
+
+.mypro-dark-reader .reader-sidebar {
+  position: fixed;
+  top: var(--reader-bar);
+  bottom: 0;
+  left: 0;
+  z-index: 25;
+  width: min(360px, 86vw);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--reader-edge);
+  background: var(--reader-glass);
+  backdrop-filter: blur(26px) saturate(1.1);
+  -webkit-backdrop-filter: blur(26px) saturate(1.1);
+  transform: translateX(-100%);
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mypro-dark-reader .reader-sidebar.open {
+  transform: translateX(0);
+}
+
+.mypro-dark-reader .reader-sidebar.collapsed {
+  transform: translateX(-100%);
+}
+
+.mypro-dark-reader .reader-sidebar-backdrop {
+  position: fixed;
+  inset: var(--reader-bar) 0 0 0;
+  z-index: 24;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.mypro-dark-reader .reader-sidebar-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 12px;
+  border-bottom: 1px solid var(--reader-edge);
+}
+
+.mypro-dark-reader .sidebar-tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 4px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.mypro-dark-reader .sidebar-tab-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mypro-dark-reader .sidebar-tab-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--reader-edge);
+}
+
+.mypro-dark-reader .reader-sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+/* ---- the dock floats, and keeps out of the way ---- */
+
+.mypro-dark-reader .reader-bottom-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: auto;
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--reader-edge);
+  background: var(--reader-glass);
+  backdrop-filter: blur(22px) saturate(1.1);
+  -webkit-backdrop-filter: blur(22px) saturate(1.1);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.6);
+}
+
+.mypro-dark-reader .dock-left,
+.mypro-dark-reader .dock-center,
+.mypro-dark-reader .dock-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mypro-dark-reader .dock-center {
+  flex: 1;
+  min-width: 120px;
+}
+
+.mypro-dark-reader .dock-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+
+.mypro-dark-reader .dock-icon-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mypro-dark-reader .dock-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.mypro-dark-reader .page-indicator-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.mypro-dark-reader .page-indicator-pill input {
+  width: 42px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.mypro-dark-reader .page-indicator-pill input::-webkit-outer-spin-button,
+.mypro-dark-reader .page-indicator-pill input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.mypro-dark-reader .scrubber-percent {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+  min-width: 34px;
+  text-align: right;
+}
+
+/* In the scrolling column the zoom control does nothing: hide it rather
+   than leave a dead button in the dock. */
+.mypro-dark-reader.mode-continuous .dock-right {
+  display: none;
+}
+
+.mypro-dark-reader .canvas-nav-arrow {
+  background: var(--reader-glass);
+  border: 1px solid var(--reader-edge);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+@media (max-width: 767px) {
+  .mypro-dark-reader {
+    --reader-bar: 52px;
+  }
+  .mypro-dark-reader .reader-main-canvas {
+    padding: 18px 12px 128px;
+  }
+  .mypro-dark-reader .reader-page-sheet {
+    padding: 30px 20px 26px;
+    border-radius: 16px;
+  }
+  .mypro-dark-reader .reader-book-title {
+    max-width: 38vw;
+  }
+  .mypro-dark-reader .reader-chapter-title,
+  .mypro-dark-reader .reader-crumb-separator {
+    display: none;
+  }
+  .mypro-dark-reader .reader-bottom-dock {
+    left: 12px;
+    right: 12px;
+    bottom: 14px;
+    transform: none;
+    max-width: none;
+  }
+}
+
+/* In the scrolling column the page is a continuation, not a document of its
+   own: the running head, the part name and the footer plate are dropped, and
+   only a quiet page number stays for orientation. */
+.mypro-dark-reader.mode-continuous .sheet-top-meta .sheet-book-name,
+.mypro-dark-reader.mode-continuous .sheet-top-meta .sheet-part-name,
+.mypro-dark-reader.mode-continuous .sheet-bottom-meta span:first-child {
+  display: none;
+}
+
+.mypro-dark-reader.mode-continuous .sheet-top-meta {
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+.mypro-dark-reader.mode-continuous .sheet-bottom-meta {
+  justify-content: flex-end;
+  margin-top: 26px;
+  padding-top: 14px;
+}
+
+.mypro-dark-reader.mode-continuous .reader-page-sheet {
+  padding-top: 26px;
+}
+
+/* A sheet that opens a chapter gets room to breathe. */
+.mypro-dark-reader.mode-continuous .reader-page-sheet:has(.sheet-heading) {
+  padding-top: 42px;
+}
+
+/* ---------------------------------------------------------------------------
+   The YouTube player instance.
+   One player serves both modes: "Video" shows it, "Audio Only" collapses it to
+   a sliver instead of unmounting it, so the audio keeps running when you
+   switch. It stays in the layout (and in the accessibility tree as hidden)
+   because a player removed from the page stops playing.
+   --------------------------------------------------------------------------- */
+
+.yt-player-mount {
+  width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #000;
+  transition: height 0.3s ease, opacity 0.3s ease;
+}
+
+.yt-player-mount.visible {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  opacity: 1;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.yt-player-mount.audio-only {
+  height: 1px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
+.yt-player-mount iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.player-error {
+  margin: 10px 0 0;
+  padding: 10px 13px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 12px;
+  color: #f8a3a3;
+  font-size: 12.5px;
+}
+
+/* Structure extracted from the PDF itself: headings keep their rank instead
+   of arriving as more body text. */
+
+.mypro-dark-reader .sheet-block-heading {
+  margin: 26px 0 2px;
+  font-size: clamp(18px, 2.1vw, 22px);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
+
+.mypro-dark-reader .sheet-block-subheading {
+  margin: 20px 0 0;
+  font-size: 1.02em;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+}
+
+.mypro-dark-reader .sheet-paragraphs > .sheet-block-heading:first-child,
+.mypro-dark-reader .sheet-paragraphs > .sheet-block-subheading:first-child {
+  margin-top: 0;
+}
+
+.mypro-dark-reader .sheet-block-caption {
+  margin: 4px 0 0;
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-block-caption,
+.mypro-dark-reader .reader-page-sheet.original .sheet-block-caption {
+  color: rgba(60, 46, 30, 0.55);
+}

@@ -723,9 +723,11 @@ button {
   color: var(--medium);
   margin: 0 0 12px;
 }
+/* The track has to be darker than the fill. Both were #ffffff, so every
+   progress bar rendered as a full white bar whatever the percentage was. */
 .progress {
   height: 4px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.16);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -6150,38 +6152,43 @@ button {
 
 /* ---- the sidebar bell ---- */
 
-.sidebar-notifications {
+/* The bell lives in the floating control stack with Settings and Color Mode.
+   It used to sit at the bottom of the sidebar, where that fixed stack
+   overlapped it. */
+.notifications-control {
   position: relative;
-  margin-top: auto;
-  padding-top: 14px;
 }
 
-.sidebar-notifications + .sidebar-account {
-  margin-top: 0;
-}
-
-.sidebar-bell {
+.notifications-fab {
+  height: 44px;
+  width: 100%;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.88);
+  color: #ffffff;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 10px;
-  border-radius: 11px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 13px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  backdrop-filter: blur(18px);
   cursor: pointer;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
-.sidebar-bell:hover,
-.sidebar-bell.active {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.05);
+.notifications-fab span {
+  flex: 1;
+  text-align: left;
 }
 
-.sidebar-bell-count {
+.notifications-fab:hover,
+.notifications-fab.active {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.notifications-fab-count {
+  flex: none;
   min-width: 19px;
   padding: 1px 5px;
   border-radius: 999px;
@@ -6192,27 +6199,27 @@ button {
   text-align: center;
 }
 
-.sidebar-bell-live {
+.notifications-fab-live {
+  flex: none;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  margin-left: auto;
   background: rgba(255, 255, 255, 0.18);
 }
 
-.sidebar-bell-live.live-live {
+.notifications-fab-live.live-live {
   background: rgba(255, 255, 255, 0.8);
 }
 
-.sidebar-bell-live.live-connecting {
+.notifications-fab-live.live-connecting {
   background: rgba(255, 255, 255, 0.4);
 }
 
 .notification-panel {
   position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: calc(100% - 4px);
+  left: 0;
+  width: min(330px, calc(100vw - 36px));
+  bottom: calc(100% + 8px);
   z-index: 40;
   padding: 14px;
   border-radius: 16px;
@@ -6463,4 +6470,407 @@ button {
   background: none;
   border-left: 0;
   padding: 0;
+}
+
+/* =====================================================================
+   Mobile navigation sheet
+   The five-tab bar is the resting state; dragging (or tapping) the grabber
+   raises a sheet with every section and the global controls, so nothing is
+   unreachable on a phone.
+   ===================================================================== */
+
+@media (max-width: 1023px) {
+  .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(3px);
+    animation: mobile-nav-fade 0.24s ease;
+  }
+
+  @keyframes mobile-nav-fade {
+    from { opacity: 0; }
+  }
+
+  /* `.dark-app .bottom-nav` (the floating pill bar) outranks a bare
+     `.bottom-nav`, so the sheet matches that specificity to win. */
+  .dark-app .bottom-nav,
+  .bottom-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    max-height: 86vh;
+    top: auto;
+    padding-bottom: max(0px, env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px 20px 0 0;
+    background: rgba(0, 0, 0, 0.92);
+    backdrop-filter: blur(26px) saturate(1.1);
+    -webkit-backdrop-filter: blur(26px) saturate(1.1);
+    transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+
+  /* While a finger is on the grabber the sheet follows it directly. */
+  .dark-app .bottom-nav.dragging,
+  .bottom-nav.dragging {
+    transition: none;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-grabber,
+  .mobile-nav-grabber {
+    display: flex;
+    height: auto;
+    width: 100%;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    padding: 8px 0 4px;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.35);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .mobile-nav-grabber i {
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  .mobile-nav-grabber .flipped {
+    transform: rotate(180deg);
+  }
+
+  .mobile-nav-tabs {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    height: 62px;
+    flex: none;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-tabs button,
+  .mobile-nav-tabs button {
+    width: 20%;
+    padding: 0 2px;
+    font-size: 9px;
+    overflow: hidden;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 9px;
+  }
+
+  .mobile-nav-tabs button.active {
+    color: #ffffff;
+  }
+
+  .mobile-nav-tabs .assistant-tab > span {
+    width: 44px;
+    height: 34px;
+    border-radius: 13px;
+    background: #ffffff;
+    color: #000000;
+    display: grid;
+    place-items: center;
+  }
+
+  /* The drawer has no height until the sheet is open, and scrolls when the
+     list is taller than the room available. */
+  .mobile-nav-drawer {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .dark-app .bottom-nav.expanded .mobile-nav-drawer,
+  .bottom-nav.expanded .mobile-nav-drawer {
+    grid-template-rows: 1fr;
+  }
+
+  .mobile-nav-drawer-scroll {
+    overflow: hidden auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    padding: 0 16px;
+  }
+
+  .dark-app .bottom-nav.expanded .mobile-nav-drawer-scroll,
+  .bottom-nav.expanded .mobile-nav-drawer-scroll {
+    padding: 4px 16px 18px;
+    max-height: calc(86vh - 120px);
+  }
+
+  .mobile-nav-kicker {
+    display: block;
+    margin: 14px 0 9px;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  .mobile-nav-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-card,
+  .mobile-nav-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    height: auto;
+    width: auto;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 13px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 11.5px;
+    text-align: left;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-card.active:not(.assistant-tab),
+  .dark-app .bottom-nav .mobile-nav-card.active,
+  .mobile-nav-card.active {
+    color: #000;
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .mobile-nav-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-actions button,
+  .mobile-nav-actions button {
+    display: flex;
+    /* `.dark-app .bottom-nav button` stacks tab contents in a column; these
+       are rows. */
+    flex-direction: row;
+    justify-content: flex-start;
+    height: auto;
+    width: 100%;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 12px 13px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 13px;
+  }
+
+  .dark-app .bottom-nav .mobile-nav-actions button span,
+  .mobile-nav-actions button span {
+    flex: 1;
+    text-align: left;
+  }
+
+  .mobile-nav-actions kbd {
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #fff;
+    color: #000;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+  }
+
+  .mobile-nav-actions button i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+  }
+
+  .mobile-nav-actions button i.on {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  /* The floating desktop stack would sit on top of the sheet, but the
+     notification panel it hosts still has to be reachable — the sheet's
+     Notifications action opens it — so the container dissolves instead of
+     hiding, and only its buttons go. */
+  .global-controls {
+    display: contents;
+  }
+
+  .settings-fab,
+  .color-mode-button,
+  .notifications-fab {
+    display: none;
+  }
+
+  .notification-panel {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 92px;
+    width: auto;
+    z-index: 41;
+  }
+}
+
+/* What the YouTube lookup found while adding a podcast. */
+.lookup-note {
+  display: block;
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* =====================================================================
+   Settings panels
+   Each row opens in place rather than pretending to lead somewhere.
+   ===================================================================== */
+
+.settings-card .rotated {
+  transform: rotate(90deg);
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.settings-panel .field-label input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #fff;
+  font-size: 13.5px;
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.settings-hint strong {
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 600;
+}
+
+.settings-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settings-saved {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.settings-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.settings-status-row strong {
+  display: block;
+  font-size: 13.5px;
+  margin-bottom: 3px;
+}
+
+.settings-status-row small {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.settings-status-dot.live-live {
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
+}
+
+.settings-status-dot.live-connecting {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.settings-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.settings-facts li {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.55);
+  padding-left: 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.settings-facts strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.settings-view .settings-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.settings-view .settings-toggle-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-view .settings-toggle-row small {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
 }

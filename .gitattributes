@@ -144,3 +144,11 @@
 *.stl                filter=lfs diff=lfs merge=lfs -text
 *.nc                 filter=lfs diff=lfs merge=lfs -text
 *.mat                filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# Exception: the web app's own images are served by Vercel straight from the
+# repo. Vercel's build does not fetch LFS objects, so an LFS-tracked PNG is
+# deployed as its 130-byte pointer file and every <img> breaks (the logo did).
+# These are small; keep them as ordinary git blobs.
+# ---------------------------------------------------------------------------
+frontend/public/*.png   !filter !diff !merge text=auto

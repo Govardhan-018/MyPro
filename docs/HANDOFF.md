@@ -121,6 +121,94 @@ The extracting device is the one holding the file; everyone else reads its JSON.
 - Not done: OCR for scanned PDFs (10.4), and pdfjs runs without CMaps, so CJK /
   exotic-encoding PDFs may extract poorly.
 
+## PDF structure + Settings made real
+
+**PDF → JSON now keeps structure, not just paragraphs.** `PdfPage` gained
+`blocks` (`heading` / `subheading` / `paragraph` / `caption`, with a level),
+`heading` and `runningHead`; `PdfTextDoc` gained `info` — the PDF's own header
+block (title, author, subject, keywords, creator, producer, dates, page size)
+read via `getMetadata()`. `paragraphs` stays beside `blocks` because annotation
+anchors are stored against its indices and Android reads it directly.
+
+How the structure is found: type size relative to *that page's* body size, so
+it works whatever a book sets its body in; plus a run-in heading rule for
+short, unpunctuated lines that sit closer to what follows than to what
+precedes. Running heads are dropped by comparing a page's first line with its
+neighbour's, ignoring digits.
+
+Two extraction bugs fixed while testing against a generated PDF:
+- pdfjs emits an empty, zero-size item carrying the EOL flag, positioned on the
+  *next* line. It was being joined into the line, giving lines a width of zero
+  and letting the next line's font bleed into the metrics. It now ends the line
+  without joining it.
+- `fontName` is an internal id (`g_d0_f2`); the real family is in the text
+  content's `styles` map. Note that non-embedded standard fonts still collapse
+  to `sans-serif`, so weight detection only works on embedded fonts — the
+  size-based rules carry the structure.
+
+The reader renders blocks with their real rank (`sheet-block-heading`,
+`-subheading`, `-caption`), and paragraph indices stay aligned with
+`paragraphs` so existing annotations keep their anchors.
+
+**Settings does things now.** It was one working row (Storage) and four dead
+buttons. `lib/useProfile.ts` reads and writes `/me`, and the view has:
+- **Profile** — display name and time zone persisted to the profile row, and
+  Color Mode saved there too (so it follows you between devices; `App` applies
+  it on first load).
+- **Notifications** — the live Realtime status, unread count, mark-all-read and
+  refresh, and a plain statement that push-when-closed is not built.
+- **Privacy** — what is actually enforced (RLS, the health consent gate, the
+  model key staying on the laptop, PDFs never leaving the device), and what is
+  planned (revoking health grants, data export).
+
+Rows that are not built are labelled as such rather than looking tappable.
+
+## Reader redesign, UI fixes, and real YouTube playback
+
+**Reader** (`MyProDarkReader.tsx`, `reading-listening.css`) — rebuilt as one
+scrolling column under a fixed glass bar: continuous is now the default mode,
+pages load as you reach them (`flowStart`/`flowEnd` with an IntersectionObserver
+at the foot, "Load earlier pages" at the head with scroll compensation), the
+page you are looking at drives the dock and the chapter crumb, the sidebar
+slides over instead of occupying a column, and a chapter heading only prints
+where the chapter actually changes. Paged mode is still a setting.
+
+Fixed with it: a failed cloud lookup in `shared/src/pdf.ts` aborted the whole
+boot, so a signed-out or offline reader showed "PDF unreadable" instead of
+falling back to its sample text.
+
+**The logo never loaded in production.** `frontend/public/*.png` is LFS-tracked
+and Vercel does not fetch LFS objects, so the deployed file was its 130-byte
+pointer served as `image/png` (verified against the live URL). `.gitattributes`
+now exempts that folder and the real blobs are staged.
+
+**Other fixes**
+- The notification bell sat under the fixed Settings / Color Mode stack. It is
+  now a member of that stack (`.notifications-fab`), and its panel opens above.
+- Mobile navigation is a drag-up sheet (`components/MobileNavSheet.tsx`): the
+  five-tab bar at rest, every section plus Notifications / Settings / Color Mode
+  / Sign out when raised. Watch the specificity — `.dark-app .bottom-nav`
+  and `.dark-app .bottom-nav button` outrank bare class selectors, so the
+  sheet's rules match that weight deliberately.
+- Every progress bar read 100%: `.progress` (the track) and its fill were both
+  `#ffffff`. The track is translucent now. This is the third instance of the
+  same monochrome-theme mistake, after the calendar events and `.type-switch`.
+
+**Podcasts — real playback (was simulated).** The transport used to drive a
+`setInterval` that counted seconds while nothing played. `lib/youtube.ts` +
+`lib/useYouTubePlayer.ts` put YouTube's IFrame Player API behind the existing
+controls; one player instance serves both modes, and "Audio Only" collapses it
+rather than unmounting it (removing it from the page would stop the audio).
+Verified live in a browser: the API loads, reports a real duration, and the
+clock advances while playing. The audio stream is **not** extracted or
+downloaded — that would breach YouTube's terms; this plays through their
+player.
+
+**Paste a link, get the episode.** YouTube's oEmbed endpoint (no API key, CORS
+works from the browser — verified) fills in title, channel and artwork on
+paste. Duration is not in oEmbed, so the player writes the real length back the
+first time you play. Category and description stay yours, as asked.
+
 ## Calendar fixes + the scheduler's silent run-history bug
 
 **Calendar** (`frontend/src/lib/useCalendar.ts`, `App.tsx`, `index.css`). Five
