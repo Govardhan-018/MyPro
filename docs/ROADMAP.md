@@ -122,10 +122,14 @@ From `COMPANION_VISION.md`, in the order that changes how it *feels*:
 
 ## Phase 10 — PDF pipeline
 
-- [ ] **10.1** On-device extraction (`pdfjs-dist` on web)
-- [ ] **10.2** Structured JSON → Supabase Storage; raw PDF stays local
-- [ ] **10.3** Reader consumes real extracted text instead of sample data
-- [ ] **10.4** Processing states + OCR status for scanned PDFs
+- [x] **10.1** On-device extraction (`pdfjs-dist` on web, lazy-loaded; paragraph
+      and TOC shaping shared in `@mypro/shared`)
+- [x] **10.2** Structured JSON → Supabase Storage (`pdf-text` bucket, Render-brokered
+      signed URLs); raw PDF stays local
+- [x] **10.3** Reader consumes real extracted text instead of sample data — web
+      reader and the new Android reader
+- [~] **10.4** Processing states done (opening / extracting *n*/*N* / scanned /
+      unreadable, per page and in the toolbar). **OCR itself is not implemented.**
 
 ---
 

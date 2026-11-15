@@ -5,8 +5,10 @@
  */
 
 const DB_NAME = "mypro_storage_vault";
-const DB_VERSION = 1;
+// v2 adds the extracted-text store (Phase 10.1) alongside the PDF blobs.
+const DB_VERSION = 2;
 const STORE_NAME = "pdf_documents";
+const TEXT_STORE_NAME = "pdf_text";
 
 export interface StoredPdfRecord {
   id: string; // book title or unique identifier
@@ -30,6 +32,9 @@ function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(TEXT_STORE_NAME)) {
+        db.createObjectStore(TEXT_STORE_NAME, { keyPath: "id" });
       }
     };
 
@@ -171,4 +176,73 @@ export function performSupabaseUpload(
       }
     }, intervalTime);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Extracted text (Phase 10.1) — the reader's cache
+// ---------------------------------------------------------------------------
+
+/**
+ * The blob vault is keyed by whatever identifier the importer had to hand:
+ * `BookOptionsModal` has always used the book's title, while newer code uses
+ * the library item id. Try each in turn so books imported before the id was
+ * available keep opening.
+ */
+export async function getPdfBlobByAnyKey(keys: (string | undefined)[]): Promise<Blob | null> {
+  for (const key of keys) {
+    if (!key) continue;
+    const record = await getPdfLocally(key);
+    if (record?.blob) return record.blob;
+  }
+  return null;
+}
+
+/** The extracted-text JSON for a book, as cached on this device. */
+export async function loadExtractedText<T>(key: string): Promise<T | null> {
+  try {
+    const db = await openDb();
+    return await new Promise<T | null>((resolve, reject) => {
+      const tx = db.transaction(TEXT_STORE_NAME, "readonly");
+      const request = tx.objectStore(TEXT_STORE_NAME).get(key);
+      request.onsuccess = () => {
+        const row = request.result as { doc?: T } | undefined;
+        resolve(row?.doc ?? null);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Cache extracted text so re-opening a book is instant and offline-safe. */
+export async function saveExtractedText(key: string, doc: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(TEXT_STORE_NAME, "readwrite");
+      const request = tx
+        .objectStore(TEXT_STORE_NAME)
+        .put({ id: key, doc, savedAt: new Date().toISOString() });
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    // A full or unavailable vault must never break reading.
+  }
+}
+
+/** Forget a book's extracted text (re-import, or freeing space). */
+export async function deleteExtractedText(key: string): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(TEXT_STORE_NAME, "readwrite");
+      const request = tx.objectStore(TEXT_STORE_NAME).delete(key);
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+    });
+  } catch {
+    // Graceful fallback
+  }
 }

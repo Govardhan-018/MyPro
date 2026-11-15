@@ -209,6 +209,20 @@ export function createApi(
         post(`/library/${itemId}/listening-sessions`, body),
     },
 
+    /**
+     * Extracted PDF text (Phase 10.2). The raw PDF never leaves the device
+     * that holds it; only the structured JSON is synced, and Render brokers
+     * short-lived signed URLs so the client needs no Supabase credentials.
+     */
+    pdfText: {
+      uploadUrl: (itemId: string) =>
+        post<{ url: string; path: string }>(`/library/${itemId}/pdf-text/upload-url`),
+      downloadUrl: (itemId: string) =>
+        get<{ url: string | null; path: string | null }>(`/library/${itemId}/pdf-text/url`),
+      confirm: (itemId: string, body: { path: string; page_count: number; scanned?: boolean }) =>
+        post<{ ok: true }>(`/library/${itemId}/pdf-text/confirm`, body),
+    },
+
     knowledge: {
       get: () =>
         get<{ annotations: Record<string, unknown>[]; bookmarks: Record<string, unknown>[] }>(

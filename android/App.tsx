@@ -1,82 +1,106 @@
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { isApiConfigured, isAgentConfigured } from '@mypro/shared';
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { isAgentConfigured, isApiConfigured, type AuthSession } from '@mypro/shared';
 import { client } from './src/lib/client';
+import { LibraryScreen, type BookSummary } from './src/screens/LibraryScreen';
+import { ReaderScreen } from './src/screens/ReaderScreen';
+import { SignInScreen } from './src/screens/SignInScreen';
+import { colors, shared } from './src/theme';
 
 /**
- * Phase 2 scaffold. This screen's only job is to prove the Android app boots
- * on the shared core: it reads the resolved config straight out of
- * `client.env` (the same `@mypro/shared` instance the web app uses) and shows
- * what is wired. Real auth (Phase 3) and the assistant chat (Phase 4) land on
- * top of this exact client.
+ * The Android app. Thin client: the only backend it configures is Render,
+ * which brokers auth and the extracted-text URLs.
+ *
+ * What is here today is the reading path — sign in, your books, and the real
+ * text of a book extracted on whichever device holds its PDF. The assistant
+ * chat and the rest of the screens are Phase 8.
  */
 export default function App() {
   const { env } = client;
   const apiReady = isApiConfigured(env);
-  const agentReady = isAgentConfigured(env);
+  // `undefined` = still restoring the stored session.
+  const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
+  const [book, setBook] = useState<BookSummary | null>(null);
+
+  useEffect(() => {
+    if (!apiReady) return;
+    let active = true;
+    client.auth
+      .getSession()
+      .then((current) => {
+        if (active) setSession(current);
+      })
+      .catch(() => {
+        if (active) setSession(null);
+      });
+    const stop = client.auth.onAuthChange((next) => {
+      if (!active) return;
+      setSession(next);
+      if (!next) setBook(null);
+    });
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [apiReady]);
+
+  if (!apiReady) return <SetupScreen />;
+
+  if (session === undefined) {
+    return (
+      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="light" />
+        <ActivityIndicator color={colors.text} />
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.screen}>
+    <>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.brand}>MyPro</Text>
-        <Text style={styles.subtitle}>Personal companion — Android</Text>
+      {!session ? (
+        <SignInScreen onSignedIn={() => void client.auth.getSession().then(setSession)} />
+      ) : book ? (
+        <ReaderScreen book={book} onClose={() => setBook(null)} />
+      ) : (
+        <LibraryScreen onOpen={setBook} onSignOut={() => setSession(null)} />
+      )}
+    </>
+  );
+}
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Shared core</Text>
-          <Text style={styles.ok}>✓ @mypro/shared loaded</Text>
-          <Text style={styles.muted}>
-            Same types, API client, auth and agent discovery as the web app.
+/** Shown when the build has no API URL — nothing can be reached yet. */
+function SetupScreen() {
+  const { env } = client;
+  return (
+    <View style={shared.screen}>
+      <StatusBar style="light" />
+      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 72, gap: 20 }}>
+        <Text style={shared.title}>MyPro</Text>
+        <Text style={shared.muted}>Personal companion — Android</Text>
+
+        <View style={shared.card}>
+          <Text
+            style={{
+              color: colors.text,
+              fontSize: 13,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}
+          >
+            Not configured
+          </Text>
+          <Text style={shared.muted}>
+            Set EXPO_PUBLIC_API_URL to your Render URL and rebuild. That is the only
+            backend this app needs — sign-in, your library and the extracted book text
+            all come through it.
+          </Text>
+          <Text style={{ color: colors.textFaint, fontSize: 12 }}>
+            Assistant (laptop agent): {isAgentConfigured(env) ? 'discoverable' : 'not set'}
           </Text>
         </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Backends</Text>
-          <Row label="Core API (render)" ready={apiReady} />
-          <Row label="Assistant (laptop agent)" ready={agentReady} />
-          {!apiReady && (
-            <Text style={styles.muted}>
-              Set EXPO_PUBLIC_API_URL (your Render URL) to connect — that's the
-              only backend the app needs.
-            </Text>
-          )}
-        </View>
-
-        <Text style={styles.footer}>
-          Next: sign-in (Phase 3) and the assistant chat (Phase 4).
-        </Text>
       </ScrollView>
     </View>
   );
 }
-
-function Row({ label, ready }: { label: string; ready: boolean }) {
-  return (
-    <View style={styles.row}>
-      <Text style={ready ? styles.ok : styles.off}>{ready ? '●' : '○'}</Text>
-      <Text style={styles.rowLabel}>{label}</Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#000000' },
-  content: { padding: 24, paddingTop: 72, gap: 20 },
-  brand: { color: '#ffffff', fontSize: 40, fontWeight: '700', letterSpacing: -1 },
-  subtitle: { color: 'rgba(255,255,255,0.6)', fontSize: 15, marginTop: -8 },
-  card: {
-    backgroundColor: '#0e0e0e',
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 18,
-    gap: 8,
-  },
-  cardTitle: { color: '#ffffff', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  rowLabel: { color: 'rgba(255,255,255,0.85)', fontSize: 15 },
-  ok: { color: '#ffffff', fontSize: 15 },
-  off: { color: 'rgba(255,255,255,0.35)', fontSize: 15 },
-  muted: { color: 'rgba(255,255,255,0.45)', fontSize: 13, lineHeight: 18 },
-  footer: { color: 'rgba(255,255,255,0.35)', fontSize: 13, marginTop: 8 },
-});

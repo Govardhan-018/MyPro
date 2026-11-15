@@ -76,6 +76,8 @@ import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { isApiConfigured } from "./lib/env";
+import { storePdfLocally } from "./utils/pdfStorage";
+import { readPageCount } from "./lib/pdfEngine";
 import {
   AgentOfflineError,
   api,
@@ -2298,6 +2300,8 @@ function LibraryView({
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [addType, setAddType] = useState<AddKind>("Digital Book");
+  /** The PDF picked in the add form, kept until the item exists to key it by. */
+  const pendingPdfRef = useRef<File | null>(null);
   const [form, setForm] = useState(emptyAddForm);
   const [addingItem, setAddingItem] = useState(false);
   const [toast, setToast] = useState("");
@@ -2335,12 +2339,26 @@ function LibraryView({
       image: "",
       description: form.description.trim() || undefined,
     };
+    const pdfFile = addType === "Digital Book" ? pendingPdfRef.current : null;
+    let pdfBytes: ArrayBuffer | null = null;
     if (addType === "Digital Book") {
-      base.totalPages = total;
       base.currentPage = 1;
-      base.pdfFileName = form.fileName || "document.pdf";
+      base.pdfFileName = pdfFile?.name || form.fileName || "document.pdf";
       base.pdfStorageOption = "device";
       base.syncStatus = "local";
+      base.fileSizeBytes = pdfFile?.size;
+      // The PDF itself knows how long it is — ask it rather than guessing.
+      if (pdfFile) {
+        try {
+          pdfBytes = await pdfFile.arrayBuffer();
+          const detected = await readPageCount(pdfBytes);
+          base.totalPages = detected || total;
+        } catch {
+          base.totalPages = total;
+        }
+      } else {
+        base.totalPages = total;
+      }
     } else if (addType === "Physical Book") {
       base.totalPages = total;
       base.currentPage = current;
@@ -2358,7 +2376,12 @@ function LibraryView({
     }
     setAddingItem(true);
     try {
-      await onCreateItem(base);
+      const stored = await onCreateItem(base);
+      // Park the bytes in the device vault, keyed by the item id when we have
+      // one (the title is the legacy key, kept as a fallback on read).
+      if (pdfFile && pdfBytes) {
+        await storePdfLocally(stored.id ?? stored.title, pdfFile, pdfFile.name);
+      }
     } catch (caught) {
       setAddingItem(false);
       setToast(caught instanceof Error ? caught.message : "Could not add item.");
@@ -2368,6 +2391,7 @@ function LibraryView({
     }
     setAddingItem(false);
     setShowAdd(false);
+    pendingPdfRef.current = null;
     setForm(emptyAddForm);
     setCategory("All");
     setFilter("All");
@@ -2737,9 +2761,13 @@ function LibraryView({
                   <input
                     type="file"
                     accept="application/pdf"
-                    onChange={(event) =>
-                      setField("fileName", event.target.files?.[0]?.name ?? "")
-                    }
+                    onChange={(event) => {
+                      // Hold on to the file itself: the name alone cannot be
+                      // read, and the reader extracts its text on this device.
+                      const file = event.target.files?.[0] ?? null;
+                      pendingPdfRef.current = file;
+                      setField("fileName", file?.name ?? "");
+                    }}
                   />
                 </div>
               </label>

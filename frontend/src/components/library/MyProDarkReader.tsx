@@ -47,6 +47,8 @@ import {
   creativeActToc,
   type BookPageContent,
 } from "../../data/sampleReadingData";
+import { chapterAt } from "@mypro/shared";
+import { usePdfText } from "../../lib/usePdfText";
 
 interface MyProDarkReaderProps {
   book: LibraryItem;
@@ -146,7 +148,13 @@ export function MyProDarkReader({
   onSaveProgress,
   colorMode = false,
 }: MyProDarkReaderProps) {
-  const totalPages = book.totalPages || 320;
+  // Real PDF text (Roadmap Phase 10). Extraction runs on whichever device
+  // holds the file; every other device reads the JSON it produced. The sample
+  // pages below are the fallback for items with no PDF attached at all.
+  const { source: pdfText, revision: pdfRevision } = usePdfText(book, isOpen);
+  const pdfStatus = pdfText?.status ?? "unavailable";
+  const hasPdfText = pdfStatus !== "unavailable";
+  const totalPages = pdfText?.pageCount || book.totalPages || 320;
   const [currentPage, setCurrentPage] = useState<number>(book.currentPage || 128);
   const [theme, setTheme] = useState<ReaderTheme>("dark");
   const [zoomLevel, setZoomLevel] = useState<number>(100);
@@ -317,31 +325,71 @@ export function MyProDarkReader({
   };
 
   // ----- Page content -----
-  const getPageContent = useCallback((page: number): BookPageContent => {
-    if (sampleBookPages[page]) return sampleBookPages[page];
-    const chapterNum = Math.floor(page / 15) + 1;
-    return {
-      pageNumber: page,
-      chapterTitle: `Chapter ${chapterNum} · Reflections on Form`,
-      partTitle: page < 100 ? "Part I: Looking" : "Part II: Crafting",
-      paragraphs: [
-        `The practice of art requires daily devotion to simple observation. On page ${page}, consider how the structure of your day shapes the nature of your thoughts.`,
-        "When we create from a place of unhurried presence, our instincts speak louder than our anxieties. There is no urgency in nature: the tree does not hurry to blossom, yet the flower appears on schedule.",
-        "Take a moment to absorb this chapter’s essence before turning the page. Your notes, highlights, and markers in the sidebar help you revisit these reflections later.",
-      ],
-    };
-  }, []);
+  /** The PDF's own outline when it has one, else the item's, else the sample. */
+  const tocEntries = useMemo<TocChapter[]>(() => {
+    const fromPdf = pdfText?.toc ?? [];
+    if (fromPdf.length) return fromPdf;
+    return book.toc || creativeActToc;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfText, pdfRevision, book.toc]);
+
+  const getPageContent = useCallback(
+    (page: number): BookPageContent => {
+      if (hasPdfText) {
+        const chapter = chapterAt(tocEntries, page);
+        const extracted = pdfText?.page(page);
+        return {
+          pageNumber: page,
+          chapterTitle: chapter?.title || book.title,
+          partTitle: chapter?.part,
+          // Empty until this page is extracted; the sheet shows the state.
+          paragraphs: extracted?.paragraphs ?? [],
+        };
+      }
+      if (sampleBookPages[page]) return sampleBookPages[page];
+      const chapterNum = Math.floor(page / 15) + 1;
+      return {
+        pageNumber: page,
+        chapterTitle: `Chapter ${chapterNum} · Reflections on Form`,
+        partTitle: page < 100 ? "Part I: Looking" : "Part II: Crafting",
+        paragraphs: [
+          `The practice of art requires daily devotion to simple observation. On page ${page}, consider how the structure of your day shapes the nature of your thoughts.`,
+          "When we create from a place of unhurried presence, our instincts speak louder than our anxieties. There is no urgency in nature: the tree does not hurry to blossom, yet the flower appears on schedule.",
+          "Take a moment to absorb this chapter’s essence before turning the page. Your notes, highlights, and markers in the sidebar help you revisit these reflections later.",
+        ],
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasPdfText, pdfText, pdfRevision, tocEntries, book.title],
+  );
+
+  // Extract the page being read (and the next couple) on demand.
+  useEffect(() => {
+    if (!pdfText) return;
+    void pdfText.ensure(currentPage);
+  }, [pdfText, currentPage]);
+
+  // A remembered page (or the sample default) can sit past the real last page
+  // once the PDF tells us how long it actually is.
+  useEffect(() => {
+    const count = pdfText?.pageCount ?? 0;
+    if (count && currentPage > count) setCurrentPage(count);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfText, pdfRevision, currentPage]);
 
   const chapterForPage = useCallback(
     (page: number) => {
-      const toc = book.toc || creativeActToc;
+      const toc = tocEntries;
       const found = [...toc].reverse().find((item) => page >= item.page);
       return found ? found.title : getPageContent(page).chapterTitle;
     },
-    [book.toc, getPageContent],
+    [tocEntries, getPageContent],
   );
 
-  const pageContent = useMemo(() => getPageContent(currentPage), [currentPage, getPageContent]);
+  const pageContent = useMemo(
+    () => getPageContent(currentPage),
+    [currentPage, getPageContent],
+  );
   const currentChapter = useMemo(() => chapterForPage(currentPage), [currentPage, chapterForPage]);
   const progressPercent = Math.round((currentPage / totalPages) * 100);
 
@@ -365,7 +413,7 @@ export function MyProDarkReader({
         {
           id: `bm-${Date.now()}`,
           page: currentPage,
-          title: sampleBookPages[currentPage]?.chapterTitle || `Page ${currentPage}`,
+          title: chapterForPage(currentPage) || `Page ${currentPage}`,
           createdAt: "Just now",
         },
       ]);
@@ -581,6 +629,33 @@ export function MyProDarkReader({
     );
   };
 
+  /** What to say on a page whose text is not there (yet, or at all). */
+  const pageStatusMessage = (page: number): string => {
+    if (pdfStatus === "error") {
+      return pdfText?.error || "This PDF could not be read on this device.";
+    }
+    if (pdfStatus === "scanned") {
+      return "This PDF has no selectable text — it looks scanned. Text recognition is coming in a later release.";
+    }
+    if (pdfStatus === "loading") return "Opening the PDF…";
+    if (pdfText?.page(page)?.empty) return "This page has no text (it may be an image or a blank page).";
+    return `Extracting page ${page}…`;
+  };
+
+  /** The toolbar's one-line account of what extraction is doing. */
+  const extractionNote = (): string | null => {
+    if (!hasPdfText) return null;
+    if (pdfStatus === "loading") return "Opening PDF…";
+    if (pdfStatus === "extracting") {
+      const count = pdfText?.extracted ?? 0;
+      const total = pdfText?.pageCount ?? 0;
+      return total ? `Extracting text · ${count}/${total}` : "Extracting text…";
+    }
+    if (pdfStatus === "scanned") return "Scanned PDF · no text layer";
+    if (pdfStatus === "error") return "PDF unreadable";
+    return null;
+  };
+
   const renderSheet = (page: number) => {
     const content = getPageContent(page);
     return (
@@ -591,7 +666,9 @@ export function MyProDarkReader({
       >
         <div className="sheet-top-meta">
           <span className="sheet-book-name">{book.title}</span>
-          <span className="sheet-part-name">{content.partTitle || "Part III: Crafting"}</span>
+          <span className="sheet-part-name">
+            {content.partTitle || (hasPdfText ? "" : "Part III: Crafting")}
+          </span>
           <span className="sheet-page-marker">{page}</span>
         </div>
 
@@ -605,6 +682,13 @@ export function MyProDarkReader({
             <p>“{content.quote}”</p>
             {content.quoteAuthor && <cite>— {content.quoteAuthor}</cite>}
           </blockquote>
+        )}
+
+        {hasPdfText && content.paragraphs.length === 0 && (
+          <div className="sheet-text-status" role="status">
+            <span className="sheet-text-status-dot" aria-hidden="true" />
+            <span>{pageStatusMessage(page)}</span>
+          </div>
         )}
 
         <div className="sheet-paragraphs">
@@ -701,6 +785,16 @@ export function MyProDarkReader({
             <span className="reader-crumb-separator">/</span>
             <span className="reader-chapter-title">{currentChapter}</span>
           </div>
+          {extractionNote() && (
+            <span
+              className={`reader-pdf-status ${
+                pdfStatus === "error" || pdfStatus === "scanned" ? "warn" : ""
+              }`}
+              role="status"
+            >
+              {extractionNote()}
+            </span>
+          )}
         </div>
 
         <div className="toolbar-center">
@@ -926,7 +1020,7 @@ export function MyProDarkReader({
             {sidebarTab === "toc" && (
               <div className="toc-list">
                 <span className="toc-heading">TABLE OF CONTENTS</span>
-                {(book.toc || creativeActToc).map((chap: TocChapter) => (
+                {tocEntries.map((chap: TocChapter) => (
                   <button
                     type="button"
                     key={chap.id}

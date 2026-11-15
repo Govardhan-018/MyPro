@@ -39,6 +39,28 @@ export {
   type AuthUser,
 } from './auth';
 export { createApi, type ApiClient, ApiError, AgentOfflineError } from './api';
+export {
+  createPdfTextSource,
+  groupParagraphs,
+  outlineToToc,
+  chapterAt,
+  emptyDoc,
+  isComplete,
+  isPdfTextDoc,
+  type PdfEngine,
+  type PdfHandle,
+  type PdfOutlineNode,
+  type PdfPage,
+  type PdfStatus,
+  type PdfTextDoc,
+  type PdfTextItem,
+  type PdfTextRemote,
+  type PdfTextSource,
+  type PdfTextSourceOptions,
+  type PdfTextStore,
+  type PdfTocEntry,
+} from './pdf';
+export { createPdfTextRemote, type PdfTextApi } from './pdfRemote';
 export type {
   AnnotationKind,
   LibraryType,

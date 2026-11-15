@@ -4407,3 +4407,71 @@ button.learning-thumbnail {
     gap: 4px;
   }
 }
+
+/* =====================================================================
+   PDF extraction status (Phase 10)
+   The reader reads real PDF text; these two states cover the moments when
+   the text is not there — still extracting, or absent (a scanned file).
+   ===================================================================== */
+
+.reader-pdf-status {
+  margin-left: 10px;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+.reader-pdf-status.warn {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.sheet-text-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 28px 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.sheet-text-status-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  animation: sheet-text-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sheet-text-status-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+
+.mypro-dark-reader.sepia-theme .sheet-text-status,
+.mypro-dark-reader.original-theme .sheet-text-status {
+  border-color: rgba(60, 46, 30, 0.14);
+  background: rgba(60, 46, 30, 0.04);
+  color: rgba(60, 46, 30, 0.6);
+}
+
+.mypro-dark-reader.sepia-theme .sheet-text-status-dot,
+.mypro-dark-reader.original-theme .sheet-text-status-dot {
+  background: rgba(60, 46, 30, 0.45);
+}
+
+@media (max-width: 767px) {
+  .reader-pdf-status {
+    display: none;
+  }
+}

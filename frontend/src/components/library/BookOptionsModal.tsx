@@ -24,6 +24,7 @@ import {
   performSupabaseUpload,
   formatBytes,
 } from "../../utils/pdfStorage";
+import { readPageCount } from "../../lib/pdfEngine";
 
 interface BookOptionsModalProps {
   book: LibraryItem;
@@ -92,6 +93,9 @@ export function BookOptionsModal({
   const validCurrent = Math.min(validTotal, Math.max(0, currentPage));
   const progressPercent = Math.round((validCurrent / validTotal) * 100);
 
+  /** The device vault is keyed by item id; the title is the legacy fallback. */
+  const vaultKey = book.id ?? book.title;
+
   const handleSavePage = () => {
     onUpdateProgress(book.title, validCurrent, validTotal);
     setSavedSuccess(true);
@@ -105,19 +109,24 @@ export function BookOptionsModal({
       setSelectedFileName(file.name);
       setFileSizeBytes(file.size);
 
-      // Estimate realistic page count
-      const estimatedPages = Math.max(
-        42,
-        Math.min(650, Math.round(file.size / (1024 * 35)) || 320),
-      );
-      setDetectedPages(estimatedPages);
+      // Ask the PDF how many pages it has; fall back to a size estimate only
+      // if it cannot be read here.
+      let pages = 0;
+      try {
+        pages = await readPageCount(await file.arrayBuffer());
+      } catch {
+        pages = 0;
+      }
+      const detected =
+        pages || Math.max(42, Math.min(650, Math.round(file.size / (1024 * 35)) || 320));
+      setDetectedPages(detected);
 
       // IMPORTANT USER CONTROL: Do NOT upload automatically.
       // Default to local storage upon selection until explicitly chosen to sync.
       if (storageOption === "device") {
-        await storePdfLocally(book.title, file, file.name);
+        await storePdfLocally(vaultKey, file, file.name);
         setCurrentSyncStatus("local");
-        onImportPdf(book.title, file.name, "device", estimatedPages, "local", file.size);
+        onImportPdf(book.title, file.name, "device", detected, "local", file.size);
         setActionNotice("Stored locally in IndexedDB (Offline ready)");
         setTimeout(() => setActionNotice(""), 3500);
       } else {
@@ -131,7 +140,7 @@ export function BookOptionsModal({
   const handleSaveToDevice = async () => {
     setStorageOption("device");
     if (selectedFileObj) {
-      await storePdfLocally(book.title, selectedFileObj, selectedFileName);
+      await storePdfLocally(vaultKey, selectedFileObj, selectedFileName);
     }
     setCurrentSyncStatus("local");
     onImportPdf(

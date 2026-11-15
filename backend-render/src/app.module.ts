@@ -6,6 +6,7 @@ import { NodesModule } from './nodes/nodes.module';
 import { ProfileModule } from './profile/profile.module';
 import { LibraryModule } from './library/library.module';
 import { ReaderModule } from './library/reader.module';
+import { PdfTextModule } from './library/pdf-text.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { TasksModule } from './tasks/tasks.module';
 import { HealthRecordsModule } from './health/health-records.module';
@@ -27,6 +28,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     ProfileModule,
     LibraryModule,
     ReaderModule,
+    PdfTextModule,
     CalendarModule,
     TasksModule,
     HealthRecordsModule,

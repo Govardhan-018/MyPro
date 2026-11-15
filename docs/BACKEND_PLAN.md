@@ -341,13 +341,41 @@ notifications(
 
 ---
 
-## 5. PDF → JSON (local-first, web + app)
+## 5. PDF → JSON (local-first, web + app) — **implemented**
 
-1. User selects a PDF → **parsed on-device** with `pdfjs-dist` (web) / same WASM in Expo.
-2. Extract text per page, detect headings/chapters (font-size heuristics), build the structured JSON the reader already consumes (`{ page, chapterTitle, paragraphs[] }`).
-3. Store raw PDF **locally** (IndexedDB web / FileSystem app). Store structured JSON locally too.
-4. **If cloud sync is on:** upload the JSON + metadata to Supabase Storage (`book_details.pdf_json_path`); annotations always sync (they're small and valuable). The raw PDF uploads only if the user chooses "sync file".
-5. Scanned PDFs: OCR status states (`uploading → extracting → organizing → ready → failed`) surfaced in the existing Storage & Sync UI.
+The extracting device is whichever one holds the file; every other device reads
+the JSON it produced. The raw PDF never travels.
+
+1. User selects a PDF → **parsed on-device** with `pdfjs-dist` (web). The real
+   page count comes from the file itself at import time.
+2. Text is extracted per page and shaped into reading paragraphs by
+   `shared/src/pdf.ts` (`groupParagraphs`): lines from the engine's EOL flags,
+   paragraph breaks from leading, indent and stub lines, line-end hyphens
+   stitched, page numbers dropped. The PDF outline becomes the reader's TOC.
+   Extraction is lazy — the open page first, the rest in background chunks.
+3. Raw PDF stays **local** (IndexedDB `mypro_storage_vault` on web). The
+   extracted JSON (`PdfTextDoc`) is cached beside it (store `pdf_text`), and on
+   Android in `FileSystem.documentDirectory/pdf-text/`.
+4. Once complete, the JSON goes to the private `pdf-text` Storage bucket as
+   `<user_id>/<library_item_id>.json` and `book_details.pdf_json_path` records
+   it. Clients hold no Supabase key, so **backend-render brokers signed URLs**
+   (`backend-render/src/library/pdf-text.module.ts`); the client streams the
+   JSON straight to Storage, keeping multi-megabyte bodies off Render, whose
+   JSON body limit is 1 MB:
+
+   | Method | Path | Purpose |
+   |---|---|---|
+   | `POST` | `/library/:itemId/pdf-text/upload-url` | one-shot signed PUT URL (+ object path) |
+   | `GET`  | `/library/:itemId/pdf-text/url` | short-lived signed GET URL, or `null` when nothing is stored |
+   | `POST` | `/library/:itemId/pdf-text/confirm` | record `pdf_json_path` + page count after upload |
+
+   Bucket and owner-folder storage policies: `supabase/migrations/0005_pdf_text_storage.sql`.
+5. A PDF with no text layer reports `scanned` and the reader says so. OCR
+   itself is still open (Phase 10.4).
+
+**Known gap:** pdfjs runs without `cMapUrl`/`standardFontDataUrl`, so PDFs that
+depend on external CMaps (CJK and some exotic encodings) may extract poorly.
+Fixing it means serving `pdfjs-dist/cmaps` as a static asset.
 
 No server CPU spent on PDF parsing — it scales for free on the client.
 
