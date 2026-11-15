@@ -340,6 +340,21 @@ prose.** Finishes Phase 8.
   is untouched). The reader still renders synced extracted text: original
   PDF rasterisation on the phone would need the file itself, which never
   leaves the importing device by design.
+- ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
+  sign-in screen now mirrors the web login page — brand bar with the Color
+  Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no
+  native Lottie module joins the APK), the welcome copy and its three
+  pillars, then the account panel with Apple / Google / email, one live
+  feedback line, show-password, and the sign-in ↔ create-account switch.
+  Apple and Google call the same shared `signInWithOAuth` the web calls and
+  report the same "not available yet" message rather than looking live.
+  **The bug it shipped with:** `EXPO_PUBLIC_API_URL` set to the bare Render
+  host made every call 404 with NestJS's `Cannot POST /auth/login`, because
+  both backends mount under `app.setGlobalPrefix('api/v1')`. `normalizeEnv`
+  in `shared/src/env.ts` now appends the prefix when it is missing (and
+  leaves a complete URL alone), so the host on its own works for both
+  clients. `android/.env.example` documents the app's two variables for the
+  first time.
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your
 own books and episodes.** The extraction is done and the data sits unused.
