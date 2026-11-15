@@ -101,12 +101,25 @@ import {
   type IllnessMedication,
   type IllnessRecord,
 } from "./lib/useHealth";
-import { useTasks, type Task } from "./lib/useTasks";
+import {
+  useCalendar,
+  groupByDate,
+  isoDate,
+  startOfWeek,
+  weekdayLabel,
+  positionOf,
+  eventMeta,
+  timeLabel,
+  durationLabel,
+  nowOffset,
+  HOUR_LABELS,
+  type CalEvent,
+  type NewEventInput,
+} from "./lib/useCalendar";
 
 type View =
   | "today"
   | "calendar"
-  | "tasks"
   | "library"
   | "knowledge"
   | "health"
@@ -149,7 +162,6 @@ function Spinner() {
 const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "today", label: "Today", icon: Home },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
-  { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "library", label: "My Library", icon: Library },
   { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
@@ -493,25 +505,33 @@ function Welcome({
   );
 }
 
-const events = [
-  { time: "9:30", duration: "45 min", title: "Product strategy", type: "Work", color: "violet" },
-  {
-    time: "11:00",
-    duration: "30 min",
-    title: "Dentist appointment",
-    type: "Health",
-    color: "mint",
-  },
-  { time: "2:00", duration: "1 hr", title: "Deep work session", type: "Personal", color: "blue" },
-];
-
-function TodayView({ navigate }: { navigate: (v: View) => void }) {
+function TodayView({
+  navigate,
+  items,
+  onOpenMedia,
+}: {
+  navigate: (v: View) => void;
+  items: LibraryItem[];
+  onOpenMedia: (item: LibraryItem) => void;
+}) {
+  const { events: calEvents } = useCalendar();
+  const now = new Date();
+  const todaysEvents = (groupByDate(calEvents).get(isoDate(now)) ?? []).filter((e) => !e.allDay);
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning." : hour < 18 ? "Good afternoon." : "Good evening.";
+  const inProgress =
+    items.find((i) => i.progress > 0 && i.progress < 100) ??
+    items.find((i) => i.status === "In Progress");
   return (
     <div className="page-content dashboard-view">
       <header className="page-heading">
         <div>
-          <div className="eyebrow muted-eyebrow">MONDAY, MAY 26</div>
-          <h1>Good morning, Alex.</h1>
+          <div className="eyebrow muted-eyebrow">
+            {now
+              .toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+              .toUpperCase()}
+          </div>
+          <h1>{greeting}</h1>
           <p>Here’s a calm look at what’s ahead.</p>
         </div>
       </header>
@@ -528,25 +548,34 @@ function TodayView({ navigate }: { navigate: (v: View) => void }) {
             </button>
           </div>
           <div className="agenda-list">
-            {events.map((event) => (
-              <div className="agenda-row" key={event.title}>
-                <div className="agenda-time">
-                  <strong>{event.time}</strong>
-                  <span>{event.duration}</span>
-                </div>
-                <div className={`agenda-event event-${event.color}`}>
-                  <div>
-                    <strong>{event.title}</strong>
-                    <span>{event.type}</span>
+            {todaysEvents.length === 0 ? (
+              <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "13px", padding: "8px 2px" }}>
+                Nothing scheduled today. Enjoy the open day.
+              </p>
+            ) : (
+              todaysEvents.map((event) => (
+                <div className="agenda-row" key={event.id}>
+                  <div className="agenda-time">
+                    <strong>{timeLabel(event.startsAt)}</strong>
+                    <span>{durationLabel(event)}</span>
                   </div>
-                  <Ellipsis size={18} />
+                  <div className={`agenda-event event-${event.tone}`}>
+                    <div>
+                      <strong>{event.title}</strong>
+                      <span>{event.location || "Event"}</span>
+                    </div>
+                    <Ellipsis size={18} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
-          <div className="free-time">
-            <Clock3 size={15} /> Next open block <strong>3:00–5:30 PM</strong>
-          </div>
+          {todaysEvents.length > 0 && (
+            <div className="free-time">
+              <Clock3 size={15} /> {todaysEvents.length}{" "}
+              {todaysEvents.length === 1 ? "event" : "events"} scheduled today
+            </div>
+          )}
         </div>
 
         <div className="glass-card focus-card">
@@ -556,8 +585,8 @@ function TodayView({ navigate }: { navigate: (v: View) => void }) {
             </div>
           </div>
           <span className="section-kicker">MYPRO INSIGHT</span>
-          <h2>You have a focused afternoon.</h2>
-          <p>I can protect your free block and move two flexible tasks around it.</p>
+          <h2>Plan your day with me.</h2>
+          <p>I can organize your schedule, reading, and reminders around what matters.</p>
           <button onClick={() => navigate("assistant")}>
             Plan it with me <ArrowRight size={15} />
           </button>
@@ -565,29 +594,6 @@ function TodayView({ navigate }: { navigate: (v: View) => void }) {
       </section>
 
       <section className="dashboard-lower">
-        <div className="glass-card important-mail">
-          <div className="mail-icon">
-            <Mail size={20} />
-          </div>
-          <div className="mail-content">
-            <div className="mail-meta">
-              <span className="section-kicker">IMPORTANT MAIL</span>
-              <span>12 min ago</span>
-            </div>
-            <h2>Q3 proposal needs your review</h2>
-            <p>Maya Chen · Product team</p>
-            <div className="mail-insight">
-              <Sparkles size={14} />
-              <span>
-                Needs your approval before 3 PM; the launch date is the only open question.
-              </span>
-            </div>
-          </div>
-          <button className="mail-open" aria-label="Open important mail">
-            <ArrowRight size={17} />
-          </button>
-        </div>
-
         <div className="glass-card library-peek">
           <div className="card-heading compact">
             <div>
@@ -598,199 +604,122 @@ function TodayView({ navigate }: { navigate: (v: View) => void }) {
               View all
             </button>
           </div>
-          <div className="book-row">
-            <div className="book-cover">
-              <span>THE</span>
-              <strong>
-                CREATIVE
-                <br />
-                ACT
-              </strong>
-              <small>Rick Rubin</small>
-            </div>
-            <div className="book-info">
-              <span className="soft-label">BOOK</span>
-              <h3>The Creative Act</h3>
-              <p>Chapter 18 · 32 min left</p>
-              <div className="progress">
-                <i style={{ width: "64%" }} />
+          {inProgress ? (
+            <div
+              className="book-row"
+              onClick={() => onOpenMedia(inProgress)}
+              style={{ cursor: "pointer" }}
+            >
+              <div className="book-cover">
+                {inProgress.image ? (
+                  <img
+                    src={inProgress.image}
+                    alt=""
+                    style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }}
+                  />
+                ) : (
+                  <strong>{inProgress.title.slice(0, 14)}</strong>
+                )}
               </div>
-              <small>64% completed</small>
+              <div className="book-info">
+                <span className="soft-label">{inProgress.type.toUpperCase()}</span>
+                <h3>{inProgress.title}</h3>
+                <p>{inProgress.creator || "In your library"}</p>
+                <div className="progress">
+                  <i style={{ width: `${inProgress.progress}%` }} />
+                </div>
+                <small>{inProgress.progress}% completed</small>
+              </div>
             </div>
-          </div>
+          ) : (
+            <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "13px", padding: "6px 2px" }}>
+              Nothing in progress yet.{" "}
+              <button className="text-button" onClick={() => navigate("library")}>
+                Add to your library
+              </button>
+            </p>
+          )}
         </div>
       </section>
     </div>
   );
 }
 
-const week = [
-  { day: "MON", date: 26 },
-  { day: "TUE", date: 27 },
-  { day: "WED", date: 28 },
-  { day: "THU", date: 29 },
-  { day: "FRI", date: 30 },
-];
+function CalendarView() {
+  const { events, loading, error, createEvent } = useCalendar();
+  const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
+  const [refDate, setRefDate] = useState(() => new Date());
+  const [showModal, setShowModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [form, setForm] = useState<NewEventInput>({
+    title: "",
+    date: isoDate(new Date()),
+    startTime: "",
+    endTime: "",
+    allDay: false,
+    location: "",
+  });
 
-function TasksView() {
-  const { tasks, loading, error, addTask, toggleTask, removeTask } = useTasks();
-  const [title, setTitle] = useState("");
-  const [due, setDue] = useState("");
-  const [filter, setFilter] = useState<"all" | "open" | "done">("open");
-  const [adding, setAdding] = useState(false);
+  const today = new Date();
+  const todayIso = isoDate(today);
+  const eventsByDate = useMemo(() => groupByDate(events), [events]);
 
-  const submit = async () => {
-    if (!title.trim() || adding) return;
-    setAdding(true);
+  const weekStart = startOfWeek(refDate);
+  const weekDays = Array.from({ length: 5 }, (_, i) => {
+    const date = new Date(weekStart);
+    date.setDate(date.getDate() + i);
+    return { date, iso: isoDate(date), num: date.getDate() };
+  });
+
+  const shift = (dir: 1 | -1) =>
+    setRefDate((d) => {
+      const next = new Date(d);
+      if (mode === "Month") next.setMonth(next.getMonth() + dir);
+      else if (mode === "Week") next.setDate(next.getDate() + 7 * dir);
+      else next.setDate(next.getDate() + dir);
+      return next;
+    });
+
+  const title =
+    mode === "Day"
+      ? refDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+      : mode === "Week"
+        ? `${weekDays[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekDays[4].date.toLocaleDateString(undefined, { day: "numeric" })}`
+        : refDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const setField = <K extends keyof NewEventInput>(key: K, value: NewEventInput[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+  const openQuickAdd = () => {
+    setForm({ title: "", date: isoDate(refDate), startTime: "", endTime: "", allDay: false, location: "" });
+    setFormError(null);
+    setShowModal(true);
+  };
+  const save = async () => {
+    setSaving(true);
+    setFormError(null);
     try {
-      await addTask({ title, dueAt: due || undefined });
-      setTitle("");
-      setDue("");
+      await createEvent(form);
+      setShowModal(false);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Could not save the event.");
     } finally {
-      setAdding(false);
+      setSaving(false);
     }
   };
 
-  const fmtDue = (iso?: string) => {
-    if (!iso) return null;
-    const date = new Date(iso);
-    return Number.isNaN(date.getTime())
-      ? null
-      : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  };
+  const monthFirst = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
+  const monthOffset = (monthFirst.getDay() + 6) % 7;
+  const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
+  const tzHours = -new Date().getTimezoneOffset() / 60;
+  const tzLabel = `GMT${tzHours >= 0 ? "+" : ""}${tzHours}`;
 
-  const visible = tasks.filter((task) =>
-    filter === "all"
-      ? task.status !== "dropped"
-      : filter === "open"
-        ? task.status === "open"
-        : task.status === "done",
-  );
-
-  return (
-    <div className="page-content foundation-view tasks-view">
-      <header className="page-heading">
-        <div>
-          <div className="eyebrow muted-eyebrow">TASKS</div>
-          <h1>What needs doing.</h1>
-          <p>Quick, flexible to-dos — kept in sync across your space.</p>
-        </div>
-      </header>
-
-      {error && (
-        <div className="data-banner data-banner-error" role="alert">
-          {error}
-        </div>
-      )}
-      {loading && !error && (
-        <div className="data-banner" aria-live="polite">
-          Loading your tasks…
-        </div>
-      )}
-
-      <div className="task-composer glass-card">
-        <input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") submit();
-          }}
-          placeholder="Add a task…"
-        />
-        <input
-          type="date"
-          value={due}
-          onChange={(event) => setDue(event.target.value)}
-          aria-label="Due date"
-        />
-        <button className="primary-button" onClick={submit} disabled={adding || !title.trim()}>
-          {adding ? <Spinner /> : <Plus size={16} />} Add
-        </button>
-      </div>
-
-      <div className="task-filters segmented">
-        {(["open", "done", "all"] as const).map((item) => (
-          <button
-            key={item}
-            className={filter === item ? "selected" : ""}
-            onClick={() => setFilter(item)}
-          >
-            {item === "open" ? "Open" : item === "done" ? "Done" : "All"}
-          </button>
-        ))}
-      </div>
-
-      {visible.length === 0 ? (
-        <p className="task-empty">
-          {loading
-            ? ""
-            : filter === "open"
-              ? "Nothing open. Enjoy the calm."
-              : "No tasks here yet."}
-        </p>
-      ) : (
-        <ul className="task-list">
-          {visible.map((task) => (
-            <li key={task.id} className={`task-row ${task.status === "done" ? "done" : ""}`}>
-              <button
-                className="task-check"
-                onClick={() => toggleTask(task)}
-                aria-label={task.status === "done" ? "Mark open" : "Mark done"}
-              >
-                {task.status === "done" ? (
-                  <CheckCircle2 size={18} />
-                ) : (
-                  <span className="task-check-empty" />
-                )}
-              </button>
-              <span className="task-title">{task.title}</span>
-              {fmtDue(task.dueAt) && (
-                <span className="task-due">
-                  <Clock3 size={13} /> {fmtDue(task.dueAt)}
-                </span>
-              )}
-              <button
-                className="task-delete"
-                onClick={() => removeTask(task)}
-                aria-label="Delete task"
-              >
-                <X size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function CalendarView() {
-  const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
-  const [showModal, setShowModal] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const request = useSimulatedRequest();
-  const openQuickAdd = () => {
-    setSaved(false);
-    setShowModal(true);
-  };
-  const addToCalendar = async () => {
-    setSaving(true);
-    await request();
-    setSaving(false);
-    setSaved(true);
-  };
-  const calendarTitles = {
-    Day: "Monday, May 26",
-    Week: "May 26–30",
-    Month: "May 2025",
-  };
   return (
     <div className="page-content calendar-view">
       <header className="page-heading calendar-heading">
         <div>
           <div className="eyebrow muted-eyebrow">CALENDAR</div>
-          <h1>{calendarTitles[mode]}</h1>
+          <h1>{title}</h1>
         </div>
         <div className="calendar-actions">
           <div className="segmented">
@@ -804,13 +733,13 @@ function CalendarView() {
               </button>
             ))}
           </div>
-          <button className="secondary-button" onClick={() => setMode("Day")}>
+          <button className="secondary-button" onClick={() => setRefDate(new Date())}>
             Today
           </button>
-          <IconButton label={`Previous ${mode.toLowerCase()}`}>
+          <IconButton label={`Previous ${mode.toLowerCase()}`} onClick={() => shift(-1)}>
             <ArrowLeft size={18} />
           </IconButton>
-          <IconButton label={`Next ${mode.toLowerCase()}`}>
+          <IconButton label={`Next ${mode.toLowerCase()}`} onClick={() => shift(1)}>
             <ArrowRight size={18} />
           </IconButton>
           <button className="primary-button" onClick={openQuickAdd}>
@@ -818,11 +747,23 @@ function CalendarView() {
           </button>
         </div>
       </header>
+      {error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {error}
+        </div>
+      )}
+      {loading && !error && (
+        <div className="data-banner" aria-live="polite">
+          Loading your calendar…
+        </div>
+      )}
       <div className={`calendar-layout calendar-layout-${mode.toLowerCase()}`}>
         {mode !== "Month" && (
           <aside className="calendar-context glass-card">
             <div className="mini-month-title">
-              <strong>May 2025</strong>
+              <strong>
+                {refDate.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+              </strong>
               <div>
                 <ChevronDown size={15} />
               </div>
@@ -833,220 +774,173 @@ function CalendarView() {
               ))}
             </div>
             <div className="mini-month">
-              {Array.from({ length: 35 }, (_, i) => {
-                const day = i - 2;
+              {Array.from({ length: 42 }, (_, i) => {
+                const dayNum = i - monthOffset + 1;
+                const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+                const cellIso = inMonth
+                  ? isoDate(new Date(refDate.getFullYear(), refDate.getMonth(), dayNum))
+                  : "";
                 return (
                   <span
                     key={i}
-                    className={day === 26 ? "active" : day < 1 || day > 31 ? "faded" : ""}
+                    className={!inMonth ? "faded" : cellIso === todayIso ? "active" : ""}
                   >
-                    {day < 1 ? 30 + day : day > 31 ? day - 31 : day}
+                    {inMonth ? dayNum : ""}
                   </span>
                 );
               })}
             </div>
           </aside>
         )}
-        {mode === "Week" && <MobileWeekAgenda />}
+        {mode === "Week" && (
+          <MobileWeekAgenda weekDays={weekDays} eventsByDate={eventsByDate} todayIso={todayIso} />
+        )}
         {mode === "Week" && (
           <div className="week-calendar glass-card">
             <div className="week-header">
-              <div className="timezone">GMT+1</div>
-              {week.map((d, index) => (
-                <div className={index === 0 ? "today-column" : ""} key={d.day}>
-                  <span>{d.day}</span>
-                  <strong>{d.date}</strong>
+              <div className="timezone">{tzLabel}</div>
+              {weekDays.map((d) => (
+                <div className={d.iso === todayIso ? "today-column" : ""} key={d.iso}>
+                  <span>{weekdayLabel(d.date)}</span>
+                  <strong>{d.num}</strong>
                 </div>
               ))}
             </div>
             <div className="week-grid">
               <div className="time-rail">
-                {[
-                  "8 AM",
-                  "9 AM",
-                  "10 AM",
-                  "11 AM",
-                  "12 PM",
-                  "1 PM",
-                  "2 PM",
-                  "3 PM",
-                  "4 PM",
-                  "5 PM",
-                ].map((time) => (
+                {HOUR_LABELS.map((time) => (
                   <span key={time}>{time}</span>
                 ))}
               </div>
-              {week.map((d, i) => (
-                <div className="day-column" key={d.date}>
-                  {i === 0 && (
-                    <>
-                      <CalendarEvent
-                        top={67}
-                        height={74}
-                        title="Product strategy"
-                        meta="9:30 · 45 min"
-                        color="lavender"
-                      />
-                      <CalendarEvent
-                        top={214}
-                        height={82}
-                        title="Dentist"
-                        meta="11:00 · 30 min"
-                        color="mint"
-                      />
-                      <CalendarEvent
-                        top={457}
-                        height={106}
-                        title="Deep work"
-                        meta="2:00 · 1 hr"
-                        color="blue"
-                      />
-                      <div className="current-time" style={{ top: 375 }}>
-                        <i />
-                        <span>1:12</span>
-                      </div>
-                    </>
-                  )}
-                  {i === 1 && (
-                    <CalendarEvent
-                      top={148}
-                      height={103}
-                      title="Team review"
-                      meta="10:15 · 1 hr"
-                      color="blue"
-                    />
-                  )}
-                  {i === 2 && (
-                    <>
-                      <CalendarEvent
-                        top={67}
-                        height={73}
-                        title="Morning run"
-                        meta="9:30 · 45 min"
-                        color="mint"
-                      />
-                      <CalendarEvent
-                        top={373}
-                        height={114}
-                        title="Read & notes"
-                        meta="1:00 · 1 hr"
-                        color="peach"
-                      />
-                    </>
-                  )}
-                  {i === 3 && (
-                    <CalendarEvent
-                      top={214}
-                      height={105}
-                      title="Project sync"
-                      meta="11:00 · 1 hr"
-                      color="lavender"
-                    />
-                  )}
-                  {i === 4 && (
-                    <CalendarEvent
-                      top={294}
-                      height={71}
-                      title="Weekly review"
-                      meta="12:00 · 45 min"
-                      color="peach"
-                    />
+              {weekDays.map((d) => (
+                <div className="day-column" key={d.iso}>
+                  {(eventsByDate.get(d.iso) ?? [])
+                    .filter((ev) => !ev.allDay)
+                    .map((ev) => {
+                      const { top, height } = positionOf(ev);
+                      return (
+                        <CalendarEvent
+                          key={ev.id}
+                          top={top}
+                          height={height}
+                          title={ev.title}
+                          meta={eventMeta(ev)}
+                          color={ev.tone}
+                        />
+                      );
+                    })}
+                  {d.iso === todayIso && nowOffset() >= 0 && nowOffset() <= 640 && (
+                    <div className="current-time" style={{ top: nowOffset() }}>
+                      <i />
+                      <span>{today.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                    </div>
                   )}
                 </div>
               ))}
             </div>
           </div>
         )}
-        {mode === "Day" && <DayCalendar />}
-        {mode === "Month" && <MonthCalendar />}
+        {mode === "Day" && (
+          <DayCalendar
+            date={refDate}
+            events={eventsByDate.get(isoDate(refDate)) ?? []}
+            isToday={isoDate(refDate) === todayIso}
+          />
+        )}
+        {mode === "Month" && (
+          <MonthCalendar refDate={refDate} eventsByDate={eventsByDate} todayIso={todayIso} />
+        )}
       </div>
       {showModal && (
-        <div className="modal-backdrop" onMouseDown={() => setShowModal(false)}>
+        <div className="modal-backdrop" onMouseDown={() => !saving && setShowModal(false)}>
           <div className="event-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-heading">
               <div>
                 <span className="section-kicker">QUICK ADD</span>
-                <h2>{saved ? "Added to your day" : "Create something new"}</h2>
+                <h2>Create an event</h2>
               </div>
               <IconButton label="Close" onClick={() => setShowModal(false)}>
                 <X size={18} />
               </IconButton>
             </div>
-            {saved ? (
-              <div className="saved-state">
-                <div>
-                  <Check size={28} />
-                </div>
-                <h3>Design review</h3>
-                <p>Tuesday, May 27 · 10:00–10:45 AM</p>
-                <button className="primary-button" onClick={() => setShowModal(false)}>
-                  Done
-                </button>
+            <label className="field-label">
+              TITLE
+              <input
+                value={form.title}
+                onChange={(e) => setField("title", e.target.value)}
+                placeholder="Event title"
+              />
+            </label>
+            <div className="field-grid">
+              <label className="field-label">
+                DATE
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setField("date", e.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                LOCATION
+                <input
+                  value={form.location}
+                  onChange={(e) => setField("location", e.target.value)}
+                  placeholder="Optional"
+                />
+              </label>
+            </div>
+            <label
+              className="field-label"
+              style={{ flexDirection: "row", alignItems: "center", gap: "8px" }}
+            >
+              <input
+                type="checkbox"
+                checked={form.allDay}
+                onChange={(e) => setField("allDay", e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: "#ffffff" }}
+              />
+              All day
+            </label>
+            {!form.allDay && (
+              <div className="field-grid">
+                <label className="field-label">
+                  START
+                  <input
+                    type="time"
+                    value={form.startTime}
+                    onChange={(e) => setField("startTime", e.target.value)}
+                  />
+                </label>
+                <label className="field-label">
+                  END
+                  <input
+                    type="time"
+                    value={form.endTime}
+                    onChange={(e) => setField("endTime", e.target.value)}
+                  />
+                </label>
               </div>
-            ) : (
-              <>
-                <div className="type-switch">
-                  <button className="active">Event</button>
-                  <button>Task</button>
-                </div>
-                <label className="field-label">
-                  TITLE
-                  <input defaultValue="Design review" />
-                </label>
-                <label className="field-label">
-                  DESCRIPTION
-                  <textarea placeholder="Add notes, links, or context..." />
-                </label>
-                <div className="field-grid">
-                  <label className="field-label">
-                    DATE
-                    <input defaultValue="Tue, May 27" />
-                  </label>
-                  <label className="field-label">
-                    TIME
-                    <input defaultValue="10:00 – 10:45 AM" />
-                  </label>
-                </div>
-                <div className="field-grid">
-                  <label className="field-label">
-                    CATEGORY
-                    <select defaultValue="Work">
-                      <option>Work</option>
-                      <option>Personal</option>
-                      <option>Health</option>
-                      <option>Reading</option>
-                    </select>
-                  </label>
-                  <label className="field-label">
-                    REMINDER
-                    <select defaultValue="10 minutes before">
-                      <option>10 minutes before</option>
-                      <option>At start time</option>
-                      <option>1 hour before</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="modal-footer">
-                  <button className="secondary-button" onClick={() => setShowModal(false)}>
-                    Cancel
-                  </button>
-                  <button
-                    className="primary-button"
-                    onClick={addToCalendar}
-                    disabled={saving}
-                    aria-busy={saving}
-                  >
-                    {saving ? (
-                      <>
-                        <Spinner /> Adding…
-                      </>
-                    ) : (
-                      "Add to calendar"
-                    )}
-                  </button>
-                </div>
-              </>
             )}
+            {formError && <p className="composer-error">{formError}</p>}
+            <div className="modal-footer">
+              <button className="secondary-button" onClick={() => setShowModal(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                onClick={save}
+                disabled={saving || !form.title.trim()}
+                aria-busy={saving}
+              >
+                {saving ? (
+                  <>
+                    <Spinner /> Adding…
+                  </>
+                ) : (
+                  "Add to calendar"
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1054,66 +948,70 @@ function CalendarView() {
   );
 }
 
-const weekAgenda: { time: string; duration: string; title: string; tone: string }[][] = [
-  [
-    { time: "9:30 AM", duration: "45 min", title: "Product strategy", tone: "lavender" },
-    { time: "11:00 AM", duration: "30 min", title: "Dentist", tone: "mint" },
-    { time: "2:00 PM", duration: "1 hr", title: "Deep work", tone: "blue" },
-  ],
-  [{ time: "10:15 AM", duration: "1 hr", title: "Team review", tone: "blue" }],
-  [
-    { time: "9:30 AM", duration: "45 min", title: "Morning run", tone: "mint" },
-    { time: "1:00 PM", duration: "1 hr", title: "Read & notes", tone: "peach" },
-  ],
-  [{ time: "11:00 AM", duration: "1 hr", title: "Project sync", tone: "lavender" }],
-  [{ time: "12:00 PM", duration: "45 min", title: "Weekly review", tone: "peach" }],
-];
-
 /* Phone-only week view: a day strip with a vertical agenda instead of a 5-column grid. */
-function MobileWeekAgenda() {
+function MobileWeekAgenda({
+  weekDays,
+  eventsByDate,
+  todayIso,
+}: {
+  weekDays: { date: Date; iso: string; num: number }[];
+  eventsByDate: Map<string, CalEvent[]>;
+  todayIso: string;
+}) {
   const [selected, setSelected] = useState(0);
-  const items = weekAgenda[selected];
+  const selectedDay = weekDays[selected];
+  const items = (eventsByDate.get(selectedDay?.iso ?? "") ?? []).filter((e) => !e.allDay);
   return (
     <div className="mobile-week-agenda">
       <div className="mobile-day-strip" role="tablist" aria-label="Days this week">
-        {week.map((d, index) => (
-          <button
-            key={d.day}
-            role="tab"
-            aria-selected={selected === index}
-            className={`${selected === index ? "selected" : ""} ${index === 0 ? "today" : ""}`}
-            onClick={() => setSelected(index)}
-          >
-            <span>{d.day}</span>
-            <strong>{d.date}</strong>
-            <i>
-              {weekAgenda[index].map((item) => (
-                <b key={item.title} className={`tone-${item.tone}`} />
-              ))}
-            </i>
-          </button>
-        ))}
+        {weekDays.map((d, index) => {
+          const dayEvents = eventsByDate.get(d.iso) ?? [];
+          return (
+            <button
+              key={d.iso}
+              role="tab"
+              aria-selected={selected === index}
+              className={`${selected === index ? "selected" : ""} ${d.iso === todayIso ? "today" : ""}`}
+              onClick={() => setSelected(index)}
+            >
+              <span>{weekdayLabel(d.date)}</span>
+              <strong>{d.num}</strong>
+              <i>
+                {dayEvents.slice(0, 3).map((item) => (
+                  <b key={item.id} className={`tone-${item.tone}`} />
+                ))}
+              </i>
+            </button>
+          );
+        })}
       </div>
       <div className="mobile-agenda-summary">
         <strong>
-          {selected === 0
+          {selectedDay && selectedDay.iso === todayIso
             ? "Today"
-            : `${week[selected].day.charAt(0)}${week[selected].day.slice(1).toLowerCase()}, May ${week[selected].date}`}
+            : selectedDay
+              ? selectedDay.date.toLocaleDateString(undefined, {
+                  weekday: "long",
+                  month: "short",
+                  day: "numeric",
+                })
+              : ""}
         </strong>
         <span>
           {items.length} {items.length === 1 ? "event" : "events"}
         </span>
       </div>
       <div className="mobile-agenda-list">
+        {items.length === 0 && <p className="mobile-month-empty">Nothing scheduled.</p>}
         {items.map((item) => (
-          <article className={`mobile-agenda-event tone-${item.tone}`} key={item.title}>
+          <article className={`mobile-agenda-event tone-${item.tone}`} key={item.id}>
             <time>
-              <strong>{item.time.replace(/ (AM|PM)/, "")}</strong>
-              <span>{item.time.slice(-2)}</span>
+              <strong>{timeLabel(item.startsAt).replace(/ ?[AP]M/, "")}</strong>
+              <span>{timeLabel(item.startsAt).slice(-2)}</span>
             </time>
             <div>
               <strong>{item.title}</strong>
-              <span>{item.duration}</span>
+              <span>{durationLabel(item)}</span>
             </div>
             <ChevronRight size={16} />
           </article>
@@ -1144,81 +1042,97 @@ function CalendarEvent({
   );
 }
 
-function DayCalendar() {
-  const hours = ["8 AM", "9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM"];
+function DayCalendar({
+  date,
+  events,
+  isToday,
+}: {
+  date: Date;
+  events: CalEvent[];
+  isToday: boolean;
+}) {
+  const timed = events.filter((e) => !e.allDay);
+  const allDay = events.filter((e) => e.allDay);
+  const totalMin = timed.reduce((sum, ev) => {
+    const s = new Date(ev.startsAt).getTime();
+    const e = ev.endsAt ? new Date(ev.endsAt).getTime() : s + 3600000;
+    return sum + Math.max(0, (e - s) / 60000);
+  }, 0);
+  const hrs = Math.floor(totalMin / 60);
+  const mins = Math.round(totalMin % 60);
+  const scheduled =
+    totalMin > 0 ? `${hrs ? `${hrs}h ` : ""}${mins ? `${mins}m ` : ""}scheduled`.trim() : "Open day";
 
   return (
     <div className="day-calendar glass-card">
       <div className="day-calendar-header">
         <div>
-          <span className="section-kicker">MONDAY</span>
-          <h2>26 May</h2>
+          <span className="section-kicker">
+            {date.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase()}
+          </span>
+          <h2>{date.toLocaleDateString(undefined, { day: "numeric", month: "long" })}</h2>
         </div>
         <div className="day-summary">
-          <strong>3 events</strong>
-          <span>3h 15m scheduled</span>
+          <strong>
+            {timed.length} {timed.length === 1 ? "event" : "events"}
+          </strong>
+          <span>{scheduled}</span>
         </div>
       </div>
-      <div className="all-day-row">
-        <span>ALL DAY</span>
-        <div>Submit monthly expenses</div>
-      </div>
+      {allDay.length > 0 && (
+        <div className="all-day-row">
+          <span>ALL DAY</span>
+          <div>{allDay.map((e) => e.title).join(", ")}</div>
+        </div>
+      )}
       <div className="day-timeline">
         <div className="time-rail">
-          {hours.map((time) => (
+          {HOUR_LABELS.map((time) => (
             <span key={time}>{time}</span>
           ))}
         </div>
         <div className="day-column day-column-expanded">
-          <CalendarEvent
-            top={67}
-            height={74}
-            title="Product strategy"
-            meta="9:30–10:15 AM · Conference room"
-            color="lavender"
-          />
-          <CalendarEvent
-            top={214}
-            height={82}
-            title="Dentist appointment"
-            meta="11:00–11:30 AM · Health"
-            color="mint"
-          />
-          <CalendarEvent
-            top={457}
-            height={106}
-            title="Deep work session"
-            meta="2:00–3:00 PM · Focus time"
-            color="blue"
-          />
-          <div className="current-time" style={{ top: 375 }}>
-            <i />
-            <span>1:12</span>
-          </div>
+          {timed.map((ev) => {
+            const { top, height } = positionOf(ev);
+            return (
+              <CalendarEvent
+                key={ev.id}
+                top={top}
+                height={height}
+                title={ev.title}
+                meta={`${eventMeta(ev)}${ev.location ? ` · ${ev.location}` : ""}`}
+                color={ev.tone}
+              />
+            );
+          })}
+          {isToday && nowOffset() >= 0 && nowOffset() <= 640 && (
+            <div className="current-time" style={{ top: nowOffset() }}>
+              <i />
+              <span>{new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function MonthCalendar() {
-  const monthEvents: Record<number, { title: string; color: string }[]> = {
-    2: [{ title: "Project kickoff", color: "blue" }],
-    6: [{ title: "Read & notes", color: "peach" }],
-    8: [{ title: "Team review", color: "blue" }],
-    12: [{ title: "Dentist", color: "mint" }],
-    15: [{ title: "Project sync", color: "lavender" }],
-    20: [{ title: "Morning run", color: "mint" }],
-    23: [{ title: "Weekly review", color: "peach" }],
-    26: [
-      { title: "Product strategy", color: "lavender" },
-      { title: "Deep work", color: "blue" },
-    ],
-    28: [{ title: "Read & notes", color: "peach" }],
-    30: [{ title: "Monthly review", color: "lavender" }],
-  };
-  const [selectedDay, setSelectedDay] = useState(26);
-  const selectedEvents = monthEvents[selectedDay] ?? [];
+function MonthCalendar({
+  refDate,
+  eventsByDate,
+  todayIso,
+}: {
+  refDate: Date;
+  eventsByDate: Map<string, CalEvent[]>;
+  todayIso: string;
+}) {
+  const year = refDate.getFullYear();
+  const month = refDate.getMonth();
+  const first = new Date(year, month, 1);
+  const offset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const [selectedIso, setSelectedIso] = useState(todayIso);
+  const selectedEvents = eventsByDate.get(selectedIso) ?? [];
 
   return (
     <div className="month-calendar glass-card">
@@ -1228,27 +1142,25 @@ function MonthCalendar() {
         ))}
       </div>
       <div className="month-grid">
-        {Array.from({ length: 35 }, (_, index) => {
-          const rawDay = index - 2;
-          const isPreviousMonth = rawDay < 1;
-          const isNextMonth = rawDay > 31;
-          const day = isPreviousMonth ? 30 + rawDay : isNextMonth ? rawDay - 31 : rawDay;
-          const eventsForDay = !isPreviousMonth && !isNextMonth ? monthEvents[day] : undefined;
-
+        {Array.from({ length: 42 }, (_, index) => {
+          const dayNum = index - offset + 1;
+          const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+          const cellIso = inMonth ? isoDate(new Date(year, month, dayNum)) : "";
+          const dayEvents = cellIso ? eventsByDate.get(cellIso) ?? [] : [];
           return (
             <div
-              className={`month-day ${isPreviousMonth || isNextMonth ? "outside-month" : ""} ${
-                day === 26 && !isPreviousMonth && !isNextMonth ? "today" : ""
-              } ${day === selectedDay && !isPreviousMonth && !isNextMonth ? "selected" : ""}`}
-              onClick={() => {
-                if (!isPreviousMonth && !isNextMonth) setSelectedDay(day);
-              }}
               key={index}
+              className={`month-day ${!inMonth ? "outside-month" : ""} ${
+                cellIso && cellIso === todayIso ? "today" : ""
+              } ${cellIso && cellIso === selectedIso ? "selected" : ""}`}
+              onClick={() => {
+                if (cellIso) setSelectedIso(cellIso);
+              }}
             >
-              <span className="month-day-number">{day}</span>
+              <span className="month-day-number">{inMonth ? dayNum : ""}</span>
               <div className="month-day-events">
-                {eventsForDay?.map((event) => (
-                  <div className={`month-event month-event-${event.color}`} key={event.title}>
+                {dayEvents.slice(0, 2).map((event) => (
+                  <div className={`month-event month-event-${event.tone}`} key={event.id}>
                     <i />
                     <span>{event.title}</span>
                   </div>
@@ -1260,7 +1172,14 @@ function MonthCalendar() {
       </div>
       <div className="mobile-month-agenda">
         <div className="mobile-agenda-summary">
-          <strong>{selectedDay === 26 ? "Today" : `May ${selectedDay}`}</strong>
+          <strong>
+            {selectedIso === todayIso
+              ? "Today"
+              : new Date(`${selectedIso}T00:00:00`).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+          </strong>
           <span>
             {selectedEvents.length} {selectedEvents.length === 1 ? "event" : "events"}
           </span>
@@ -1268,12 +1187,12 @@ function MonthCalendar() {
         <div className="mobile-agenda-list">
           {selectedEvents.map((event) => (
             <article
-              className={`mobile-agenda-event mobile-month-event tone-${event.color}`}
-              key={event.title}
+              className={`mobile-agenda-event mobile-month-event tone-${event.tone}`}
+              key={event.id}
             >
               <div>
                 <strong>{event.title}</strong>
-                <span>May {selectedDay}, 2025</span>
+                <span>{eventMeta(event)}</span>
               </div>
               <ChevronRight size={16} />
             </article>
@@ -4693,9 +4612,9 @@ function AppShell({
   }, [view]);
 
   const renderView = () => {
-    if (displayedView === "today") return <TodayView navigate={navigate} />;
+    if (displayedView === "today")
+      return <TodayView navigate={navigate} items={libraryItems} onOpenMedia={openMedia} />;
     if (displayedView === "calendar") return <CalendarView />;
-    if (displayedView === "tasks") return <TasksView />;
     if (displayedView === "library")
       return (
         <LibraryView
