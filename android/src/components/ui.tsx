@@ -1,16 +1,16 @@
 /**
- * MyPro's reusable surface kit — MYPRO 2.0.
+ * The shared surface kit, transcribed from the web app's mobile stylesheet.
  *
- * One animation system, one card language, one bottom sheet. Every screen
- * composes these instead of styling its own, which is what keeps the app
- * feeling like a single product. Entrance animation respects the system's
- * reduce-motion setting.
+ * Every piece here has a counterpart in `frontend/src/index.css`, named in its
+ * comment, so the two clients drift together rather than apart. Screens
+ * compose these instead of styling their own.
  */
 import {
   createContext, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  AccessibilityInfo, Animated, Easing, Modal, Pressable, StyleSheet, Text, View,
+  AccessibilityInfo, ActivityIndicator, Animated, Easing, Modal, Pressable,
+  ScrollView, StyleSheet, Text, View,
   type StyleProp, type ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,10 +32,12 @@ AccessibilityInfo.addEventListener('reduceMotionChanged', (on) => {
   reduceMotion = on;
 });
 
+export const prefersReducedMotion = (): boolean => reduceMotion;
+
 /**
- * Entrance: fade + a small downward settle, staggered ~45ms per index so a
- * page builds top-to-bottom in reading order. With reduce-motion on, content
- * simply appears.
+ * Page entrance. The web animates sections in reading order with a short
+ * upward settle (`runLoginEntrance`, `auth-form-in`); this is the same idea
+ * with a ~45ms stagger. Reduce-motion skips straight to the resting state.
  */
 export function FadeIn({
   index = 0,
@@ -52,8 +54,8 @@ export function FadeIn({
     if (reduceMotion) return;
     const animation = Animated.timing(progress, {
       toValue: 1,
-      duration: 260,
-      delay: Math.min(index, 10) * 45,
+      duration: 280,
+      delay: Math.min(index, 9) * 45,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     });
@@ -68,12 +70,7 @@ export function FadeIn({
         {
           opacity: progress,
           transform: [
-            {
-              translateY: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: [-10, 0],
-              }),
-            },
+            { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [-10, 0] }) },
           ],
         },
       ]}
@@ -83,7 +80,7 @@ export function FadeIn({
   );
 }
 
-/** A press-scale wrapper: cards and buttons dip to 98% while touched. */
+/** Press feedback: a 98% dip, as the web's `:active` transforms do. */
 export function Pressed({
   onPress,
   onLongPress,
@@ -129,28 +126,26 @@ export function Pressed({
 /* Surfaces                                                                  */
 /* ------------------------------------------------------------------------ */
 
+/** `.glass-card` — on mobile a flat `#111111` panel with a slate hairline. */
 export function Card({
   children,
   style,
   onPress,
   onLongPress,
-  elevated,
   accessibilityLabel,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
   onLongPress?: () => void;
-  elevated?: boolean;
   accessibilityLabel?: string;
 }) {
-  const base = elevated ? shared.cardHigh : shared.card;
-  if (!onPress && !onLongPress) return <View style={[base, style]}>{children}</View>;
+  if (!onPress && !onLongPress) return <View style={[shared.card, style]}>{children}</View>;
   return (
     <Pressed
       onPress={onPress}
       onLongPress={onLongPress}
-      style={[base, style]}
+      style={[shared.card, style]}
       accessibilityLabel={accessibilityLabel}
     >
       {children}
@@ -158,67 +153,139 @@ export function Card({
   );
 }
 
-export function SectionLabel({ children }: { children: string }) {
-  return <Text style={[type.eyebrow, { marginBottom: 2 }]}>{children}</Text>;
+/** `.section-kicker`. */
+export function Kicker({ children }: { children: string }) {
+  return <Text style={type.kicker}>{children}</Text>;
 }
 
-/** Large page header: title, optional subtitle, optional right-side actions. */
-export function PageHeader({
+/**
+ * `.card-heading` — kicker + h2 on the left, an optional text button on the
+ * right, 14px of air beneath.
+ */
+export function CardHeading({
+  kicker,
   title,
-  subtitle,
-  right,
+  actionLabel,
+  onAction,
+  trailing,
 }: {
+  kicker?: string;
   title: string;
-  subtitle?: string | null;
-  right?: React.ReactNode;
+  actionLabel?: string;
+  onAction?: () => void;
+  trailing?: React.ReactNode;
 }) {
+  const { accent } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: space.md,
+        marginBottom: 14,
+      }}
+    >
+      <View style={{ flex: 1, gap: 4 }}>
+        {!!kicker && <Kicker>{kicker}</Kicker>}
+        <Text style={type.h2}>{title}</Text>
+      </View>
+      {trailing}
+      {!!actionLabel && !!onAction && (
+        <Pressable
+          onPress={onAction}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 3, minHeight: 36 }}
+        >
+          <Text style={[type.action, { color: accent }]}>{actionLabel}</Text>
+          <Ionicons name="chevron-forward" size={14} color={accent} />
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/**
+ * `.page-heading` — eyebrow, h1, lede, and an optional 44px round primary
+ * action on the right.
+ */
+export function PageHeading({
+  eyebrow,
+  title,
+  lede,
+  actionIcon,
+  actionLabel,
+  onAction,
+}: {
+  eyebrow: string;
+  title: string;
+  lede?: string;
+  actionIcon?: IconName;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  const { accent, colorMode } = useTheme();
   return (
     <FadeIn index={0}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: space.sm }}>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text style={type.title}>{title}</Text>
-          {!!subtitle && <Text style={type.support}>{subtitle}</Text>}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          gap: 14,
+          marginBottom: 20,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={type.eyebrow}>{eyebrow}</Text>
+          <Text style={[type.h1, { marginTop: 6, marginBottom: 6 }]}>{title}</Text>
+          {!!lede && <Text style={type.lede}>{lede}</Text>}
         </View>
-        {right}
+        {!!actionIcon && !!onAction && (
+          <Pressable
+            onPress={onAction}
+            accessibilityRole="button"
+            accessibilityLabel={actionLabel ?? 'Add'}
+            style={({ pressed }) => ({
+              width: 44,
+              height: 44,
+              marginTop: 2,
+              borderRadius: 22,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colorMode ? accent : colors.text,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <Ionicons name={actionIcon} size={20} color="#000000" />
+          </Pressable>
+        )}
       </View>
     </FadeIn>
   );
 }
 
-/** A small round icon button for headers and toolbars. */
-export function IconButton({
-  icon,
-  onPress,
-  label,
-  active,
-  size = 20,
-}: {
-  icon: IconName;
-  onPress?: () => void;
-  label: string;
-  active?: boolean;
-  size?: number;
-}) {
-  const { accent } = useTheme();
+/** `.data-banner` / `.data-banner-error`. */
+export function DataBanner({ message, error }: { message: string; error?: boolean }) {
   return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => ({
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: pressed || active ? colors.surfaceHigh : 'transparent',
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: pressed || active ? colors.borderStrong : 'transparent',
-      })}
+    <View
+      accessibilityLiveRegion={error ? 'assertive' : 'polite'}
+      accessibilityRole={error ? 'alert' : undefined}
+      style={{
+        marginBottom: space.md,
+        paddingHorizontal: 15,
+        paddingVertical: 11,
+        borderRadius: radius.sm,
+        borderWidth: 1,
+        borderColor: error ? colors.dangerBorder : 'rgba(255,255,255,0.1)',
+        backgroundColor: 'rgba(255,255,255,0.04)',
+      }}
     >
-      <Ionicons name={icon} size={size} color={active ? accent : colors.textMuted} />
-    </Pressable>
+      <Text style={{ color: error ? colors.danger : 'rgba(255,255,255,0.65)', fontSize: 13 }}>
+        {message}
+      </Text>
+    </View>
   );
 }
 
@@ -231,20 +298,26 @@ export function PrimaryButton({
   onPress,
   disabled,
   busy,
+  style,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
   busy?: boolean;
+  style?: StyleProp<ViewStyle>;
 }) {
   return (
     <Pressed
       onPress={onPress}
       disabled={disabled || busy}
-      style={[shared.button, (disabled || busy) && { opacity: 0.45 }]}
+      style={[shared.primaryButton, (disabled || busy) && { opacity: 0.55 }, style]}
       accessibilityLabel={label}
     >
-      <Text style={shared.buttonLabel}>{busy ? '…' : label}</Text>
+      {busy ? (
+        <ActivityIndicator size="small" color="#000000" />
+      ) : (
+        <Text style={shared.primaryLabel}>{label}</Text>
+      )}
     </Pressed>
   );
 }
@@ -264,7 +337,7 @@ export function GhostButton({
     <Pressed
       onPress={onPress}
       disabled={disabled}
-      style={[shared.ghostButton, disabled && { opacity: 0.45 }, style]}
+      style={[shared.ghostButton, disabled && { opacity: 0.55 }, style]}
       accessibilityLabel={label}
     >
       <Text style={shared.ghostLabel}>{label}</Text>
@@ -272,19 +345,68 @@ export function GhostButton({
   );
 }
 
-/** Filter chip. Active state uses the theme accent (violet in Color Mode). */
-export function Chip({
+/**
+ * `.library-categories button` — the primary pill row. Active is a white
+ * fill (violet-bordered in Color Mode), as on the web.
+ */
+export function CategoryChip({
   label,
   active,
   onPress,
-  icon,
 }: {
   label: string;
   active?: boolean;
   onPress: () => void;
-  icon?: IconName;
 }) {
-  const { colorMode, accent, accentSoft } = useTheme();
+  const { colorMode, accent } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: !!active }}
+      accessibilityLabel={label}
+      style={{
+        height: 40,
+        paddingHorizontal: 17,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: active
+          ? colorMode
+            ? accent
+            : colors.text
+          : colors.borderStrong,
+        backgroundColor: active ? colors.text : 'transparent',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <Text
+        style={{
+          color: active ? '#000000' : colors.textMuted,
+          fontSize: 14,
+          fontWeight: '500',
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * `.library-filters button` — the secondary pill row: borderless, a soft
+ * translucent fill when active.
+ */
+export function FilterChip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active?: boolean;
+  onPress: () => void;
+}) {
+  const { colorMode, accent } = useTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -292,28 +414,28 @@ export function Chip({
       accessibilityState={{ selected: !!active }}
       accessibilityLabel={label}
       style={{
-        flexDirection: 'row',
+        height: 34,
+        paddingHorizontal: 13,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: active
+          ? colorMode
+            ? 'rgba(182,154,245,0.4)'
+            : 'rgba(255,255,255,0.22)'
+          : 'transparent',
+        backgroundColor: active
+          ? colorMode
+            ? 'rgba(182,154,245,0.1)'
+            : 'rgba(255,255,255,0.1)'
+          : 'rgba(255,255,255,0.05)',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 999,
-        backgroundColor: active ? (colorMode ? accentSoft : colors.text) : colors.surface,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: active ? (colorMode ? accent : colors.text) : colors.border,
+        justifyContent: 'center',
       }}
     >
-      {icon && (
-        <Ionicons
-          name={icon}
-          size={13}
-          color={active ? (colorMode ? accent : colors.background) : colors.textMuted}
-        />
-      )}
       <Text
         style={{
-          color: active ? (colorMode ? accent : colors.background) : colors.textMuted,
-          fontSize: 13,
+          color: active ? (colorMode ? accent : colors.text) : colors.textMuted,
+          fontSize: 12.5,
           fontWeight: active ? '600' : '400',
         }}
       >
@@ -323,15 +445,74 @@ export function Chip({
   );
 }
 
-/** A thin determinate progress bar, accent-aware. */
-export function ProgressBar({
+/** `.segmented` — the Day / Week / Month control, 44px tall on mobile. */
+export function Segmented<T extends string>({
+  options,
   value,
-  height = 4,
+  onChange,
+}: {
+  options: { key: T; label: string }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  const { colorMode, accent } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        height: 44,
+        padding: 3,
+        borderRadius: radius.sm,
+        backgroundColor: 'rgba(255,255,255,0.06)',
+      }}
+    >
+      {options.map((option) => {
+        const selected = option.key === value;
+        return (
+          <Pressable
+            key={option.key}
+            onPress={() => onChange(option.key)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected }}
+            accessibilityLabel={option.label}
+            style={{
+              flex: 1,
+              borderRadius: 9,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: selected
+                ? colorMode
+                  ? 'rgba(182,154,245,0.16)'
+                  : colors.text
+                : 'transparent',
+            }}
+          >
+            <Text
+              style={{
+                color: selected ? (colorMode ? accent : '#000000') : colors.textMuted,
+                fontSize: 13.5,
+                fontWeight: selected ? '600' : '400',
+              }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * `.progress` — a 4px track at 16% white with a white fill, which Color Mode
+ * turns into the violet-to-cyan gradient (approximated with the accent).
+ */
+export function Progress({
+  value,
   style,
 }: {
   /** 0..1 */
   value: number;
-  height?: number;
   style?: StyleProp<ViewStyle>;
 }) {
   const { accent } = useTheme();
@@ -342,9 +523,9 @@ export function ProgressBar({
       accessibilityValue={{ now: Math.round(clamped * 100), min: 0, max: 100 }}
       style={[
         {
-          height,
-          borderRadius: height,
-          backgroundColor: 'rgba(255,255,255,0.08)',
+          height: 4,
+          borderRadius: 5,
+          backgroundColor: 'rgba(255,255,255,0.16)',
           overflow: 'hidden',
         },
         style,
@@ -354,7 +535,7 @@ export function ProgressBar({
         style={{
           width: `${clamped * 100}%`,
           height: '100%',
-          borderRadius: height,
+          borderRadius: 5,
           backgroundColor: accent,
         }}
       />
@@ -362,7 +543,7 @@ export function ProgressBar({
   );
 }
 
-/** A labelled on/off switch row (custom-drawn: consistent across OS skins). */
+/** `.mobile-nav-actions button i` — the small ring that fills when on. */
 export function ToggleRow({
   title,
   subtitle,
@@ -382,11 +563,11 @@ export function ToggleRow({
       accessibilityRole="switch"
       accessibilityState={{ checked: value }}
       accessibilityLabel={title}
-      style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 48 }}
     >
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ color: colors.text, fontSize: 15.5 }}>{title}</Text>
-        {!!subtitle && <Text style={type.support}>{subtitle}</Text>}
+      <View style={{ flex: 1, gap: 3 }}>
+        <Text style={{ color: colors.text, fontSize: 15 }}>{title}</Text>
+        {!!subtitle && <Text style={type.meta}>{subtitle}</Text>}
       </View>
       <View
         style={{
@@ -404,7 +585,7 @@ export function ToggleRow({
             width: 22,
             height: 22,
             borderRadius: 11,
-            backgroundColor: value ? colors.background : colors.textMuted,
+            backgroundColor: value ? '#000000' : colors.textMuted,
           }}
         />
       </View>
@@ -413,9 +594,10 @@ export function ToggleRow({
 }
 
 /* ------------------------------------------------------------------------ */
-/* Empty / message states                                                    */
+/* Empty states                                                              */
 /* ------------------------------------------------------------------------ */
 
+/** `.health-empty-state` / `.library-empty` — centred icon, title, line. */
 export function EmptyState({
   icon,
   title,
@@ -428,26 +610,33 @@ export function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <View style={[shared.card, { alignItems: 'center', paddingVertical: space.xl, gap: 10 }]}>
-      <View
-        style={{
-          width: 52,
-          height: 52,
-          borderRadius: 26,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: colors.surfaceHigh,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: colors.border,
-        }}
-      >
-        <Ionicons name={icon} size={22} color={colors.textMuted} />
-      </View>
-      <Text style={[type.cardTitle, { textAlign: 'center' }]}>{title}</Text>
+    <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 34, gap: 9 }}>
+      <Ionicons name={icon} size={26} color={colors.textFaint} />
+      <Text style={[type.h3, { marginTop: 2, textAlign: 'center' }]}>{title}</Text>
       {!!body && (
-        <Text style={[type.support, { textAlign: 'center', maxWidth: 280 }]}>{body}</Text>
+        <Text style={[type.meta, { textAlign: 'center', maxWidth: 280 }]}>{body}</Text>
       )}
       {action}
+    </View>
+  );
+}
+
+/** `.mobile-month-empty` — the dashed inline note. */
+export function DashedNote({ children }: { children: string }) {
+  return (
+    <View
+      style={{
+        paddingHorizontal: space.md,
+        paddingVertical: 18,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: colors.borderStrong,
+        borderRadius: radius.lg,
+      }}
+    >
+      <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13.5, textAlign: 'center' }}>
+        {children}
+      </Text>
     </View>
   );
 }
@@ -456,19 +645,22 @@ export function EmptyState({
 /* Bottom sheet                                                              */
 /* ------------------------------------------------------------------------ */
 
+/**
+ * The web's modals become bottom sheets on mobile: full width, 26px top
+ * corners, 92svh cap, entering with `mobile-sheet-in`.
+ */
 export function Sheet({
   visible,
   onClose,
   title,
+  kicker,
   children,
-  /** Extra bottom padding content wants (defaults to safe-area-ish 34). */
-  padBottom = 34,
 }: {
   visible: boolean;
   onClose: () => void;
   title?: string;
+  kicker?: string;
   children: React.ReactNode;
-  padBottom?: number;
 }) {
   const slide = useRef(new Animated.Value(0)).current;
   const [mounted, setMounted] = useState(visible);
@@ -478,64 +670,66 @@ export function Sheet({
       setMounted(true);
       Animated.timing(slide, {
         toValue: 1,
-        duration: reduceMotion ? 0 : 280,
-        easing: Easing.out(Easing.cubic),
+        duration: reduceMotion ? 0 : 320,
+        easing: Easing.bezier(0.2, 0.8, 0.2, 1),
         useNativeDriver: true,
       }).start();
     } else if (mounted) {
       Animated.timing(slide, {
         toValue: 0,
-        duration: reduceMotion ? 0 : 200,
+        duration: reduceMotion ? 0 : 220,
         easing: Easing.in(Easing.cubic),
         useNativeDriver: true,
-      }).start(() => setMounted(false));
+      }).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
     }
   }, [visible, mounted, slide]);
 
   if (!mounted) return null;
 
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+    <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
+      <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', opacity: slide }}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" />
+      </Animated.View>
       <Animated.View
         style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.72)',
-          opacity: slide,
-          justifyContent: 'flex-end',
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          maxHeight: '92%',
+          transform: [
+            { translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [500, 0] }) },
+          ],
+          backgroundColor: '#0a0a0a',
+          borderTopLeftRadius: radius.sheet,
+          borderTopRightRadius: radius.sheet,
+          borderTopWidth: 1,
+          borderColor: colors.borderStrong,
+          paddingTop: 10,
+          paddingHorizontal: 18,
+          paddingBottom: 28,
         }}
       >
-        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" />
-        <Animated.View
+        <View
           style={{
-            transform: [
-              { translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [80, 0] }) },
-            ],
-            backgroundColor: colors.backgroundRaised,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            borderTopWidth: StyleSheet.hairlineWidth,
-            borderColor: colors.borderStrong,
-            paddingTop: 10,
-            paddingHorizontal: space.gutter,
-            paddingBottom: padBottom,
-            maxHeight: '86%',
+            alignSelf: 'center',
+            width: 36,
+            height: 4,
+            borderRadius: radius.pill,
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            marginBottom: 14,
           }}
-        >
-          <View
-            style={{
-              alignSelf: 'center',
-              width: 36,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: 'rgba(255,255,255,0.18)',
-              marginBottom: 12,
-            }}
-          />
-          {!!title && (
-            <Text style={[type.cardTitle, { marginBottom: space.md }]}>{title}</Text>
-          )}
-          {children}
-        </Animated.View>
+        />
+        {(!!kicker || !!title) && (
+          <View style={{ gap: 5, marginBottom: space.md }}>
+            {!!kicker && <Kicker>{kicker}</Kicker>}
+            {!!title && <Text style={[type.h2, { fontSize: 21 }]}>{title}</Text>}
+          </View>
+        )}
+        {children}
       </Animated.View>
     </Modal>
   );
@@ -545,63 +739,44 @@ export function Sheet({
 /* Covers                                                                    */
 /* ------------------------------------------------------------------------ */
 
-const COVER_TONES = ['#1C2026', '#20242E', '#231F2B', '#1E2622', '#262019'];
-
 /**
- * Elegant placeholder cover for a document with no artwork: a quiet tinted
- * panel with the title's initial, deterministic per title so the shelf stays
- * stable between visits.
+ * `.learning-thumbnail` — the web shows a cover image when it has one and a
+ * glyph on a translucent tile when it does not. The phone has no covers to
+ * show yet, so it draws the tile with the title's initial.
  */
-export function PlaceholderCover({
+export function Thumbnail({
   title,
+  icon = 'book',
   width,
   height,
-  rounded = radius.md,
+  rounded = 10,
 }: {
   title: string;
+  icon?: IconName;
   width: number;
   height: number;
   rounded?: number;
 }) {
-  const tone = useMemo(() => {
-    let hash = 0;
-    for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) | 0;
-    return COVER_TONES[Math.abs(hash) % COVER_TONES.length];
-  }, [title]);
-
+  const initial = (title.trim()[0] ?? '?').toUpperCase();
   return (
     <View
       style={{
         width,
         height,
         borderRadius: rounded,
-        backgroundColor: tone,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: colors.border,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: 'rgba(255,255,255,0.07)',
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
+        gap: 4,
       }}
     >
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: height * 0.4,
-          backgroundColor: colors.highlight,
-        }}
-      />
-      <Text
-        style={{
-          color: colors.textMuted,
-          fontSize: Math.min(width, height) * 0.34,
-          fontWeight: '700',
-        }}
-      >
-        {(title.trim()[0] ?? '?').toUpperCase()}
+      <Text style={{ color: colors.text, fontSize: Math.min(width, height) * 0.3, fontWeight: '600' }}>
+        {initial}
       </Text>
+      <Ionicons name={icon} size={13} color="rgba(255,255,255,0.45)" />
     </View>
   );
 }
@@ -636,9 +811,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           duration: reduceMotion ? 0 : 240,
           useNativeDriver: true,
         }).start(() => setMessage(null));
-      }, 2200);
+      }, 2400);
     },
     [opacity],
+  );
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
   );
 
   return (
@@ -651,19 +833,19 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             position: 'absolute',
             left: space.gutter,
             right: space.gutter,
-            bottom: 108,
+            bottom: 150,
             opacity,
             alignItems: 'center',
           }}
         >
           <View
             style={{
-              backgroundColor: colors.surfaceHigh,
+              backgroundColor: '#1a1a1a',
               borderColor: colors.borderStrong,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderRadius: radius.md,
+              borderWidth: 1,
+              borderRadius: radius.sm,
               paddingHorizontal: 16,
-              paddingVertical: 10,
+              paddingVertical: 11,
               maxWidth: 420,
             }}
           >
@@ -681,11 +863,59 @@ export const useToast = (): ToastState => useContext(ToastContext);
 /* Misc                                                                      */
 /* ------------------------------------------------------------------------ */
 
-/** Metadata row: icon + text, used on schedule/event/record cards. */
+/** `.symptom-tags span` / `.detail-tags span` — the small chip. */
+export function Tag({ children }: { children: string }) {
+  return (
+    <View
+      style={{
+        paddingHorizontal: 9,
+        paddingVertical: 5,
+        borderRadius: 8,
+        backgroundColor: 'rgba(255,255,255,0.06)',
+      }}
+    >
+      <Text style={{ color: colors.textMuted, fontSize: 12 }}>{children}</Text>
+    </View>
+  );
+}
+
+/** `.recovery-status` — the outlined status pill. */
+export function StatusPill({ label, tone }: { label: string; tone?: string }) {
+  return (
+    <View
+      style={{
+        paddingHorizontal: 9,
+        paddingVertical: 5,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: tone ?? colors.divider,
+      }}
+    >
+      <Text style={{ color: tone ?? colors.textMuted, fontSize: 12 }}>{label}</Text>
+    </View>
+  );
+}
+
+/** A horizontally scrolling pill row that keeps the page gutter. */
+export function ChipRow({ children }: { children: React.ReactNode }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      style={{ marginHorizontal: -space.gutter, flexGrow: 0 }}
+      contentContainerStyle={{ paddingHorizontal: space.gutter, gap: 8 }}
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
+/** A metadata line: small icon plus text. */
 export function MetaRow({
   icon,
   children,
-  tone = colors.textFaint,
+  tone = colors.textSoft,
 }: {
   icon: IconName;
   children: React.ReactNode;
@@ -695,6 +925,15 @@ export function MetaRow({
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
       <Ionicons name={icon} size={13} color={tone} />
       <Text style={{ color: tone, fontSize: 12.5, flexShrink: 1 }}>{children}</Text>
+    </View>
+  );
+}
+
+/** Full-screen loading, matching the web's quiet spinner. */
+export function Loading() {
+  return (
+    <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
+      <ActivityIndicator color={colors.text} />
     </View>
   );
 }

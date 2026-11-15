@@ -4895,6 +4895,33 @@ button.learning-thumbnail {
 
 /* ---- the dock floats, and keeps out of the way ---- */
 
+/* Reading downward tucks the dock away; a pause or an upward scroll returns
+   it. Transform only, so it costs nothing to animate. */
+.mypro-dark-reader .reader-bottom-dock {
+  transition:
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms ease;
+}
+
+.mypro-dark-reader .reader-bottom-dock.dock-hidden {
+  transform: translate(-50%, calc(100% + 32px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 767px) {
+  /* The phone dock is not centre-translated, so it slides straight down. */
+  .mypro-dark-reader .reader-bottom-dock.dock-hidden {
+    transform: translateY(calc(100% + 32px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mypro-dark-reader .reader-bottom-dock {
+    transition: none;
+  }
+}
+
 .mypro-dark-reader .reader-bottom-dock {
   position: fixed;
   left: 50%;
@@ -5005,7 +5032,10 @@ button.learning-thumbnail {
     --reader-bar: 52px;
   }
   .mypro-dark-reader .reader-main-canvas {
-    padding: 18px 12px 128px;
+    /* Clears the floating dock (its height, its 14px offset and the home
+       indicator) so the end of a chapter is readable rather than tucked
+       underneath it. */
+    padding: 18px 12px calc(132px + env(safe-area-inset-bottom, 0px));
   }
   .mypro-dark-reader .reader-page-sheet {
     padding: 30px 20px 26px;
@@ -5024,6 +5054,48 @@ button.learning-thumbnail {
     bottom: 14px;
     transform: none;
     max-width: none;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+
+  /* Zoom is a pointer affordance; a phone pinches. Dropping it is what makes
+     the rest of the dock fit instead of overflowing off the right edge. */
+  .mypro-dark-reader .reader-bottom-dock .dock-right {
+    display: none;
+  }
+
+  /* The scrubber takes the room the zoom group gave back, rather than
+     holding a fixed 220px that forced the row wider than the screen. */
+  .mypro-dark-reader .reader-bottom-dock .dock-center {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    gap: 9px;
+  }
+
+  .mypro-dark-reader .reader-bottom-dock .dock-left {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  /* "of 5" broke onto a second line and pushed the dock taller. */
+  .mypro-dark-reader .page-indicator-pill {
+    gap: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .mypro-dark-reader .page-indicator-pill input {
+    width: 34px;
+    height: 26px;
+    font-size: 12px;
+  }
+
+  .mypro-dark-reader .scrubber-percent {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    white-space: nowrap;
   }
 }
 

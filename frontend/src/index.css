@@ -3006,10 +3006,29 @@ button {
   background: rgba(255, 255, 255, 0.05);
   color: var(--secondary);
 }
-.dark-app .segmented button.selected {
-  background: #000000;
-  border-color: #000000;
-  color: #ffffff;
+.dark-app .segmented,
+.dark-app .type-switch {
+  /* The light theme's track (7% black) vanishes on a #111 card. */
+  background: rgba(255, 255, 255, 0.06);
+}
+.dark-app .segmented button,
+.dark-app .type-switch button {
+  color: rgba(255, 255, 255, 0.6);
+}
+.dark-app .segmented button.selected,
+.dark-app .type-switch button.active {
+  /* Was #000 on #111: the selected segment could not be seen at all. The
+     selected pill is white with black type, like every other active control
+     in the dark theme. */
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #0b0b0b;
+}
+.color-mode.dark-app .segmented button.selected,
+.color-mode.dark-app .type-switch button.active {
+  background: rgba(182, 154, 245, 0.16);
+  border-color: rgba(182, 154, 245, 0.5);
+  color: #b69af5;
 }
 .dark-app .agenda-event,
 .dark-app .calendar-event {
@@ -4238,12 +4257,15 @@ button {
   .page-heading p {
     max-width: 280px;
   }
-  .page-heading .primary-button {
+  /* The icon-only treatment is for the heading's own action button. As a
+     descendant selector it also caught the calendar's "New", pinning it to
+     41px so its label was cut off inside its own pill. */
+  .page-heading > .primary-button {
     width: 41px;
     padding: 0;
     font-size: 0;
   }
-  .page-heading .primary-button svg {
+  .page-heading > .primary-button svg {
     margin: 0;
   }
   .day-grid {
@@ -4788,7 +4810,9 @@ button {
     background: rgba(145, 104, 220, 0.14);
   }
   .view-scroll {
-    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+    /* The nav sheet is a grabber (26px) over a 62px tab row, so 92px left the
+       last card tucked under it. */
+    padding-bottom: calc(124px + env(safe-area-inset-bottom));
     overflow-x: hidden;
   }
 
@@ -4996,8 +5020,13 @@ button {
   .calendar-actions {
     margin-top: 2px;
     display: grid;
-    grid-template-columns: auto 44px 44px 1fr;
+    /* `minmax(0, 1fr)`, never `1fr`: a bare `1fr` floors at min-content, so
+       the New button pushed the row past the viewport and was clipped. */
+    grid-template-columns: auto 44px 44px minmax(0, 1fr);
     gap: 8px;
+  }
+  .calendar-actions > * {
+    min-width: 0;
   }
   .calendar-actions .segmented {
     order: -1;
@@ -5021,7 +5050,9 @@ button {
   }
   .calendar-actions .primary-button {
     justify-self: end;
+    width: auto;
     padding: 0 18px;
+    font-size: 13.5px;
   }
   .calendar-layout,
   .calendar-layout-month {
@@ -5037,11 +5068,15 @@ button {
   }
   .mobile-day-strip {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 7px;
+    /* Seven, not five: the week renders seven buttons and the old five-column
+       track wrapped Saturday and Sunday onto a second row. */
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
   }
   .mobile-day-strip button {
-    height: 82px;
+    height: 74px;
+    min-width: 0;
+    padding: 0 2px;
     border: 1px solid rgba(86, 94, 103, 0.45);
     border-radius: 18px;
     background: #111111;
@@ -5057,13 +5092,13 @@ button {
       color 250ms ease;
   }
   .mobile-day-strip span {
-    font-size: 10.5px;
+    font-size: 9px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.04em;
   }
   .mobile-day-strip strong {
     color: #ffffff;
-    font-size: 21px;
+    font-size: 17px;
     font-weight: 600;
   }
   .mobile-day-strip i {
@@ -5072,8 +5107,8 @@ button {
     gap: 3px;
   }
   .mobile-day-strip b {
-    width: 5px;
-    height: 5px;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.55);
     transition: background-color 1000ms ease-in-out;
@@ -5719,7 +5754,10 @@ button {
   }
   .health-stat small {
     display: block;
-    font-size: 11px;
+    /* Three tiles sit side by side; without a floor the longest label makes
+       its own tile's number sit higher than the other two. */
+    min-height: 2.6em;
+    font-size: 10.5px;
     line-height: 1.3;
   }
   .health-history-filters {
@@ -6504,6 +6542,11 @@ button {
     z-index: 40;
     display: flex;
     flex-direction: column;
+    /* The 760px rules centre the pill bar's items. Once this sheet turns the
+       bar into a column, that same `align-items: center` shrank the tab row
+       to its content (191px of a 375px screen), which is what crushed the
+       labels together under the assistant button. */
+    align-items: stretch;
     height: auto;
     max-height: 86vh;
     top: auto;
@@ -6561,9 +6604,13 @@ button {
 
   .dark-app .bottom-nav .mobile-nav-tabs button,
   .mobile-nav-tabs button {
-    width: 20%;
+    /* An equal fifth each. `width: 20%` alone still let flex shrink a tab to
+       its content, which is what crowded "Calendar" against the assistant
+       button in the first place. */
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
     padding: 0 2px;
-    font-size: 9px;
     overflow: hidden;
     height: 100%;
     border: 0;
@@ -6575,6 +6622,24 @@ button {
     justify-content: center;
     gap: 4px;
     font-size: 9px;
+  }
+
+  /* A tab's label has 20% of the bar and no more: without this "Calendar"
+     grew past its column and ran under the assistant button. */
+  .dark-app .bottom-nav .mobile-nav-tabs button > span,
+  .mobile-nav-tabs button > span {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.2;
+  }
+
+  /* The raised tile is the assistant tab's whole content; keep it centred in
+     its own column rather than letting it spill into its neighbours. */
+  .mobile-nav-tabs .assistant-tab {
+    flex: 1 1 0;
   }
 
   .mobile-nav-tabs button.active {

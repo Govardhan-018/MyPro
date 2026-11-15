@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
-  ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View,
+  AppState, Platform, Pressable, ScrollView, StatusBar as RNStatusBar, Text, View,
 } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import { isAgentConfigured, isApiConfigured, type AuthSession } from '@mypro/shared';
 import { client } from './src/lib/client';
 import { armUpcoming, registerForPush } from './src/lib/notifications';
-import { TabBar, type Tab } from './src/components/TabBar';
-import { ToastProvider } from './src/components/ui';
+import { TabBar, type View_ } from './src/components/TabBar';
+import { Card, Loading, ToastProvider } from './src/components/ui';
 import { AssistantScreen } from './src/screens/AssistantScreen';
 import { CalendarScreen } from './src/screens/CalendarScreen';
 import { HealthScreen } from './src/screens/HealthScreen';
@@ -20,10 +20,7 @@ import { SchedulesScreen } from './src/screens/SchedulesScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { TodayScreen } from './src/screens/TodayScreen';
-import { colors, shared, ThemeProvider, useTheme } from './src/theme';
-
-/** Pushed on top of a tab, with its own back button rather than a back stack. */
-type Overlay = 'settings' | 'knowledge' | 'schedules' | null;
+import { colors, shared, space, ThemeProvider, type, useTheme } from './src/theme';
 
 /**
  * The Android app. Thin client: the only backend it configures is Render,
@@ -34,6 +31,10 @@ type Overlay = 'settings' | 'knowledge' | 'schedules' | null;
  * so scheduled notifications are armed locally for the next 48 hours and
  * re-armed every time the app comes to the foreground. That is the whole
  * reason the morning brief arrives at 08:30 with everything else off.
+ *
+ * The shell mirrors the web app's phone layout: a 58px header carrying the
+ * wordmark and the two global controls, the scrolling view beneath it, and
+ * the navigation sheet pinned to the bottom.
  */
 export default function App() {
   return (
@@ -45,13 +46,15 @@ export default function App() {
   );
 }
 
+/** Settings is reached from the header and the nav drawer, not a tab. */
+type Screen = View_ | 'settings';
+
 function Root() {
   const { env } = client;
   const apiReady = isApiConfigured(env);
   // `undefined` = still restoring the stored session.
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
-  const [tab, setTab] = useState<Tab>('today');
-  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [view, setView] = useState<Screen>('today');
   const [book, setBook] = useState<BookSummary | null>(null);
 
   useEffect(() => {
@@ -70,8 +73,7 @@ function Root() {
       setSession(next);
       if (!next) {
         setBook(null);
-        setOverlay(null);
-        setTab('today');
+        setView('today');
       }
     });
     return () => {
@@ -110,9 +112,9 @@ function Root() {
     if (!session) return;
 
     const open = (deeplink: unknown) => {
-      if (deeplink === 'assistant') setTab('assistant');
-      else if (deeplink === 'calendar') setTab('calendar');
-      else setTab('today');
+      if (deeplink === 'assistant') setView('assistant');
+      else if (deeplink === 'calendar') setView('calendar');
+      else setView('today');
     };
 
     // The notification that launched the app, if any — this resolves once and
@@ -131,14 +133,19 @@ function Root() {
     return () => subscription.remove();
   }, [session]);
 
+  const signOut = async () => {
+    await client.auth.signOut().catch(() => undefined);
+    setSession(null);
+  };
+
   if (!apiReady) return <SetupScreen />;
 
   if (session === undefined) {
     return (
-      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
+      <>
         <StatusBar style="light" />
-        <ActivityIndicator color={colors.text} />
-      </View>
+        <Loading />
+      </>
     );
   }
 
@@ -165,58 +172,162 @@ function Root() {
     <View style={shared.screen}>
       <StatusBar style="light" />
 
-      {overlay === null && <TopBar onSettings={() => setOverlay('settings')} />}
+      <MobileHeader
+        settingsActive={view === 'settings'}
+        onOpenSettings={() => setView((current) => (current === 'settings' ? 'today' : 'settings'))}
+      />
 
       <View style={{ flex: 1 }}>
-        {overlay === 'settings' ? (
-          <SettingsScreen
-            onClose={() => setOverlay(null)}
-            onOpen={(destination) => setOverlay(destination)}
-            onSignOut={() => setSession(null)}
+        {view === 'today' ? (
+          <TodayScreen
+            onOpenBook={setBook}
+            onNavigate={(next) => setView(next)}
           />
-        ) : overlay === 'knowledge' ? (
-          <KnowledgeScreen onClose={() => setOverlay('settings')} />
-        ) : overlay === 'schedules' ? (
-          <SchedulesScreen onClose={() => setOverlay('settings')} />
-        ) : tab === 'today' ? (
-          <TodayScreen onOpenBook={setBook} onOpenCalendar={() => setTab('calendar')} />
-        ) : tab === 'calendar' ? (
+        ) : view === 'calendar' ? (
           <CalendarScreen />
-        ) : tab === 'assistant' ? (
+        ) : view === 'assistant' ? (
           <AssistantScreen />
-        ) : tab === 'library' ? (
+        ) : view === 'library' ? (
           <LibraryScreen onOpen={setBook} />
-        ) : (
+        ) : view === 'knowledge' ? (
+          <KnowledgeScreen />
+        ) : view === 'health' ? (
           <HealthScreen />
+        ) : view === 'schedules' ? (
+          <SchedulesScreen />
+        ) : (
+          <SettingsScreen
+            onNavigate={(next) => setView(next)}
+            onSignOut={() => void signOut()}
+          />
         )}
       </View>
 
-      {overlay === null && <TabBar active={tab} onChange={setTab} />}
+      <TabBar
+        active={view === 'settings' ? 'today' : view}
+        onChange={(next) => setView(next)}
+        onOpenSettings={() => setView('settings')}
+        onSignOut={() => void signOut()}
+      />
     </View>
   );
 }
 
-/** One consistent slim header across the main tabs: wordmark + settings. */
-function TopBar({ onSettings }: { onSettings: () => void }) {
-  const { accent, colorMode } = useTheme();
+/**
+ * The status-bar inset — the native stand-in for the web's
+ * `env(safe-area-inset-top)`, which the header and its padding are built on.
+ */
+const STATUS_BAR = Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24) : 44;
+
+/**
+ * `.mobile-header` — 58px plus the status bar, the wordmark on the left and
+ * the two global controls on the right.
+ */
+function MobileHeader({
+  settingsActive,
+  onOpenSettings,
+}: {
+  settingsActive: boolean;
+  onOpenSettings: () => void;
+}) {
+  const { colorMode, setColorMode, accent } = useTheme();
   return (
     <View
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        paddingTop: 52,
-        paddingBottom: 10,
-        paddingHorizontal: 20,
-        gap: 10,
+        justifyContent: 'space-between',
+        height: 58 + STATUS_BAR,
+        paddingTop: STATUS_BAR,
+        paddingHorizontal: space.gutter,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.06)',
+        backgroundColor: colors.header,
       }}
     >
+      <Brand />
+      {/* `.mobile-header-actions` — two 40px circles. */}
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <HeaderButton
+          icon="color-palette-outline"
+          label="Toggle Color Mode"
+          active={colorMode}
+          accent={accent}
+          colorMode={colorMode}
+          onPress={() => setColorMode(!colorMode)}
+        />
+        <HeaderButton
+          icon="settings-outline"
+          label="Open settings"
+          active={settingsActive}
+          accent={accent}
+          colorMode={colorMode}
+          onPress={onOpenSettings}
+        />
+      </View>
+    </View>
+  );
+}
+
+/** `.mobile-header-button`, with the Color Mode active treatment. */
+function HeaderButton({
+  icon,
+  label,
+  active,
+  accent,
+  colorMode,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  active: boolean;
+  accent: string;
+  colorMode: boolean;
+  onPress: () => void;
+}) {
+  const tint = active ? (colorMode ? accent : colors.text) : 'rgba(255,255,255,0.82)';
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: active
+          ? colorMode
+            ? 'rgba(182,154,245,0.45)'
+            : 'rgba(255,255,255,0.4)'
+          : colors.borderStrong,
+        backgroundColor: active
+          ? colorMode
+            ? 'rgba(145,104,220,0.14)'
+            : colors.surfaceActive
+          : colors.surface,
+      }}
+    >
+      <Ionicons name={icon} size={18} color={tint} />
+    </Pressable>
+  );
+}
+
+/** The wordmark. The web uses a logo image; this is its typographic twin. */
+function Brand() {
+  const { colorMode, accent } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       <View
         style={{
-          width: 24,
-          height: 24,
-          borderRadius: 12,
+          width: 22,
+          height: 22,
+          borderRadius: 11,
           borderWidth: 1.5,
-          borderColor: colorMode ? accent : colors.textMuted,
+          borderColor: colorMode ? accent : 'rgba(255,255,255,0.55)',
           alignItems: 'center',
           justifyContent: 'center',
         }}
@@ -230,35 +341,9 @@ function TopBar({ onSettings }: { onSettings: () => void }) {
           }}
         />
       </View>
-      <Text
-        style={{
-          color: colors.text,
-          fontSize: 16,
-          fontWeight: '700',
-          letterSpacing: 0.2,
-          flex: 1,
-        }}
-      >
+      <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: 0.2 }}>
         MyPro
       </Text>
-      <Pressable
-        onPress={onSettings}
-        hitSlop={10}
-        accessibilityRole="button"
-        accessibilityLabel="Settings"
-        style={({ pressed }) => ({
-          width: 36,
-          height: 36,
-          borderRadius: 18,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: pressed ? colors.surfaceHigh : 'transparent',
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: pressed ? colors.borderStrong : 'transparent',
-        })}
-      >
-        <Ionicons name="settings-outline" size={19} color={colors.textMuted} />
-      </Pressable>
     </View>
   );
 }
@@ -269,30 +354,21 @@ function SetupScreen() {
   return (
     <View style={shared.screen}>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 72, gap: 20 }}>
-        <Text style={shared.title}>MyPro</Text>
-        <Text style={shared.muted}>Personal companion — Android</Text>
+      <ScrollView contentContainerStyle={{ padding: space.lg, paddingTop: 92, gap: space.md }}>
+        <Text style={type.eyebrow}>MyPro</Text>
+        <Text style={type.h1}>Not configured yet.</Text>
+        <Text style={type.lede}>Personal companion — Android</Text>
 
-        <View style={shared.card}>
-          <Text
-            style={{
-              color: colors.text,
-              fontSize: 13,
-              textTransform: 'uppercase',
-              letterSpacing: 1,
-            }}
-          >
-            Not configured
+        <Card style={{ gap: 10, marginTop: space.sm }}>
+          <Text style={type.kicker}>Missing API URL</Text>
+          <Text style={type.body}>
+            Set EXPO_PUBLIC_API_URL to your Render URL and rebuild. That is the only backend this
+            app needs — sign-in, your library and the extracted book text all come through it.
           </Text>
-          <Text style={shared.muted}>
-            Set EXPO_PUBLIC_API_URL to your Render URL and rebuild. That is the only
-            backend this app needs — sign-in, your library and the extracted book text
-            all come through it.
-          </Text>
-          <Text style={{ color: colors.textFaint, fontSize: 12 }}>
+          <Text style={type.meta}>
             Assistant (laptop agent): {isAgentConfigured(env) ? 'discoverable' : 'not set'}
           </Text>
-        </View>
+        </Card>
       </ScrollView>
     </View>
   );

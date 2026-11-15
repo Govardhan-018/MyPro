@@ -3,8 +3,13 @@ packages:
   - frontend
   - android
 
-# React Native / Metro resolve modules from a flat node_modules, so the
-# workspace uses pnpm's hoisted linker. Declared both here (pnpm 10+ reads
-# settings from this file) and in .npmrc (pnpm 9, which CI pins, reads it
-# there) so every pnpm version produces the same layout.
-nodeLinker: hoisted
+# The node linker is deliberately NOT set here.
+#
+# CI pins pnpm 9, which reads `node-linker=hoisted` from .npmrc and gives the
+# Android build the flat tree Metro and Gradle expect. Newer pnpm reads its
+# settings from this file instead, and forcing `hoisted` here breaks the web
+# app: React Native needs react 18.3.1 and the web app needs react 19, and a
+# flat tree can only hoist one of them — react-dom 19 then sits beside react
+# 18 and the browser build is broken. Leaving it unset keeps each package's
+# own closure correct locally; `metro.config.js` is written to resolve under
+# either layout.

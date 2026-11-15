@@ -1,28 +1,31 @@
 /**
- * The assistant — MyPro's most distinctive surface. MYPRO 2.0.
+ * AI Assistant — the web app's assistant view, as a phone screen.
+ *
+ * Same words as `AssistantView` in `frontend/src/App.tsx`: the "YOUR
+ * COMPANION" kicker over "Hi, how can I help you today?", the conversation,
+ * and the composer with its privacy line beneath.
  *
  * All assistant traffic goes straight to the laptop, not through Render: it
  * is the only machine holding the model key. So this screen has a state the
- * others do not — the agent being unreachable — and it explains that in plain
- * language instead of an ambiguous "asleep" badge, while the rest of the app
- * keeps working.
+ * others do not — the agent being unreachable — and it says so in the
+ * composer exactly as the browser does, while the rest of the app keeps
+ * working.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
-  ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView,
+  Text, TextInput, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AgentOfflineError, type AssistantMessageRow } from '@mypro/shared';
 import { client } from '../lib/client';
-import { Card, EmptyState, FadeIn } from '../components/ui';
+import { FadeIn, Kicker, Loading } from '../components/ui';
 import { colors, radius, shared, space, type, useTheme } from '../theme';
 
-/** One-tap starters, shown while the conversation is young. */
+/** One-tap starters, shown while the conversation is still empty. */
 const SUGGESTIONS = [
   'Plan my day',
   'Summarize my current book',
-  'Create a task for tomorrow',
   'What did I highlight this week?',
 ];
 
@@ -60,7 +63,7 @@ export function AssistantScreen() {
 
   const send = async (text?: string) => {
     const content = (text ?? draft).trim();
-    if (!content || sending) return;
+    if (!content || sending || offline) return;
     setDraft('');
     setSending(true);
 
@@ -87,253 +90,297 @@ export function AssistantScreen() {
     }
   };
 
-  if (loading) {
-    return (
-      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color={colors.text} />
-      </View>
-    );
-  }
+  if (loading) return <Loading />;
 
-  if (offline) {
-    return (
-      <ScrollView
-        style={shared.screen}
-        contentContainerStyle={{ padding: space.gutter, paddingTop: 8, gap: space.md }}
-      >
-        <FadeIn index={0} style={{ gap: 4 }}>
-          <Text style={type.title}>Assistant</Text>
-          <StatusPill online={false} />
-        </FadeIn>
-        <FadeIn index={1}>
-          <Card elevated style={{ gap: 10 }}>
-            <Text style={type.cardTitle}>Not reachable right now</Text>
-            <Text style={type.body}>
-              Your assistant runs at home, on the only machine that holds the AI key — and that
-              machine isn't reachable at the moment.
-            </Text>
-            <Text style={type.support}>
-              Everything else in MyPro keeps working: your calendar, library, reading and health
-              records all live on the always-on server. Open the laptop and the conversation
-              picks up exactly where it left off.
-            </Text>
-            <Pressable
-              style={[shared.ghostButton, { marginTop: 6 }]}
-              onPress={() => void load()}
-              accessibilityRole="button"
-              accessibilityLabel="Try again"
-            >
-              <Text style={shared.ghostLabel}>Try again</Text>
-            </Pressable>
-          </Card>
-        </FadeIn>
-      </ScrollView>
-    );
-  }
+  const empty = messages.length === 0;
 
   return (
     <KeyboardAvoidingView
       style={shared.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View
-        style={{
-          paddingHorizontal: space.gutter,
-          paddingTop: 8,
-          paddingBottom: 10,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
-        <Text style={[type.title, { flex: 1 }]}>Assistant</Text>
-        <StatusPill online />
-      </View>
-
-      {error && (
-        <View style={{ paddingHorizontal: space.gutter, paddingBottom: 10 }}>
-          <Text style={{ color: colors.danger, fontSize: 12.5 }}>{error}</Text>
-        </View>
-      )}
-
-      <FlatList
-        ref={listRef}
-        data={messages}
-        /* Inverted so new messages appear at the bottom without measuring. */
-        inverted
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingHorizontal: space.gutter, paddingBottom: 16, gap: 10 }}
-        ListEmptyComponent={
-          /* An inverted empty list renders right-side-up content upside down,
-             so flip it back. */
-          <View style={{ transform: [{ scaleY: -1 }], paddingTop: 20 }}>
-            <EmptyState
-              icon="sparkles-outline"
-              title="Your companion"
-              body="It knows your calendar, your library and your notes — and it remembers. Start anywhere."
-            />
-          </View>
-        }
-        ListHeaderComponent={
-          sending ? (
-            <View
-              style={{
-                alignSelf: 'flex-start',
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 8,
-                borderRadius: radius.lg,
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                backgroundColor: colors.surface,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: colors.border,
-              }}
-            >
-              <ActivityIndicator size="small" color={colors.textMuted} />
-              <Text style={type.support}>Thinking…</Text>
-            </View>
-          ) : null
-        }
-        renderItem={({ item }) => <Bubble message={item} />}
-      />
-
-      {/* Suggestions appear while the thread is young. */}
-      {messages.length < 3 && !sending && (
+      {/* `.assistant-center` — the intro sits above an empty conversation. */}
+      {empty ? (
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: 'center',
+            paddingHorizontal: space.gutter,
+            paddingVertical: space.lg,
+          }}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ gap: 8, paddingHorizontal: space.gutter, paddingVertical: 8 }}
-          style={{ flexGrow: 0 }}
         >
-          {SUGGESTIONS.map((suggestion) => (
-            <Pressable
-              key={suggestion}
-              onPress={() => void send(suggestion)}
-              accessibilityRole="button"
-              accessibilityLabel={suggestion}
+          <FadeIn index={0} style={{ alignItems: 'center', gap: 10 }}>
+            <Cubes />
+            <Kicker>Your companion</Kicker>
+            <Text
               style={{
-                paddingHorizontal: 14,
-                paddingVertical: 8,
-                borderRadius: 999,
-                backgroundColor: colors.surface,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: colors.borderStrong,
+                color: colors.text,
+                fontSize: 27,
+                lineHeight: 31,
+                fontWeight: '500',
+                letterSpacing: -1.2,
+                textAlign: 'center',
               }}
             >
-              <Text style={{ color: colors.textMuted, fontSize: 13 }}>{suggestion}</Text>
-            </Pressable>
-          ))}
+              Hi, how can I help you today?
+            </Text>
+            <Text
+              style={{
+                color: colors.textBody,
+                fontSize: 14,
+                lineHeight: 21,
+                textAlign: 'center',
+                maxWidth: 300,
+              }}
+            >
+              I can organize your time, knowledge, and health — all in one thoughtful space.
+            </Text>
+          </FadeIn>
+
+          {!offline && (
+            <FadeIn index={1} style={{ marginTop: space.lg, gap: 8 }}>
+              {SUGGESTIONS.map((suggestion) => (
+                <Pressable
+                  key={suggestion}
+                  onPress={() => void send(suggestion)}
+                  accessibilityRole="button"
+                  accessibilityLabel={suggestion}
+                  style={({ pressed }) => ({
+                    minHeight: 48,
+                    justifyContent: 'center',
+                    paddingHorizontal: 16,
+                    borderRadius: radius.md,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    backgroundColor: pressed ? 'rgba(255,255,255,0.06)' : colors.surface,
+                  })}
+                >
+                  <Text style={{ color: colors.textMuted, fontSize: 14 }}>{suggestion}</Text>
+                </Pressable>
+              ))}
+            </FadeIn>
+          )}
         </ScrollView>
+      ) : (
+        <FlatList
+          ref={listRef}
+          data={messages}
+          /* Inverted so new messages appear at the bottom without measuring. */
+          inverted
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{
+            paddingHorizontal: space.gutter,
+            paddingTop: 16,
+            paddingBottom: 16,
+            gap: 10,
+          }}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            sending ? (
+              <View
+                style={{
+                  alignSelf: 'flex-start',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  borderRadius: radius.card,
+                  paddingHorizontal: 14,
+                  paddingVertical: 11,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  backgroundColor: colors.surface,
+                }}
+              >
+                <ActivityIndicator size="small" color={colors.textMuted} />
+                <Text style={type.meta}>Thinking…</Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item }) => <Bubble message={item} />}
+        />
       )}
 
-      <View
-        style={{
-          flexDirection: 'row',
-          gap: 10,
-          paddingHorizontal: space.gutter,
-          paddingTop: 10,
-          paddingBottom: 14,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: colors.border,
-          alignItems: 'flex-end',
-          backgroundColor: colors.glass,
-        }}
-      >
-        <TextInput
-          style={[shared.input, { flex: 1, maxHeight: 120, borderRadius: radius.lg }]}
-          placeholder="Message your companion"
-          placeholderTextColor={colors.textFaint}
-          value={draft}
-          onChangeText={setDraft}
-          multiline
-          editable={!sending}
-          accessibilityLabel="Message"
-        />
-        <Pressable
-          onPress={() => void send()}
-          disabled={!draft.trim() || sending}
-          accessibilityRole="button"
-          accessibilityLabel="Send message"
+      {/* `.composer` */}
+      <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+        <View
           style={{
-            width: 44,
-            height: 44,
+            borderWidth: 1,
+            borderColor: colors.borderStrong,
             borderRadius: 22,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor:
-              draft.trim() && !sending ? (colorMode ? accent : colors.text) : colors.surfaceHigh,
+            backgroundColor: colors.surface,
+            paddingHorizontal: 13,
+            paddingTop: 10,
+            paddingBottom: 9,
+            opacity: offline ? 0.55 : 1,
           }}
         >
-          <Ionicons
-            name="arrow-up"
-            size={19}
-            color={draft.trim() && !sending ? colors.background : colors.textFaint}
+          <TextInput
+            style={{
+              minHeight: 40,
+              maxHeight: 120,
+              color: colors.text,
+              fontSize: 16,
+              paddingHorizontal: 5,
+              paddingVertical: 3,
+              textAlignVertical: 'top',
+            }}
+            placeholder={offline ? 'Your laptop agent is asleep…' : 'Ask MyPro anything...'}
+            placeholderTextColor="rgba(255,255,255,0.44)"
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            editable={!offline && !sending}
+            accessibilityLabel="Message"
           />
-        </Pressable>
+          {/* `.composer-tools` */}
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              marginTop: 4,
+            }}
+          >
+            <Pressable
+              onPress={() => void send()}
+              disabled={!draft.trim() || sending || offline}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 11,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor:
+                  draft.trim() && !sending && !offline
+                    ? colorMode
+                      ? accent
+                      : colors.text
+                    : 'rgba(255,255,255,0.08)',
+              }}
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color="#000000" />
+              ) : (
+                <Ionicons
+                  name="send"
+                  size={16}
+                  color={
+                    draft.trim() && !offline ? '#000000' : 'rgba(255,255,255,0.4)'
+                  }
+                />
+              )}
+            </Pressable>
+          </View>
+        </View>
+
+        {/* The line beneath the composer, as the web writes it. */}
+        <Text
+          style={{
+            marginTop: 8,
+            marginHorizontal: 6,
+            color: error ? colors.danger : colors.textFaint,
+            fontSize: 12,
+            lineHeight: 17,
+          }}
+        >
+          {error
+            ? error
+            : offline
+              ? 'Wake your laptop to chat with your companion. Everything else keeps working.'
+              : 'MyPro keeps your personal data private and under your control.'}
+        </Text>
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-function StatusPill({ online }: { online: boolean }) {
-  return (
-    <View
-      accessibilityLabel={online ? 'Assistant connected' : 'Assistant not reachable'}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 999,
-        backgroundColor: colors.surface,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: colors.border,
-        alignSelf: 'flex-start',
-      }}
-    >
-      <View
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 4,
-          backgroundColor: online ? '#8FD6A8' : colors.textFaint,
-        }}
-      />
-      <Text style={{ color: colors.textMuted, fontSize: 11.5 }}>
-        {online ? 'Connected to your laptop' : 'Laptop offline'}
-      </Text>
-    </View>
-  );
-}
-
+/** `.message` + `.message-bubble`. */
 function Bubble({ message }: { message: AssistantMessageRow }) {
-  const { accentSoft, colorMode } = useTheme();
+  const { accent, colorMode } = useTheme();
   const mine = message.role === 'user';
   return (
     <View
       style={{
         alignSelf: mine ? 'flex-end' : 'flex-start',
         maxWidth: '85%',
-        borderRadius: radius.lg,
-        borderBottomRightRadius: mine ? 6 : radius.lg,
-        borderBottomLeftRadius: mine ? radius.lg : 6,
+        borderRadius: radius.card,
+        borderBottomRightRadius: mine ? 6 : radius.card,
+        borderBottomLeftRadius: mine ? radius.card : 6,
         paddingHorizontal: 14,
-        paddingVertical: 10,
+        paddingVertical: 11,
+        borderWidth: 1,
+        borderColor: mine && colorMode ? 'rgba(182,154,245,0.35)' : colors.border,
         backgroundColor: mine
           ? colorMode
-            ? accentSoft
+            ? 'rgba(182,154,245,0.12)'
             : 'rgba(255,255,255,0.1)'
           : colors.surface,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: mine && colorMode ? 'rgba(168,140,242,0.35)' : colors.border,
       }}
     >
-      <Text style={{ color: colors.text, fontSize: 15, lineHeight: 22 }}>
+      <Text style={{ color: colors.text, fontSize: 14.5, lineHeight: 22 }}>
         {message.content ?? ''}
       </Text>
+      {!mine && colorMode && (
+        <View
+          style={{
+            position: 'absolute',
+            left: -1,
+            top: 14,
+            bottom: 14,
+            width: 2,
+            borderTopRightRadius: 2,
+            borderBottomRightRadius: 2,
+            backgroundColor: accent,
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
+/**
+ * `.rolling-cubes` — the web plays a Lottie animation here. Native Lottie
+ * would mean a new native module and a re-proved APK pipeline, so this is its
+ * still cousin: three stacked tiles that pick up the accent in Color Mode.
+ */
+function Cubes() {
+  const { colorMode, accent } = useTheme();
+  const tile = (size: number, offset: number, rotate: string) => (
+    <View
+      key={`${size}-${offset}`}
+      style={{
+        position: 'absolute',
+        left: offset,
+        bottom: 0,
+        width: size,
+        height: size,
+        borderRadius: size * 0.28,
+        borderWidth: 1,
+        borderColor: colorMode ? 'rgba(182,154,245,0.45)' : colors.borderStrong,
+        backgroundColor: colorMode ? 'rgba(168,140,242,0.1)' : 'rgba(255,255,255,0.05)',
+        transform: [{ rotate }],
+      }}
+    />
+  );
+  return (
+    <View style={{ width: 150, height: 78, marginBottom: 14 }}>
+      {tile(52, 6, '-12deg')}
+      {tile(40, 62, '8deg')}
+      {tile(30, 108, '-4deg')}
+      <View
+        style={{
+          position: 'absolute',
+          left: 22,
+          bottom: 18,
+          width: 12,
+          height: 12,
+          borderRadius: 6,
+          backgroundColor: colorMode ? accent : 'rgba(255,255,255,0.55)',
+        }}
+      />
     </View>
   );
 }

@@ -216,6 +216,35 @@ export function MyProDarkReader({
   /** Set while we scroll the canvas ourselves, so the observer stays quiet. */
   const programmaticScroll = useRef(false);
 
+  /**
+   * The dock gets out of the way while you read.
+   *
+   * It floats over the column, so on a phone it sat on top of whatever line
+   * happened to be at the bottom of the screen. Reading downward hides it;
+   * pausing, or scrolling back up, brings it straight back — the same bargain
+   * Books and Readwise make, and the reason the page feels taller than it is.
+   */
+  const [dockHidden, setDockHidden] = useState(false);
+  const lastScrollTop = useRef(0);
+  const dockIdle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  /**
+   * Bound to the canvas itself rather than attached in an effect: the canvas
+   * only exists once the book's text has arrived, so an effect that ran on
+   * mount found `canvasRef.current` empty and never listened to anything.
+   */
+  const onCanvasScroll = (event: React.UIEvent<HTMLElement>) => {
+    const top = event.currentTarget.scrollTop;
+    const delta = top - lastScrollTop.current;
+    lastScrollTop.current = top;
+    // Ignore the jitter of a finger resting on the glass.
+    if (Math.abs(delta) > 6) setDockHidden(delta > 0 && top > 80);
+    clearTimeout(dockIdle.current);
+    dockIdle.current = setTimeout(() => setDockHidden(false), 900);
+  };
+
+  useEffect(() => () => clearTimeout(dockIdle.current), []);
+
   const [activeMarker, setActiveMarker] = useState<string | null>(null);
   const [emphasis, setEmphasis] = useState<string | null>(null);
   const [pendingScroll, setPendingScroll] = useState<string | null>(null);
@@ -1350,7 +1379,7 @@ const key = `${page}-${idx}`;
         </aside>
 
         {/* ================= MAIN READING CANVAS ================= */}
-        <main className="reader-main-canvas" ref={canvasRef}>
+        <main className="reader-main-canvas" ref={canvasRef} onScroll={onCanvasScroll}>
           {readingMode === "paginated" && (
             <button
               type="button"
@@ -1405,7 +1434,7 @@ const key = `${page}-${idx}`;
       </div>
 
       {/* ================= BOTTOM DOCK ================= */}
-      <footer className="reader-bottom-dock glass-card">
+      <footer className={`reader-bottom-dock glass-card ${dockHidden ? "dock-hidden" : ""}`}>
         <div className="dock-left">
           <button type="button" className="dock-icon-btn" onClick={() => flowTo(currentPage - 1)} disabled={currentPage <= 1} title="Previous Page">
             <ChevronLeft size={18} />

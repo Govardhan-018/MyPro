@@ -1,22 +1,24 @@
 /**
- * Schedules — the phone-side view of the recurring instructions that drive
- * the Phase 11 clock.
+ * Schedules — the recurring instructions that drive the Phase 11 clock.
  *
- * Each card shows what a schedule does, when it fires next, its recurrence
- * and timezone, and whether it is active. Pause/resume and delete act on the
- * real rows through Render; creating and editing the richer action payloads
- * stays on the web, and the screen says so instead of pretending.
+ * Each card says what a schedule does, when it fires next, its recurrence and
+ * timezone, and whether it is active. Pause, resume and delete act on the
+ * real rows through `/schedules`, and each change re-arms this device's local
+ * notifications so the phone's clock agrees immediately.
+ *
+ * Creating and editing the richer action payloads stays in the web app, and
+ * the footer says so rather than offering a button that cannot finish.
  */
 import { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View,
-} from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ScheduleRow } from '@mypro/shared';
 import { client } from '../lib/client';
 import { armUpcoming } from '../lib/notifications';
-import { Card, EmptyState, FadeIn, MetaRow, useToast } from '../components/ui';
-import { colors, shared, space, type, useTheme } from '../theme';
+import {
+  Card, DataBanner, EmptyState, FadeIn, Loading, MetaRow, PageHeading, useToast,
+} from '../components/ui';
+import { colors, radius, shared, space, type, useTheme } from '../theme';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -52,8 +54,8 @@ function recurrenceLabel(row: ScheduleRow): string {
 function whenLabel(iso: string | null): string | null {
   if (!iso) return null;
   const date = new Date(iso);
-  const now = Date.now();
-  const diffMinutes = Math.round((date.getTime() - now) / 60_000);
+  if (Number.isNaN(date.getTime())) return null;
+  const diffMinutes = Math.round((date.getTime() - Date.now()) / 60_000);
   const clock = date.toLocaleString(undefined, {
     weekday: 'short',
     day: 'numeric',
@@ -75,7 +77,7 @@ const ACTION_LABEL: Record<ScheduleRow['action_type'], string> = {
   chat_message: 'Assistant message',
 };
 
-export function SchedulesScreen({ onClose }: { onClose: () => void }) {
+export function SchedulesScreen() {
   const toast = useToast();
   const { accent, colorMode } = useTheme();
   const [rows, setRows] = useState<ScheduleRow[]>([]);
@@ -87,8 +89,7 @@ export function SchedulesScreen({ onClose }: { onClose: () => void }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const list = await client.api.schedules.list();
-      setRows(list);
+      setRows(await client.api.schedules.list());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load your schedules.');
     } finally {
@@ -103,11 +104,11 @@ export function SchedulesScreen({ onClose }: { onClose: () => void }) {
 
   const setEnabled = async (row: ScheduleRow, enabled: boolean) => {
     setBusyId(row.id);
-    // Optimistic, so the toggle answers the thumb immediately.
+    // Optimistic, so the control answers the thumb immediately.
     setRows((current) => current.map((r) => (r.id === row.id ? { ...r, enabled } : r)));
     try {
       await client.api.schedules.update(row.id, { enabled });
-      toast.show(enabled ? `Resumed “${row.name}”` : `Paused “${row.name}”`);
+      toast.show(enabled ? `Resumed "${row.name}"` : `Paused "${row.name}"`);
       // The local clock must agree with the change straight away.
       void armUpcoming();
     } catch (caught) {
@@ -123,7 +124,7 @@ export function SchedulesScreen({ onClose }: { onClose: () => void }) {
   const confirmDelete = (row: ScheduleRow) => {
     Alert.alert(
       'Delete schedule?',
-      `“${row.name}” will stop firing on every device. This cannot be undone.`,
+      `"${row.name}" will stop firing on every device. This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -145,166 +146,156 @@ export function SchedulesScreen({ onClose }: { onClose: () => void }) {
     );
   };
 
-  if (loading) {
-    return (
-      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color={colors.text} />
-      </View>
-    );
-  }
+  if (loading) return <Loading />;
+
+  const activeCount = rows.filter((r) => r.enabled).length;
 
   return (
-    <FlatList
-      style={shared.screen}
-      data={rows}
-      keyExtractor={(row) => row.id}
-      contentContainerStyle={{
-        padding: space.gutter,
-        paddingTop: 56,
-        paddingBottom: 48,
-        gap: 12,
-      }}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
-          tintColor={colors.textMuted}
-        />
-      }
-      ListHeaderComponent={
-        <FadeIn index={0} style={{ marginBottom: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Back"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: colors.surface,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: colors.border,
-              }}
-            >
-              <Ionicons name="chevron-back" size={19} color={colors.text} />
-            </Pressable>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={type.title}>Schedules</Text>
-              <Text style={type.support}>
-                {rows.length
-                  ? `${rows.filter((r) => r.enabled).length} active of ${rows.length}`
-                  : 'Recurring reminders and check-ins'}
-              </Text>
-            </View>
-          </View>
-          {error && <Text style={[type.support, { marginTop: 10 }]}>{error}</Text>}
-        </FadeIn>
-      }
-      ListEmptyComponent={
-        !error ? (
-          <EmptyState
-            icon="repeat-outline"
-            title="No schedules yet"
-            body="Create one in the web app or ask your assistant — a morning brief, a weekly review, a medication reminder."
+    <View style={shared.screen}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: space.gutter,
+          paddingTop: 22,
+          paddingBottom: 28,
+        }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              void load();
+            }}
+            tintColor={colors.textMuted}
           />
-        ) : null
-      }
-      renderItem={({ item, index }) => {
-        const next = whenLabel(item.next_run_at);
-        const last = whenLabel(item.last_run_at);
-        return (
-          <FadeIn index={Math.min(index + 1, 6)}>
+        }
+      >
+        <PageHeading
+          eyebrow="Schedules"
+          title="What happens without you."
+          lede={
+            rows.length
+              ? `${activeCount} active of ${rows.length} — reminders and check-ins this phone fires on time.`
+              : 'Recurring reminders and automated check-ins.'
+          }
+        />
+
+        {!!error && <DataBanner message={error} error />}
+
+        {rows.length === 0 ? (
+          <FadeIn index={1}>
             <Card>
-              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                <View style={{ flex: 1, gap: 3 }}>
-                  <Text style={type.cardTitle}>{item.name}</Text>
-                  {!!item.description && <Text style={type.support}>{item.description}</Text>}
-                </View>
-                <View
-                  style={{
-                    paddingHorizontal: 10,
-                    paddingVertical: 4,
-                    borderRadius: 999,
-                    backgroundColor: item.enabled
-                      ? colorMode
-                        ? 'rgba(168,140,242,0.16)'
-                        : 'rgba(255,255,255,0.1)'
-                      : 'transparent',
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: item.enabled
-                      ? colorMode
-                        ? accent
-                        : colors.borderStrong
-                      : colors.border,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: item.enabled
-                        ? colorMode
-                          ? accent
-                          : colors.text
-                        : colors.textFaint,
-                      fontSize: 11.5,
-                      fontWeight: '600',
-                    }}
-                  >
-                    {item.enabled ? 'Active' : 'Paused'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={{ gap: 6, marginTop: 2 }}>
-                <MetaRow icon="repeat-outline">{recurrenceLabel(item)}</MetaRow>
-                {item.enabled && next && (
-                  <MetaRow icon="alarm-outline" tone={colors.textMuted}>
-                    Next {next}
-                  </MetaRow>
-                )}
-                {last && <MetaRow icon="checkmark-done-outline">Last ran {last}</MetaRow>}
-                <MetaRow icon="globe-outline">
-                  {item.timezone} · {ACTION_LABEL[item.action_type] ?? item.action_type}
-                </MetaRow>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
-                <Pressable
-                  onPress={() => void setEnabled(item, !item.enabled)}
-                  disabled={busyId === item.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={item.enabled ? 'Pause schedule' : 'Resume schedule'}
-                  style={[shared.ghostButton, { flex: 1, paddingVertical: 10 }]}
-                >
-                  <Text style={shared.ghostLabel}>{item.enabled ? 'Pause' : 'Resume'}</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => confirmDelete(item)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Delete schedule"
-                  style={[shared.ghostButton, { paddingHorizontal: 14, paddingVertical: 10 }]}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.danger} />
-                </Pressable>
-              </View>
+              <EmptyState
+                icon="alarm-outline"
+                title="No schedules yet"
+                body="Create one in the web app or ask your assistant — a morning brief, a weekly review, a medication reminder."
+              />
             </Card>
           </FadeIn>
-        );
-      }}
-      ListFooterComponent={
-        rows.length ? (
-          <Text style={[type.label, { textAlign: 'center', marginTop: 8 }]}>
-            Creating and editing schedules lives in the web app for now — the richer
-            action payloads need a bigger form than a phone wants to hold.
-          </Text>
-        ) : null
-      }
-    />
+        ) : (
+          <View style={{ gap: 10 }}>
+            {rows.map((item, index) => {
+              const next = whenLabel(item.next_run_at);
+              const last = whenLabel(item.last_run_at);
+              return (
+                <FadeIn key={item.id} index={Math.min(index + 1, 7)}>
+                  <Card style={{ gap: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <Text style={type.h3}>{item.name}</Text>
+                        {!!item.description && (
+                          <Text style={type.meta}>{item.description}</Text>
+                        )}
+                      </View>
+                      <View
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 4,
+                          borderRadius: radius.pill,
+                          borderWidth: 1,
+                          borderColor: item.enabled
+                            ? colorMode
+                              ? colors.violetLine
+                              : 'rgba(255,255,255,0.22)'
+                            : colors.divider,
+                          backgroundColor: item.enabled
+                            ? colorMode
+                              ? 'rgba(182,154,245,0.1)'
+                              : 'rgba(255,255,255,0.1)'
+                            : 'transparent',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: item.enabled
+                              ? colorMode
+                                ? accent
+                                : colors.text
+                              : colors.textFaint,
+                            fontSize: 11.5,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {item.enabled ? 'Active' : 'Paused'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={{ gap: 6 }}>
+                      <MetaRow icon="repeat-outline">{recurrenceLabel(item)}</MetaRow>
+                      {item.enabled && !!next && (
+                        <MetaRow icon="alarm-outline" tone={colors.textMuted}>
+                          Next {next}
+                        </MetaRow>
+                      )}
+                      {!!last && (
+                        <MetaRow icon="checkmark-done-outline">Last ran {last}</MetaRow>
+                      )}
+                      <MetaRow icon="globe-outline">
+                        {item.timezone} · {ACTION_LABEL[item.action_type] ?? item.action_type}
+                      </MetaRow>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+                      <Pressable
+                        onPress={() => void setEnabled(item, !item.enabled)}
+                        disabled={busyId === item.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          item.enabled ? `Pause ${item.name}` : `Resume ${item.name}`
+                        }
+                        style={[
+                          shared.ghostButton,
+                          { flex: 1, height: 44, opacity: busyId === item.id ? 0.6 : 1 },
+                        ]}
+                      >
+                        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                          {item.enabled ? 'Pause' : 'Resume'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => confirmDelete(item)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete ${item.name}`}
+                        style={[
+                          shared.ghostButton,
+                          { width: 52, height: 44, paddingHorizontal: 0 },
+                        ]}
+                      >
+                        <Ionicons name="trash-outline" size={17} color={colors.danger} />
+                      </Pressable>
+                    </View>
+                  </Card>
+                </FadeIn>
+              );
+            })}
+
+            <Text style={[type.meta, { textAlign: 'center', marginTop: 6 }]}>
+              Creating and editing schedules lives in the web app — the action payloads need a
+              bigger form than a phone wants to hold.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 }

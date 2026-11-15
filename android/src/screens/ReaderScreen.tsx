@@ -170,6 +170,9 @@ export function ReaderScreen({
   const [noteDraft, setNoteDraft] = useState<string | null>(null);
   const [prefs, updatePrefs] = useReaderPrefs();
   const [chromeVisible, setChromeVisible] = useState(true);
+  /** Last scroll offset and the idle timer, for the dock's auto-hide. */
+  const lastOffset = useRef(0);
+  const chromeIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [navSheet, setNavSheet] = useState<NavTab | null>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -228,7 +231,15 @@ export function ReaderScreen({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
+    lastOffset.current = 0;
   }, [page]);
+
+  useEffect(
+    () => () => {
+      if (chromeIdle.current) clearTimeout(chromeIdle.current);
+    },
+    [],
+  );
 
   /* Progress sync ----------------------------------------------------------- */
   // Remember where you stopped, so the web app and the phone agree.
@@ -386,6 +397,19 @@ export function ReaderScreen({
       {/* The page */}
       <ScrollView
         ref={scrollRef}
+        scrollEventThrottle={32}
+        onScroll={(event) => {
+          /* Reading downward tucks the chrome away; a pause brings it back.
+             The toolbar and the control bar float over the column, so without
+             this they sit on whatever line happens to be at the edge of the
+             screen. */
+          const offset = event.nativeEvent.contentOffset.y;
+          const delta = offset - lastOffset.current;
+          lastOffset.current = offset;
+          if (Math.abs(delta) > 6) setChromeVisible(!(delta > 0 && offset > 80));
+          if (chromeIdle.current) clearTimeout(chromeIdle.current);
+          chromeIdle.current = setTimeout(() => setChromeVisible(true), 900);
+        }}
         contentContainerStyle={{
           paddingTop: 116,
           paddingBottom: 140,
@@ -578,7 +602,7 @@ export function ReaderScreen({
                 alignItems: 'center',
                 paddingVertical: 9,
                 borderRadius: radius.md,
-                backgroundColor: navSheet === tabOption.key ? colors.surfaceHigh : 'transparent',
+                backgroundColor: navSheet === tabOption.key ? colors.surfaceActive : 'transparent',
                 borderWidth: StyleSheet.hairlineWidth,
                 borderColor: navSheet === tabOption.key ? colors.borderStrong : 'transparent',
               }}
@@ -633,7 +657,7 @@ export function ReaderScreen({
                 </Pressable>
               ))
             ) : (
-              <Text style={[type.support, { padding: 10 }]}>
+              <Text style={[type.meta, { padding: 10 }]}>
                 This book has no table of contents in its synced text.
               </Text>
             ))}
@@ -641,7 +665,7 @@ export function ReaderScreen({
           {navSheet === 'marks' && (
             <>
               {marks.bookmarks.length === 0 && highlightRows.length === 0 && (
-                <Text style={[type.support, { padding: 10 }]}>
+                <Text style={[type.meta, { padding: 10 }]}>
                   No bookmarks or highlights yet. Long-press a paragraph to highlight it; the
                   bookmark button in the toolbar marks the page.
                 </Text>
@@ -684,7 +708,7 @@ export function ReaderScreen({
                 />
               ))
             ) : (
-              <Text style={[type.support, { padding: 10 }]}>
+              <Text style={[type.meta, { padding: 10 }]}>
                 No notes in this book yet. Long-press a paragraph and choose “Add note”.
               </Text>
             ))}
@@ -701,7 +725,7 @@ export function ReaderScreen({
       >
         {selection && (
           <View style={{ gap: 14 }}>
-            <Text style={[type.support, { fontStyle: 'italic' }]} numberOfLines={3}>
+            <Text style={[type.meta, { fontStyle: 'italic' }]} numberOfLines={3}>
               “{selection.text}”
             </Text>
 

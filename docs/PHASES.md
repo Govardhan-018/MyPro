@@ -340,6 +340,49 @@ prose.** Finishes Phase 8.
   is untouched). The reader still renders synced extracted text: original
   PDF rasterisation on the phone would need the file itself, which never
   leaves the importing device by design.
+- ✅ **13.7** The Android app rebuilt in the web app's own visual language,
+  and a round of mobile UI bug fixes in both clients (Nov 2026).
+  `android/src/theme.tsx` is now a transcription of the browser's phone
+  stylesheet rather than a parallel invention: black canvas, `#111111`
+  surfaces, `rgba(86,94,103,.45)` hairlines, the five white opacity tiers,
+  and `#b69af5` as the one Color Mode accent. `components/ui.tsx` and the
+  screens follow the same classes the web uses (`.glass-card`,
+  `.page-heading`, `.mobile-agenda-event`, `.mobile-day-strip`,
+  `.learning-row`, `.health-stat`, `.mobile-nav-*`), each named in the
+  comment beside it. The nav is the web's `MobileNavSheet`: five tabs over a
+  grabber that opens a drawer holding all seven sections plus the quick
+  actions.
+  **API corrections found while porting:** the library list now reads every
+  type (book, podcast, article, note) instead of books alone, and uses the
+  API's real status vocabulary `in_progress | completed | want | favorite` —
+  the phone had been filtering on a `want_to_read` that no row ever carries,
+  so "Want to Read" was always empty. Health reads the nested
+  `health_symptoms`, `health_medications` and `health_documents` that
+  `/health/records` has always embedded.
+  **UI bugs fixed in `frontend/src/index.css` (all of them mobile-only):**
+  the selected segment of Day/Week/Month was `#000` on a `#111` card and
+  therefore invisible; the calendar's actions row used a bare `1fr` track,
+  which floors at min-content, so "New" was pushed off the right edge, and a
+  `.page-heading .primary-button` descendant rule pinned that same button to
+  41px so its label was cut off inside its own pill; the week strip rendered
+  seven days into a five-column grid and wrapped; the nav sheet inherited
+  `align-items: center` from the older pill-bar rules, which shrank the tab
+  row to 191px of a 375px screen and crushed "Calendar" under the assistant
+  button; `.view-scroll` reserved 92px for a 96px nav, so the last card sat
+  under it; and the three health tiles' numbers fell out of line whenever one
+  label wrapped further than the others. In the reader
+  (`reading-listening.css` + `MyProDarkReader.tsx`) the dock carried a zoom
+  group that did not fit a phone, pushing "of N" onto its own line and the
+  zoom buttons off-screen; the zoom group is now hidden there, the scrubber
+  takes the room back, and the dock slides away while you read and returns
+  when you pause. The Android reader got the same auto-hiding chrome.
+  **Toolchain:** `nodeLinker: hoisted` was removed from `pnpm-workspace.yaml`
+  — React Native needs react 18.3.1 and the web app needs react 19, and a
+  flat tree can only hoist one, so react-dom 19 ended up beside react 18 and
+  the web app would not start. CI still reads `node-linker=hoisted` from
+  `.npmrc` for the APK. `@babel/runtime` is now an explicit dependency of the
+  Android app, which is what lets Metro resolve it under either layout.
+
 - ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
   sign-in screen now mirrors the web login page — brand bar with the Color
   Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no

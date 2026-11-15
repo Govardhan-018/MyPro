@@ -18,8 +18,13 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, 'node_modules'),
 ];
 
-// 3. With a flat (hoisted) store there is a single copy of each dependency;
-//    disabling the hierarchical lookup keeps resolution deterministic.
-config.resolver.disableHierarchicalLookup = true;
+// 3. Keep the hierarchical lookup ON.
+//
+//    CI installs a flat tree, where it costs nothing. Locally the tree may be
+//    pnpm's isolated layout instead, where a package's transitive deps live
+//    beside it under `.pnpm/<pkg>/node_modules`; Metro only finds those by
+//    walking up from the resolved realpath, so disabling the walk broke the
+//    bundle with "Unable to resolve @babel/runtime/helpers/…".
+config.resolver.disableHierarchicalLookup = false;
 
 module.exports = config;

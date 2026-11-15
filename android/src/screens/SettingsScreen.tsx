@@ -1,27 +1,28 @@
 /**
- * Settings — the structured home for everything that is not a tab.
+ * Settings — the web app's settings view, as a phone screen.
  *
- * Replaces the old "More" drawer. Appearance (Color Mode), notifications
- * state (the one window into the Phase 11 clock), shortcuts to My Knowledge
- * and Schedules, and the account section with sign-out.
+ * Same heading ("Make MyPro yours.") and the same grouped rows: profile,
+ * appearance, notifications, the other sections, then the account. The
+ * notification group is also the one window into the Phase 11 clock, which is
+ * invisible when it works — saying how many reminders are armed is how you
+ * find out it has stopped before you miss something.
  */
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import { ARM_WINDOW_HOURS, armUpcoming, registerForPush } from '../lib/notifications';
-import { Card, FadeIn, SectionLabel, ToggleRow, type IconName } from '../components/ui';
-import { colors, shared, space, type, useTheme } from '../theme';
-
-type Destination = 'knowledge' | 'schedules';
+import {
+  Card, FadeIn, Kicker, PageHeading, ToggleRow, type IconName,
+} from '../components/ui';
+import type { View_ } from '../components/TabBar';
+import { colors, radius, shared, space, type, useTheme } from '../theme';
 
 export function SettingsScreen({
-  onClose,
-  onOpen,
+  onNavigate,
   onSignOut,
 }: {
-  onClose: () => void;
-  onOpen: (destination: Destination) => void;
+  onNavigate: (view: View_) => void;
   onSignOut: () => void;
 }) {
   const { colorMode, setColorMode } = useTheme();
@@ -48,48 +49,54 @@ export function SettingsScreen({
     };
   }, []);
 
-  const signOut = async () => {
-    await client.auth.signOut().catch(() => undefined);
-    onSignOut();
-  };
-
   return (
     <ScrollView
       style={shared.screen}
       contentContainerStyle={{
-        padding: space.gutter,
-        paddingTop: 56,
-        paddingBottom: 48,
-        gap: space.md,
+        paddingHorizontal: space.gutter,
+        paddingTop: 22,
+        paddingBottom: 28,
       }}
     >
-      <FadeIn index={0}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Pressable
-            onPress={onClose}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 18,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: colors.surface,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: colors.border,
-            }}
-          >
-            <Ionicons name="chevron-back" size={19} color={colors.text} />
-          </Pressable>
-          <Text style={type.title}>Settings</Text>
-        </View>
+      <PageHeading
+        eyebrow="Settings"
+        title="Make MyPro yours."
+        lede="Manage connected sources, preferences, and privacy."
+      />
+
+      {/* Profile */}
+      <FadeIn index={1}>
+        <Card style={{ gap: 10 }}>
+          <Kicker>Profile</Kicker>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: colors.divider,
+                backgroundColor: 'rgba(255,255,255,0.05)',
+              }}
+            >
+              <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: colors.text, fontSize: 15 }}>
+                {email ?? 'Signed in'}
+              </Text>
+              <Text style={type.meta}>Signed in through your Render backend</Text>
+            </View>
+          </View>
+        </Card>
       </FadeIn>
 
-      <FadeIn index={1} style={{ gap: 10 }}>
-        <SectionLabel>Appearance</SectionLabel>
-        <Card>
+      {/* Appearance */}
+      <FadeIn index={2} style={{ marginTop: 12 }}>
+        <Card style={{ gap: 12 }}>
+          <Kicker>Appearance</Kicker>
           <ToggleRow
             title="Color Mode"
             subtitle="A restrained violet accent across the app. Off keeps MyPro monochrome."
@@ -99,29 +106,11 @@ export function SettingsScreen({
         </Card>
       </FadeIn>
 
-      <FadeIn index={2} style={{ gap: 10 }}>
-        <SectionLabel>Your work</SectionLabel>
-        <Card style={{ padding: 0, gap: 0 }}>
-          <LinkRow
-            icon="library-outline"
-            title="My Knowledge"
-            subtitle="Highlights, notes and questions from everything you read"
-            onPress={() => onOpen('knowledge')}
-          />
-          <Divider />
-          <LinkRow
-            icon="repeat-outline"
-            title="Schedules"
-            subtitle="Recurring reminders and automated check-ins"
-            onPress={() => onOpen('schedules')}
-          />
-        </Card>
-      </FadeIn>
-
-      <FadeIn index={3} style={{ gap: 10 }}>
-        <SectionLabel>Notifications</SectionLabel>
-        <Card>
-          <Text style={{ color: colors.text, fontSize: 15.5 }}>
+      {/* Notifications */}
+      <FadeIn index={3} style={{ marginTop: 12 }}>
+        <Card style={{ gap: 8 }}>
+          <Kicker>Notifications</Kicker>
+          <Text style={{ color: colors.text, fontSize: 15 }}>
             {armed === undefined
               ? 'Checking…'
               : armed === null
@@ -130,55 +119,79 @@ export function SettingsScreen({
                   ? `Nothing due in the next ${ARM_WINDOW_HOURS} hours`
                   : `${armed} reminder${armed === 1 ? '' : 's'} armed`}
           </Text>
-          <Text style={type.support}>
+          <Text style={type.meta}>
             {armed === null
               ? 'Allow notifications, and open the app once with a connection.'
               : `This phone fires reminders itself, so a brief still arrives with your laptop shut and the server asleep. It re-arms every time you open the app, covering the next ${ARM_WINDOW_HOURS} hours.`}
           </Text>
-          {pushNote && (
-            <Text style={type.label}>
+          {!!pushNote && (
+            <Text style={{ color: colors.textFaint, fontSize: 11.5, lineHeight: 17 }}>
               Push (for things nobody could schedule in advance) is not active: {pushNote}
             </Text>
           )}
         </Card>
       </FadeIn>
 
-      <FadeIn index={4} style={{ gap: 10 }}>
-        <SectionLabel>Account</SectionLabel>
-        <Card style={{ padding: 0, gap: 0 }}>
-          {!!email && (
-            <>
-              <View style={{ padding: space.md + 2, gap: 2 }}>
-                <Text style={{ color: colors.text, fontSize: 15.5 }}>{email}</Text>
-                <Text style={type.support}>Signed in through your Render backend</Text>
-              </View>
-              <Divider />
-            </>
-          )}
-          <LinkRow
-            icon="log-out-outline"
-            title="Sign out"
-            onPress={() => void signOut()}
-            tone={colors.danger}
+      {/* Other sections */}
+      <FadeIn index={4} style={{ marginTop: 12 }}>
+        <Card style={{ padding: 0, overflow: 'hidden' }}>
+          <SettingsRow
+            icon="bulb-outline"
+            title="My Knowledge"
+            subtitle="Highlights, notes and questions from everything you read"
+            onPress={() => onNavigate('knowledge')}
+            first
+          />
+          <SettingsRow
+            icon="alarm-outline"
+            title="Schedules"
+            subtitle="Recurring reminders and automated check-ins"
+            onPress={() => onNavigate('schedules')}
+          />
+          <SettingsRow
+            icon="heart-outline"
+            title="Health Records"
+            subtitle="Private, and read-only on the phone"
+            onPress={() => onNavigate('health')}
           />
         </Card>
       </FadeIn>
+
+      {/* Account */}
+      <FadeIn index={5} style={{ marginTop: 12 }}>
+        <Card style={{ padding: 0, overflow: 'hidden' }}>
+          <SettingsRow
+            icon="log-out-outline"
+            title="Sign out"
+            onPress={onSignOut}
+            tone={colors.danger}
+            first
+          />
+        </Card>
+      </FadeIn>
+
+      <Text style={[type.meta, { textAlign: 'center', marginTop: 18 }]}>
+        Connected sources and storage sync are managed in the web app.
+      </Text>
     </ScrollView>
   );
 }
 
-function LinkRow({
+/** `.settings-card button` — a 60px row with a hairline above it. */
+function SettingsRow({
   icon,
   title,
   subtitle,
   onPress,
   tone = colors.text,
+  first,
 }: {
   icon: IconName;
   title: string;
   subtitle?: string;
   onPress: () => void;
   tone?: string;
+  first?: boolean;
 }) {
   return (
     <Pressable
@@ -186,31 +199,27 @@ function LinkRow({
       accessibilityRole="button"
       accessibilityLabel={title}
       style={({ pressed }) => ({
+        minHeight: 60,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 14,
-        padding: space.md + 2,
+        paddingHorizontal: 18,
+        paddingVertical: 15,
+        borderTopWidth: first ? 0 : 1,
+        borderTopColor: colors.dividerFaint,
         backgroundColor: pressed ? 'rgba(255,255,255,0.04)' : 'transparent',
       })}
     >
-      <Ionicons name={icon} size={19} color={tone === colors.text ? colors.textMuted : tone} />
+      <Ionicons
+        name={icon}
+        size={18}
+        color={tone === colors.text ? colors.textMuted : tone}
+      />
       <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ color: tone, fontSize: 15.5 }}>{title}</Text>
-        {!!subtitle && <Text style={type.support}>{subtitle}</Text>}
+        <Text style={{ color: tone, fontSize: 15 }}>{title}</Text>
+        {!!subtitle && <Text style={type.meta}>{subtitle}</Text>}
       </View>
       <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
     </Pressable>
-  );
-}
-
-function Divider() {
-  return (
-    <View
-      style={{
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: colors.border,
-        marginLeft: space.md + 2,
-      }}
-    />
   );
 }

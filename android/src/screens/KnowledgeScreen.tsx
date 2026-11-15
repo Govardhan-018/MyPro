@@ -1,20 +1,22 @@
 /**
- * My Knowledge — everything you marked while reading. MYPRO 2.0.
+ * My Knowledge — the web app's knowledge view, as a phone screen.
  *
- * A view over `annotations`, not a table of its own, so this reads the same
- * `/knowledge` endpoint the web app does. No second source of truth, and a
- * highlight made on the phone shows up on the web unchanged. The phone adds
- * search and kind filters so a half-remembered quote is findable.
+ * Same heading and same promise as `KnowledgeView` in
+ * `frontend/src/App.tsx`. It reads the same `/knowledge` endpoint, which is a
+ * view over `annotations` rather than a table of its own — no second source
+ * of truth, so a highlight made on the phone shows up in the browser
+ * unchanged.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text,
-  TextInput, View,
+  RefreshControl, ScrollView, Text, TextInput, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
-import { Card, Chip, EmptyState, FadeIn } from '../components/ui';
-import { colors, shared, space, type } from '../theme';
+import {
+  Card, ChipRow, DataBanner, EmptyState, FadeIn, FilterChip, Loading, PageHeading,
+} from '../components/ui';
+import { colors, radius, shared, space, type } from '../theme';
 
 interface Note {
   id: string;
@@ -26,17 +28,28 @@ interface Note {
   createdAt: string | null;
 }
 
-const str = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
+const str = (value: unknown): string | null =>
+  typeof value === 'string' && value ? value : null;
 
-type KindFilter = 'all' | 'highlight' | 'note' | 'other';
+type KindFilter = 'All' | 'Highlights' | 'Notes' | 'Quotes' | 'Questions';
 
-export function KnowledgeScreen({ onClose }: { onClose: () => void }) {
+const FILTERS: KindFilter[] = ['All', 'Highlights', 'Notes', 'Quotes', 'Questions'];
+
+/** The annotation kinds each filter accepts. */
+const FILTER_KINDS: Record<Exclude<KindFilter, 'All'>, string[]> = {
+  Highlights: ['highlight'],
+  Notes: ['note'],
+  Quotes: ['quote'],
+  Questions: ['question'],
+};
+
+export function KnowledgeScreen() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [kind, setKind] = useState<KindFilter>('all');
+  const [filter, setFilter] = useState<KindFilter>('All');
 
   const load = useCallback(async () => {
     setError(null);
@@ -68,9 +81,7 @@ export function KnowledgeScreen({ onClose }: { onClose: () => void }) {
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return notes.filter((note) => {
-      if (kind === 'highlight' && note.kind !== 'highlight') return false;
-      if (kind === 'note' && note.kind !== 'note') return false;
-      if (kind === 'other' && (note.kind === 'highlight' || note.kind === 'note')) return false;
+      if (filter !== 'All' && !FILTER_KINDS[filter].includes(note.kind)) return false;
       if (!needle) return true;
       return (
         note.body.toLowerCase().includes(needle) ||
@@ -78,156 +89,126 @@ export function KnowledgeScreen({ onClose }: { onClose: () => void }) {
         (note.chapter ?? '').toLowerCase().includes(needle)
       );
     });
-  }, [notes, query, kind]);
+  }, [notes, query, filter]);
 
-  if (loading) {
-    return (
-      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color={colors.text} />
-      </View>
-    );
-  }
+  if (loading) return <Loading />;
 
   return (
-    <FlatList
-      style={shared.screen}
-      data={visible}
-      keyExtractor={(item) => item.id}
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={{
-        padding: space.gutter,
-        paddingTop: 56,
-        paddingBottom: 48,
-        gap: 10,
-      }}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
-          tintColor={colors.textMuted}
+    <View style={shared.screen}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: space.gutter,
+          paddingTop: 22,
+          paddingBottom: 28,
+        }}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              void load();
+            }}
+            tintColor={colors.textMuted}
+          />
+        }
+      >
+        <PageHeading
+          eyebrow="My knowledge"
+          title="Everything you saved, connected."
+          lede="Notes, highlights, quotes, summaries, and questions — organized across your library."
         />
-      }
-      ListHeaderComponent={
-        <View style={{ gap: 14, marginBottom: 6 }}>
-          <FadeIn index={0}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Pressable
-                onPress={onClose}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel="Back"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: colors.surface,
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: colors.border,
-                }}
-              >
-                <Ionicons name="chevron-back" size={19} color={colors.text} />
-              </Pressable>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={type.title}>My Knowledge</Text>
-                <Text style={type.support}>
-                  {notes.length
-                    ? `${notes.length} mark${notes.length === 1 ? '' : 's'} from your reading`
-                    : 'Everything you mark while reading collects here'}
-                </Text>
-              </View>
-            </View>
-            {error && (
-              <Text style={{ color: colors.danger, fontSize: 12.5, marginTop: 8 }}>{error}</Text>
-            )}
-          </FadeIn>
 
-          {notes.length > 0 && (
-            <FadeIn index={1} style={{ gap: 10 }}>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 10,
-                  paddingHorizontal: 14,
-                  borderRadius: 14,
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  backgroundColor: 'rgba(255,255,255,0.04)',
-                }}
-              >
-                <Ionicons name="search" size={16} color={colors.textFaint} />
-                <TextInput
-                  style={{ flex: 1, color: colors.text, fontSize: 15, paddingVertical: 11 }}
-                  placeholder="Search your highlights and notes"
-                  placeholderTextColor={colors.textFaint}
-                  value={query}
-                  onChangeText={setQuery}
-                  accessibilityLabel="Search your knowledge"
-                />
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {(
-                  [
-                    { key: 'all', label: 'All' },
-                    { key: 'highlight', label: 'Highlights' },
-                    { key: 'note', label: 'Notes' },
-                    { key: 'other', label: 'More' },
-                  ] as { key: KindFilter; label: string }[]
-                ).map((option) => (
-                  <Chip
-                    key={option.key}
-                    label={option.label}
-                    active={kind === option.key}
-                    onPress={() => setKind(option.key)}
+        {!!error && <DataBanner message={error} error />}
+
+        {notes.length > 0 && (
+          <FadeIn index={1} style={{ marginBottom: space.md }}>
+            <View
+              style={{
+                height: 50,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                paddingHorizontal: space.md,
+                borderWidth: 1,
+                borderColor: colors.borderStrong,
+                borderRadius: radius.lg,
+                backgroundColor: colors.surface,
+              }}
+            >
+              <Ionicons name="search" size={17} color={colors.textSoft} />
+              <TextInput
+                style={{ flex: 1, color: colors.text, fontSize: 16, paddingVertical: 0 }}
+                placeholder="Search your knowledge"
+                placeholderTextColor="rgba(255,255,255,0.44)"
+                value={query}
+                onChangeText={setQuery}
+                accessibilityLabel="Search your knowledge"
+              />
+            </View>
+
+            <View style={{ marginTop: 10 }}>
+              <ChipRow>
+                {FILTERS.map((option) => (
+                  <FilterChip
+                    key={option}
+                    label={option}
+                    active={filter === option}
+                    onPress={() => setFilter(option)}
                   />
                 ))}
-              </View>
-            </FadeIn>
-          )}
-        </View>
-      }
-      ListEmptyComponent={
-        !error ? (
-          notes.length ? (
-            <EmptyState icon="search-outline" title="No matches" body="Nothing fits that search." />
-          ) : (
-            <EmptyState
-              icon="library-outline"
-              title="Nothing yet"
-              body="Highlight a passage in the reader and it will appear here."
-            />
-          )
-        ) : null
-      }
-      renderItem={({ item, index }) => (
-        <FadeIn index={Math.min(index + 2, 8)}>
-          <Card style={{ gap: 7 }}>
-            <Text style={type.eyebrow}>
-              {item.kind}
-              {item.page ? ` · p.${item.page}` : ''}
-              {item.chapter ? ` · ${item.chapter}` : ''}
-            </Text>
-            {item.anchorText && (
-              <Text
-                style={{
-                  color: colors.textStrong,
-                  fontSize: 14.5,
-                  lineHeight: 21,
-                  fontStyle: 'italic',
-                }}
-              >
-                “{item.anchorText}”
-              </Text>
-            )}
-            {item.body ? <Text style={type.body}>{item.body}</Text> : null}
-          </Card>
-        </FadeIn>
-      )}
-    />
+              </ChipRow>
+            </View>
+          </FadeIn>
+        )}
+
+        {visible.length === 0 ? (
+          <FadeIn index={2}>
+            <Card>
+              <EmptyState
+                icon="bulb-outline"
+                title={notes.length ? 'No matches' : 'Nothing saved yet'}
+                body={
+                  notes.length
+                    ? 'Nothing fits that search and filter.'
+                    : 'Highlight a passage in the reader and it will appear here.'
+                }
+              />
+            </Card>
+          </FadeIn>
+        ) : (
+          <View style={{ gap: 10 }}>
+            {visible.map((note, index) => (
+              <FadeIn key={note.id} index={Math.min(index + 2, 8)}>
+                <Card style={{ gap: 8 }}>
+                  <Text style={type.label}>
+                    {note.kind}
+                    {note.page ? ` · p.${note.page}` : ''}
+                    {note.chapter ? ` · ${note.chapter}` : ''}
+                  </Text>
+                  {!!note.anchorText && (
+                    <Text
+                      style={{
+                        color: colors.textStrong,
+                        fontSize: 14.5,
+                        lineHeight: 21,
+                        fontStyle: 'italic',
+                      }}
+                    >
+                      “{note.anchorText}”
+                    </Text>
+                  )}
+                  {!!note.body && (
+                    <Text style={{ color: colors.text, fontSize: 14.5, lineHeight: 21 }}>
+                      {note.body}
+                    </Text>
+                  )}
+                </Card>
+              </FadeIn>
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 }

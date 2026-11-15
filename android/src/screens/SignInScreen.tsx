@@ -177,7 +177,7 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
             >
               Welcome to MyPro
             </Text>
-            <Text style={[type.support, { maxWidth: 420 }]}>
+            <Text style={[type.meta, { maxWidth: 420 }]}>
               One intelligent space for your time, knowledge, and health.
             </Text>
           </FadeIn>
@@ -263,7 +263,7 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
               >
                 {accountMode === 'signup' ? 'Create your account.' : 'Welcome back.'}
               </Text>
-              <Text style={type.support}>
+              <Text style={type.meta}>
                 {accountMode === 'signup'
                   ? 'Create your account to enter MyPro.'
                   : 'Sign in to continue with MyPro.'}
