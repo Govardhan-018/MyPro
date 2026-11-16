@@ -1597,11 +1597,267 @@
   flex-direction: column;
   background: rgba(16, 16, 20, 0.96);
   backdrop-filter: blur(40px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 24px;
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.85);
   overflow: hidden;
   animation: modalFadeIn 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ================= Persistent mini player ================= */
+.podcast-mini-bar {
+  display: none;
+}
+.mypro-podcast-modal.collapsed {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(80px + env(safe-area-inset-bottom));
+  top: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 22, 0.94);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+  animation: none;
+  z-index: 45;
+}
+.mypro-podcast-modal.collapsed .podcast-modal-header,
+.mypro-podcast-modal.collapsed .podcast-player-content,
+.mypro-podcast-modal.collapsed .podcast-editor-pane {
+  display: none !important;
+}
+.mypro-podcast-modal.collapsed .podcast-mini-bar {
+  display: flex;
+}
+.podcast-mini-bar {
+  position: relative;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.mini-thumb {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 10px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+}
+.mini-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.mini-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mini-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-meta span {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-play,
+.mini-close {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.mini-play {
+  background: #fff;
+  color: #000;
+}
+.color-mode .mini-play {
+  background: linear-gradient(135deg, #b69af5, #71b7f5);
+  color: #fff;
+}
+.mini-close {
+  width: 34px;
+  height: 34px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.mini-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 0 2px 2px 0;
+  background: rgba(255, 255, 255, 0.5);
+  max-width: 100%;
+}
+.color-mode .mini-progress {
+  background: linear-gradient(90deg, #b69af5, #71b7f5);
+}
+
+/* Keep page content clear of the mini bar (which sits just above the nav). */
+.mini-player-active .view-scroll {
+  padding-bottom: calc(176px + env(safe-area-inset-bottom)) !important;
+}
+
+/* ================= Simplified secondary action + notes ================= */
+.podcast-secondary-actions {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 20px;
+}
+.go-youtube-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.podcast-notes-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 18px;
+}
+.podcast-notes-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.podcast-notes-count {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.podcast-note-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.podcast-note-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.podcast-note-composer textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+.add-note-btn {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.add-note-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.podcast-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.podcast-notes-empty {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.4);
+  margin: 0;
+  line-height: 1.5;
+}
+.podcast-note-card {
+  padding: 13px 14px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+.color-mode .podcast-note-card {
+  background: linear-gradient(180deg, rgba(182, 154, 245, 0.08), rgba(182, 154, 245, 0.02));
+  border-color: rgba(182, 154, 245, 0.16);
+}
+.podcast-note-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: pre-wrap;
+}
+.podcast-note-edit {
+  width: 100%;
+  resize: vertical;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.podcast-note-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 9px;
+}
+.podcast-note-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.podcast-note-actions {
+  display: flex;
+  gap: 4px;
+}
+.podcast-note-actions button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.podcast-note-actions button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
 }
 
 .podcast-modal-header {
@@ -1868,19 +2124,18 @@
   color: #000000;
   border: none;
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s ease;
 }
 
 .master-play-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 10px 28px rgba(255, 255, 255, 0.3);
+  transform: scale(1.04);
 }
 
 .color-mode .master-play-btn {
   background: linear-gradient(135deg, #71b7f5, #b69af5);
   color: #000000;
-  box-shadow: 0 8px 24px rgba(113, 183, 245, 0.4);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 
 .play-triangle {
@@ -4691,6 +4946,145 @@ button.learning-thumbnail {
   background: #fbfbfa;
   border-color: rgba(0, 0, 0, 0.1);
   color: #15130f;
+}
+
+/* =====================================================================
+   Light reading themes (Sepia / Paper): ink flips to dark.
+   Legacy `.sheet-body-text` / `.sepia-theme …` rules paint the text white,
+   which vanishes on the light sheet. These higher-specificity rules (scoped
+   through `.reader-page-sheet.sepia|.original`) restore readable contrast for
+   every text element inside the page, for all font sizes and both modes.
+   ===================================================================== */
+.mypro-dark-reader .reader-page-sheet.sepia {
+  --reader-ink: #3a2f22;
+  --reader-ink-soft: rgba(58, 47, 34, 0.88);
+  --reader-ink-muted: rgba(58, 47, 34, 0.5);
+  --reader-rule: rgba(60, 46, 30, 0.22);
+  --rule-line: rgba(60, 46, 30, 0.2);
+}
+.mypro-dark-reader .reader-page-sheet.original {
+  --reader-ink: #15130f;
+  --reader-ink-soft: rgba(21, 19, 15, 0.88);
+  --reader-ink-muted: rgba(21, 19, 15, 0.5);
+  --reader-rule: rgba(0, 0, 0, 0.14);
+  --rule-line: rgba(0, 0, 0, 0.12);
+}
+
+/* Ruled-page backdrop — lined-paper rules spaced to the live line height
+   (`--rule-step` is set inline from fontSize × lineSpacing). */
+.mypro-dark-reader .reader-page-sheet {
+  --rule-line: rgba(255, 255, 255, 0.07);
+}
+.mypro-dark-reader.ruled .sheet-paragraphs {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--rule-step, 28px) - 1px),
+    var(--rule-line, rgba(255, 255, 255, 0.07)) calc(var(--rule-step, 28px) - 1px),
+    var(--rule-line, rgba(255, 255, 255, 0.07)) var(--rule-step, 28px)
+  );
+  background-position: 0 0.35em;
+}
+
+/* Reading-settings toggle (Ruled page) */
+.mypro-dark-reader .reader-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 13px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mypro-dark-reader .reader-toggle-text {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.mypro-dark-reader .reader-toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 23px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  transition: background 0.2s ease;
+  flex: none;
+}
+.mypro-dark-reader .reader-toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.2s ease;
+}
+.mypro-dark-reader .reader-toggle-row.on .reader-toggle-switch {
+  background: rgba(255, 255, 255, 0.9);
+}
+.mypro-dark-reader.color-mode .reader-toggle-row.on .reader-toggle-switch {
+  background: linear-gradient(135deg, #b69af5, #71b7f5);
+}
+.mypro-dark-reader .reader-toggle-row.on .reader-toggle-switch::after {
+  transform: translateX(17px);
+  background: #000000;
+}
+.mypro-dark-reader.color-mode .reader-toggle-row.on .reader-toggle-switch::after {
+  background: #ffffff;
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-body-text,
+.mypro-dark-reader .reader-page-sheet.original .sheet-body-text {
+  color: var(--reader-ink-soft);
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-heading h2,
+.mypro-dark-reader .reader-page-sheet.original .sheet-heading h2,
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-block-heading,
+.mypro-dark-reader .reader-page-sheet.original .sheet-block-heading,
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-block-subheading,
+.mypro-dark-reader .reader-page-sheet.original .sheet-block-subheading,
+.mypro-dark-reader .reader-page-sheet.sepia .drop-cap,
+.mypro-dark-reader .reader-page-sheet.original .drop-cap {
+  color: var(--reader-ink);
+}
+.mypro-dark-reader.color-mode .reader-page-sheet.sepia .drop-cap {
+  color: #9a6a24;
+}
+.mypro-dark-reader.color-mode .reader-page-sheet.original .drop-cap {
+  color: #6b4fb0;
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-quote-callout,
+.mypro-dark-reader .reader-page-sheet.original .sheet-quote-callout {
+  color: var(--reader-ink-soft);
+  border-left-color: var(--reader-rule);
+  background: rgba(0, 0, 0, 0.03);
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-quote-callout cite,
+.mypro-dark-reader .reader-page-sheet.original .sheet-quote-callout cite,
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-bottom-meta,
+.mypro-dark-reader .reader-page-sheet.original .sheet-bottom-meta {
+  color: var(--reader-ink-muted);
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-bottom-meta,
+.mypro-dark-reader .reader-page-sheet.original .sheet-bottom-meta {
+  border-top-color: var(--reader-rule);
+}
+.mypro-dark-reader .reader-page-sheet.sepia .sheet-para-row.emphasized,
+.mypro-dark-reader .reader-page-sheet.original .sheet-para-row.emphasized {
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 2px 0 0 var(--reader-ink-muted);
+}
+.mypro-dark-reader .reader-page-sheet.sepia .annotation-marker,
+.mypro-dark-reader .reader-page-sheet.original .annotation-marker {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: var(--reader-rule);
+  color: var(--reader-ink-muted);
 }
 
 .mypro-dark-reader .sheet-top-meta {

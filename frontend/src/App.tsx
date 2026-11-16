@@ -220,6 +220,17 @@ function Spinner() {
   return <i className="button-spinner" aria-hidden="true" />;
 }
 
+/** Colour Mode is the default experience; this remembers a per-device opt-out. */
+const COLOR_PREF_KEY = "mypro.colorMode";
+function readColorPref(): boolean {
+  try {
+    const stored = localStorage.getItem(COLOR_PREF_KEY);
+    return stored === null ? true : stored === "1";
+  } catch {
+    return true;
+  }
+}
+
 const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "today", label: "Today", icon: Home },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
@@ -594,7 +605,6 @@ function TodayView({
               .toUpperCase()}
           </div>
           <h1>{greeting}</h1>
-          <p>Here’s a calm look at what’s ahead.</p>
         </div>
       </header>
 
@@ -648,7 +658,7 @@ function TodayView({
           </div>
           <span className="section-kicker">MYPRO INSIGHT</span>
           <h2>Plan your day with me.</h2>
-          <p>I can organize your schedule, reading, and reminders around what matters.</p>
+          <p>Organize your schedule, reading, and reminders.</p>
           <button onClick={() => navigate("assistant")}>
             Plan it with me <ArrowRight size={15} />
           </button>
@@ -810,6 +820,32 @@ function CalendarView() {
       setDeleting(false);
     }
   };
+
+  // --- Event form validation (no past dates/times; end after start) ---------
+  // ISO yyyy-mm-dd and HH:MM strings compare correctly with `<`, so no Date math
+  // is needed. Past restrictions apply to new events only — an existing event
+  // may legitimately sit in the past and still be edited.
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const nowTimeStr = `${pad2(today.getHours())}:${pad2(today.getMinutes())}`;
+  const isTodaySelected = form.date === todayIso;
+  const isPastDate = !editingId && !!form.date && form.date < todayIso;
+  const startInPast =
+    !editingId && !form.allDay && isTodaySelected && !!form.startTime && form.startTime < nowTimeStr;
+  const endNotAfterStart =
+    !form.allDay && !!form.startTime && !!form.endTime && form.endTime <= form.startTime;
+  const timesIncomplete = !form.allDay && (!form.startTime || !form.endTime);
+  const validationMessage = isPastDate
+    ? "Pick today or a future date."
+    : startInPast
+      ? "That start time has already passed today."
+      : endNotAfterStart
+        ? "End time must be after the start time."
+        : null;
+  const formInvalid =
+    !form.title.trim() || isPastDate || startInPast || endNotAfterStart || timesIncomplete;
+  // Native-picker guards (belt-and-braces with the disabled Save button).
+  const dateMin = editingId ? undefined : todayIso;
+  const startMin = isTodaySelected && !editingId ? nowTimeStr : undefined;
 
   const monthFirst = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
   const monthOffset = (monthFirst.getDay() + 6) % 7;
@@ -1014,6 +1050,7 @@ function CalendarView() {
                 <input
                   type="date"
                   value={form.date}
+                  min={dateMin}
                   onChange={(e) => setField("date", e.target.value)}
                 />
               </label>
@@ -1045,6 +1082,7 @@ function CalendarView() {
                   <input
                     type="time"
                     value={form.startTime}
+                    min={startMin}
                     onChange={(e) => setField("startTime", e.target.value)}
                   />
                 </label>
@@ -1053,10 +1091,16 @@ function CalendarView() {
                   <input
                     type="time"
                     value={form.endTime}
+                    min={form.startTime || undefined}
                     onChange={(e) => setField("endTime", e.target.value)}
                   />
                 </label>
               </div>
+            )}
+            {validationMessage && (
+              <p className="composer-error" role="alert">
+                {validationMessage}
+              </p>
             )}
             {formError && <p className="composer-error">{formError}</p>}
             <div className="modal-footer">
@@ -1081,7 +1125,7 @@ function CalendarView() {
               <button
                 className="primary-button"
                 onClick={save}
-                disabled={saving || deleting || !form.title.trim()}
+                disabled={saving || deleting || formInvalid}
                 aria-busy={saving}
               >
                 {saving ? (
@@ -2951,35 +2995,6 @@ function LibraryView({
             </div>
           ));
         })()}
-      </section>
-
-      <section className="glass-card learning-history-card">
-        <div className="card-heading">
-          <div>
-            <span className="section-kicker">LEARNING HISTORY</span>
-            <h2>Recent sample activity</h2>
-          </div>
-          <span className="sample-badge">Example</span>
-        </div>
-        <div className="history-list">
-          {[
-            [BookOpen, "Read for 24 minutes", "The Creative Act · Chapter 18", "Today, 8:20 AM"],
-            [StickyNote, "Created a note", "Attention creates quality", "Today, 8:44 AM"],
-            [Headphones, "Listened for 38 minutes", "Design Better · Episode 42", "Yesterday"],
-            [FileText, "Finished an article", "Designing Calm Systems", "May 23"],
-          ].map(([Icon, action, source, date]) => (
-            <div className="history-row" key={String(action)}>
-              <span>
-                <Icon size={15} />
-              </span>
-              <div>
-                <strong>{String(action)}</strong>
-                <small>{String(source)}</small>
-              </div>
-              <time>{String(date)}</time>
-            </div>
-          ))}
-        </div>
       </section>
 
       {showAdd && (
@@ -5005,6 +5020,12 @@ function AppShell({
   const enrichedReaderId = useRef<string | null>(null);
   const [reader, setReader] = useState<LibraryItem | null>(null);
   const [player, setPlayer] = useState<LibraryItem | null>(null);
+  // Whether the podcast player shows full-screen or as the persistent mini bar.
+  const [playerExpanded, setPlayerExpanded] = useState(true);
+  const openPodcast = useCallback((item: LibraryItem) => {
+    setPlayer(item);
+    setPlayerExpanded(true);
+  }, []);
   const [articleItem, setArticleItem] = useState<LibraryItem | null>(null);
   const [bookOptions, setBookOptions] = useState<LibraryItem | null>(null);
 
@@ -5116,13 +5137,13 @@ function AppShell({
 
   const openMedia = useCallback(
     (item: LibraryItem) => {
-      if (item.type === "Podcasts") setPlayer(item);
+      if (item.type === "Podcasts") openPodcast(item);
       else if (item.type === "Articles") setArticleItem(item);
       else if (item.type === "Notes") navigate("knowledge");
       else if (item.pdfFileName || item.pdfUrl) void openReader(item);
       else setBookOptions(item);
     },
-    [navigate, openReader],
+    [navigate, openReader, openPodcast],
   );
 
   const jumpToSource = useCallback(
@@ -5299,7 +5320,11 @@ function AppShell({
   };
 
   return (
-    <div className={`app-shell dark-app ${colorMode ? "color-mode" : ""}`}>
+    <div
+      className={`app-shell dark-app ${colorMode ? "color-mode" : ""} ${
+        player && !playerExpanded ? "mini-player-active" : ""
+      }`}
+    >
       <aside className="sidebar">
         <div className="sidebar-top">
           <Brand compact colorMode={colorMode} />
@@ -5500,6 +5525,8 @@ function AppShell({
           podcast={player}
           isOpen
           colorMode={colorMode}
+          expanded={playerExpanded}
+          onExpandedChange={setPlayerExpanded}
           onClose={() => setPlayer(null)}
           onUpdateProgress={updatePodcastProgress}
           onSavePodcastDetails={savePodcastDetails}
@@ -5543,8 +5570,19 @@ function AuthSplash({ colorMode }: { colorMode: boolean }) {
 
 export default function App() {
   const { session, loading, configured } = useSession();
-  const [colorMode, setColorMode] = useState(false);
-  const toggleColorMode = () => setColorMode((active) => !active);
+  const [colorMode, setColorMode] = useState(readColorPref);
+  const toggleColorMode = () =>
+    setColorMode((active) => {
+      const next = !active;
+      // This device's choice becomes the local truth; the profile save (via the
+      // Settings toggle, or picked up on next sync) carries it across devices.
+      try {
+        localStorage.setItem(COLOR_PREF_KEY, next ? "1" : "0");
+      } catch {
+        /* storage blocked — session-only is fine */
+      }
+      return next;
+    });
 
   // When Supabase isn't configured, the Welcome prototype still lets you in via
   // this local flag so the design stays demoable; with Supabase, the real
@@ -5558,7 +5596,17 @@ export default function App() {
   // Color Mode is stored on the profile, so it follows you between devices.
   const rootProfile = useProfile(authenticated && configured);
   useEffect(() => {
-    if (rootProfile.loaded) setColorMode(rootProfile.profile.color_mode);
+    if (!rootProfile.loaded) return;
+    let hasLocalPref = false;
+    try {
+      hasLocalPref = localStorage.getItem(COLOR_PREF_KEY) !== null;
+    } catch {
+      hasLocalPref = false;
+    }
+    // This device's explicit choice always wins. Otherwise adopt the profile
+    // only when it turns colour ON — a fresh profile defaults colour off in the
+    // DB, and we don't want that to override the colour-by-default experience.
+    if (!hasLocalPref && rootProfile.profile.color_mode) setColorMode(true);
     // Only on the first read: after that this device's toggle is the truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootProfile.loaded]);

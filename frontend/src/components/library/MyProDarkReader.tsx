@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   AlignLeft,
+  AlignJustify,
   ArrowLeft,
   Bookmark,
   BookmarkCheck,
@@ -172,6 +173,9 @@ export function MyProDarkReader({
   const [fontSize, setFontSize] = useState<number>(17);
   const [lineSpacing, setLineSpacing] = useState<number>(1.7);
   const [readingWidth, setReadingWidth] = useState<number>(720);
+  // Optional lined-paper backdrop (Samsung/Apple Notes style), spaced to the
+  // current line height so rules sit behind each line of text.
+  const [ruledPage, setRuledPage] = useState<boolean>(false);
   // Continuous is the default: one column you scroll top to bottom, pages
   // loading in as you reach them. Paged mode is still a setting.
   const [readingMode, setReadingMode] = useState<ReadingMode>("continuous");
@@ -873,7 +877,13 @@ const key = `${page}-${idx}`;
         key={page}
         data-sheet-page={page}
         className={`reader-page-sheet ${theme}`}
-        style={{ fontSize: `${fontSize}px`, lineHeight: lineSpacing }}
+        style={
+          {
+            fontSize: `${fontSize}px`,
+            lineHeight: lineSpacing,
+            "--rule-step": `${(fontSize * lineSpacing).toFixed(2)}px`,
+          } as React.CSSProperties
+        }
       >
         <div className="sheet-top-meta">
           <span className="sheet-book-name">{book.title}</span>
@@ -966,7 +976,7 @@ const key = `${page}-${idx}`;
   return (
     <div
       ref={readerContainerRef}
-      className={`mypro-dark-reader ${theme}-theme ${colorMode ? "color-mode" : ""} mode-${readingMode}`}
+      className={`mypro-dark-reader ${theme}-theme ${colorMode ? "color-mode" : ""} mode-${readingMode} ${ruledPage ? "ruled" : ""}`}
     >
       {/* ================= TOP TOOLBAR ================= */}
       <header className="reader-top-toolbar">
@@ -1139,6 +1149,22 @@ const key = `${page}-${idx}`;
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="setting-section">
+                  <button
+                    type="button"
+                    className={`reader-toggle-row ${ruledPage ? "on" : ""}`}
+                    role="switch"
+                    aria-checked={ruledPage}
+                    onClick={() => setRuledPage((v) => !v)}
+                  >
+                    <span className="reader-toggle-text">
+                      <AlignJustify size={14} />
+                      Ruled page
+                    </span>
+                    <span className="reader-toggle-switch" aria-hidden="true" />
+                  </button>
                 </div>
 
                   <div className="setting-note">

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  ExternalLink,
   Headphones,
   Maximize2,
   Mic,
@@ -10,7 +9,6 @@ import {
   RotateCcw,
   RotateCw,
   SlidersHorizontal,
-  Sparkles,
   Volume2,
   VolumeX,
   X,
@@ -20,11 +18,10 @@ import {
   Pencil,
   Save,
   Info,
-  AlertCircle,
-  RefreshCw,
   Video,
+  ChevronDown,
 } from "lucide-react";
-import type { LibraryItem } from "../../types/library";
+import type { LibraryItem, NoteItem } from "../../types/library";
 import { extractVideoId } from "../../lib/youtube";
 import { useYouTubePlayer } from "../../lib/useYouTubePlayer";
 
@@ -58,6 +55,9 @@ interface MyProPodcastPlayerProps {
   ) => void;
   onSavePodcastDetails: (updatedPodcast: LibraryItem) => void;
   colorMode?: boolean;
+  /** When false the player is minimised to the persistent mini bar. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 export function MyProPodcastPlayer({
@@ -67,6 +67,8 @@ export function MyProPodcastPlayer({
   onUpdateProgress,
   onSavePodcastDetails,
   colorMode = false,
+  expanded = true,
+  onExpandedChange,
 }: MyProPodcastPlayerProps) {
   // Playback state
   const [detectedDuration, setDetectedDuration] = useState<number>(0);
@@ -82,14 +84,12 @@ export function MyProPodcastPlayer({
   const [volume, setVolume] = useState<number>(85);
   const [isMuted, setIsMuted] = useState(false);
 
-  // Manual timestamp sync dialog for external YouTube listening
-  const [showManualSync, setShowManualSync] = useState(false);
-  const [syncMinutes, setSyncMinutes] = useState(
-    Math.floor((podcast.currentTimeSeconds || 1475) / 60),
-  );
-  const [syncSeconds, setSyncSeconds] = useState(
-    (podcast.currentTimeSeconds || 1475) % 60,
-  );
+  // Episode notes (sticky-note style) — persisted to the library item and
+  // surfaced in Knowledge, linked back to this episode.
+  const [notes, setNotes] = useState<NoteItem[]>(podcast.notes ?? []);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteEditDraft, setNoteEditDraft] = useState("");
   const [toastMessage, setToastMessage] = useState("");
 
   // Edit Metadata state
@@ -206,22 +206,51 @@ export function MyProPodcastPlayer({
     return `${base}${baseSep}t=${roundSeconds}s`;
   };
 
-  // Open in YouTube action
+  // Open the episode on YouTube at the current timestamp.
   const handleOpenInYouTube = () => {
     const ytUrl = getTimestampedYoutubeUrl();
     window.open(ytUrl, "_blank", "noopener,noreferrer");
-    setShowManualSync(true);
-    setSyncMinutes(Math.floor(currentTime / 60));
-    setSyncSeconds(Math.round(currentTime % 60));
   };
 
-  // Manual Sync Save
-  const handleApplyManualSync = () => {
-    const totalSec = Math.max(0, Math.min(totalDuration, syncMinutes * 60 + syncSeconds));
-    playback.seekTo(totalSec);
-    setCurrentTime(totalSec);
-    setShowManualSync(false);
-    triggerToast(`Progress updated to ${formatTime(totalSec)}`);
+  // --- Notes: persist to the library item so Knowledge can link back here ---
+  const persistNotes = (updated: NoteItem[]) => {
+    setNotes(updated);
+    onSavePodcastDetails({
+      ...podcast,
+      title: episodeTitle,
+      episodeTitle,
+      podcastName,
+      creator,
+      youtubeUrl,
+      image: artworkUrl || podcast.image,
+      description,
+      notes: updated,
+      currentTimeSeconds: Math.round(currentTime),
+      durationSeconds: totalDuration,
+      playbackSpeed,
+    });
+  };
+  const addNote = () => {
+    const text = noteDraft.trim();
+    if (!text) return;
+    const note: NoteItem = {
+      id: `pn-${Date.now()}`,
+      page: Math.round(currentTime),
+      text,
+      createdAt: new Date().toISOString(),
+    };
+    persistNotes([note, ...notes]);
+    setNoteDraft("");
+    triggerToast("Note saved to Knowledge");
+  };
+  const saveNoteEdit = (id: string) => {
+    const text = noteEditDraft.trim();
+    setEditingNoteId(null);
+    if (!text) return;
+    persistNotes(notes.map((n) => (n.id === id ? { ...n, text } : n)));
+  };
+  const deleteNote = (id: string) => {
+    persistNotes(notes.filter((n) => n.id !== id));
   };
 
   // Save Metadata Changes
@@ -254,15 +283,74 @@ export function MyProPodcastPlayer({
   );
   const remainingSeconds = totalDuration - currentTime;
 
+  const collapse = () => onExpandedChange?.(false);
+  const expand = () => onExpandedChange?.(true);
+
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+    <>
+      {expanded && (
+        <div className="modal-backdrop podcast-backdrop" onMouseDown={collapse} />
+      )}
       <div
-        className={`mypro-podcast-modal glass-card ${colorMode ? "color-mode" : ""}`}
+        className={`mypro-podcast-modal glass-card ${colorMode ? "color-mode" : ""} ${
+          expanded ? "" : "collapsed"
+        }`}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
-        aria-modal="true"
+        aria-modal={expanded}
         aria-labelledby="podcast-player-title"
       >
+        {/* Mini bar — the persistent player shown when minimised. */}
+        <div
+          className="podcast-mini-bar"
+          role="button"
+          tabIndex={0}
+          onClick={expand}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") expand();
+          }}
+          aria-label="Open podcast player"
+        >
+          <div className="mini-thumb">
+            {podcast.image ? (
+              <img src={podcast.image} alt="" />
+            ) : (
+              <Headphones size={16} />
+            )}
+          </div>
+          <div className="mini-meta">
+            <strong>{episodeTitle}</strong>
+            <span>{podcastName}</span>
+          </div>
+          <button
+            type="button"
+            className="mini-play"
+            onClick={(e) => {
+              e.stopPropagation();
+              playback.toggle();
+            }}
+            aria-label={isPlaying ? "Pause" : "Play"}
+          >
+            {isPlaying ? (
+              <Pause size={18} fill="currentColor" />
+            ) : (
+              <Play size={18} fill="currentColor" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="mini-close"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Close player"
+          >
+            <X size={16} />
+          </button>
+          <div className="mini-progress" style={{ width: `${progressPercent}%` }} />
+        </div>
+
         {/* Modal Top Header */}
         <div className="podcast-modal-header">
           <div className="header-meta">
@@ -281,6 +369,15 @@ export function MyProPodcastPlayer({
               title="Edit Episode & YouTube details"
             >
               <Pencil size={15} />
+            </button>
+            <button
+              type="button"
+              className="icon-button minimize-btn"
+              onClick={collapse}
+              aria-label="Minimize player"
+              title="Minimize"
+            >
+              <ChevronDown size={18} />
             </button>
             <button
               type="button"
@@ -520,150 +617,90 @@ export function MyProPodcastPlayer({
               </button>
             </div>
 
-            {/* ================= THE TWO ACTIONS ================= */}
-            <div className="podcast-two-actions-grid">
-              {/* Action 1: Play inside MyPro */}
-              <div className="action-card internal-action">
-                <div className="action-card-header">
-                  <div className="action-icon">
-                    <Sparkles size={16} />
-                  </div>
-                  <div>
-                    <strong>Action 1: Play Inside MyPro</strong>
-                    <span>Automated In-App Progress Tracking</span>
-                  </div>
-                </div>
-                <p>
-                  Listens right inside MyPro with automatic position saving.
-                  When you pause or leave, your exact timestamp is remembered.
-                </p>
+            {/* Secondary option: continue on YouTube at the saved timestamp. */}
+            <div className="podcast-secondary-actions">
+              <button
+                type="button"
+                className="secondary-button go-youtube-btn"
+                onClick={handleOpenInYouTube}
+              >
+                <YoutubeIcon size={15} /> Go to YouTube
+              </button>
+            </div>
+
+            {/* ================= NOTES ================= */}
+            <div className="podcast-notes-section">
+              <div className="podcast-notes-head">
+                <span className="section-kicker">NOTES</span>
+                <span className="podcast-notes-count">
+                  {notes.length} {notes.length === 1 ? "note" : "notes"} · saved to Knowledge
+                </span>
+              </div>
+
+              <div className="podcast-note-composer">
+                <textarea
+                  rows={2}
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  placeholder={`Jot a note at ${formatTime(currentTime)}…`}
+                />
                 <button
                   type="button"
-                  className={`primary-button action-btn ${
-                    isPlaying ? "active-listening" : ""
-                  }`}
-                  onClick={playback.toggle}
+                  className="primary-button add-note-btn"
+                  onClick={addNote}
+                  disabled={!noteDraft.trim()}
                 >
-                  {isPlaying ? (
-                    <>
-                      <Pause size={15} /> Pause In-App Audio
-                    </>
-                  ) : (
-                    <>
-                      <Play size={15} fill="currentColor" /> Resume Inside MyPro ({formatTime(currentTime)})
-                    </>
-                  )}
+                  <Save size={14} /> Add note
                 </button>
               </div>
 
-              {/* Action 2: Open in YouTube */}
-              <div className="action-card external-action">
-                <div className="action-card-header">
-                  <div className="action-icon yt-icon">
-                    <YoutubeIcon size={16} />
+              <div className="podcast-notes-list">
+                {notes.length === 0 && (
+                  <p className="podcast-notes-empty">
+                    Notes you add appear here and in your Knowledge, linked to this episode.
+                  </p>
+                )}
+                {notes.map((note) => (
+                  <div className="podcast-note-card" key={note.id}>
+                    {editingNoteId === note.id ? (
+                      <textarea
+                        className="podcast-note-edit"
+                        autoFocus
+                        value={noteEditDraft}
+                        onChange={(e) => setNoteEditDraft(e.target.value)}
+                        onBlur={() => saveNoteEdit(note.id)}
+                      />
+                    ) : (
+                      <p className="podcast-note-text">{note.text}</p>
+                    )}
+                    <div className="podcast-note-foot">
+                      <span className="podcast-note-stamp">
+                        <Clock size={11} /> {formatTime(note.page)}
+                      </span>
+                      <div className="podcast-note-actions">
+                        <button
+                          type="button"
+                          aria-label="Edit note"
+                          onClick={() => {
+                            setEditingNoteId(note.id);
+                            setNoteEditDraft(note.text);
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Delete note"
+                          onClick={() => deleteNote(note.id)}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <strong>Action 2: Open in YouTube</strong>
-                    <span>Timestamped External Link</span>
-                  </div>
-                </div>
-                <p>
-                  Opens in your browser or YouTube app at{" "}
-                  <strong>{formatTime(currentTime)}</strong>.
-                </p>
-
-                <div className="external-sync-notice">
-                  <AlertCircle size={13} />
-                  <span>
-                    Playback outside MyPro does not provide automatic progress
-                    synchronization.
-                  </span>
-                </div>
-
-                <div className="external-buttons-row">
-                  <button
-                    type="button"
-                    className="secondary-button open-yt-btn"
-                    onClick={handleOpenInYouTube}
-                  >
-                    <ExternalLink size={14} /> Open at {formatTime(currentTime)}
-                  </button>
-                  <button
-                    type="button"
-                    className="text-button sync-trigger-btn"
-                    onClick={() => setShowManualSync(true)}
-                  >
-                    <RefreshCw size={13} /> Update position manually
-                  </button>
-                </div>
+                ))}
               </div>
             </div>
-
-            {/* Manual Sync Popup Modal */}
-            {showManualSync && (
-              <div className="manual-sync-card glass-card">
-                <div className="sync-card-top">
-                  <div className="sync-title">
-                    <RefreshCw size={15} />
-                    <strong>Record External Progress</strong>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setShowManualSync(false)}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-                <p className="sync-desc">
-                  Enter the timestamp where you paused listening on YouTube:
-                </p>
-                <div className="time-pickers-row">
-                  <label>
-                    <span>MINUTES</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={Math.floor(totalDuration / 60)}
-                      value={syncMinutes}
-                      onChange={(e) =>
-                        setSyncMinutes(Math.max(0, parseInt(e.target.value) || 0))
-                      }
-                    />
-                  </label>
-                  <span className="colon">:</span>
-                  <label>
-                    <span>SECONDS</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={59}
-                      value={syncSeconds}
-                      onChange={(e) =>
-                        setSyncSeconds(
-                          Math.max(0, Math.min(59, parseInt(e.target.value) || 0)),
-                        )
-                      }
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="primary-button apply-sync-btn"
-                    onClick={handleApplyManualSync}
-                  >
-                    Save Progress
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Personal Description Callout */}
-            {description && (
-              <div className="podcast-description-box">
-                <span className="section-kicker">EPISODE TAKEAWAY</span>
-                <p>{description}</p>
-              </div>
-            )}
           </div>
         )}
 
@@ -675,6 +712,6 @@ export function MyProPodcastPlayer({
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
