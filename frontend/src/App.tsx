@@ -81,6 +81,7 @@ import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
 import { NotificationToasts } from "./components/NotificationToasts";
 import { MobileNavSheet } from "./components/MobileNavSheet";
+import { useCollections } from "./lib/useCollections";
 import { isApiConfigured } from "./lib/env";
 import { storePdfLocally } from "./utils/pdfStorage";
 import { extractVideoId, fetchYouTubeMeta } from "./lib/youtube";
@@ -2655,15 +2656,14 @@ function LibraryView({
     await request(2600);
     setToast("");
   };
-  const [editingCollection, setEditingCollection] = useState<number | null>(null);
+  const [editingCollection, setEditingCollection] = useState<string | null>(null);
   const [draggedCollection, setDraggedCollection] = useState<number | null>(null);
-  const [collections, setCollections] = useState([
-    { name: "Personal Growth", count: 8 },
-    { name: "Technology", count: 12 },
-    { name: "Business", count: 6 },
-    { name: "Philosophy", count: 5 },
-    { name: "Health & Fitness", count: 4 },
-  ]);
+  const [collectionDraft, setCollectionDraft] = useState("");
+  // Real rows. `/collections` has existed since the library landed; this view
+  // used to hold five names in local state, so every rename and reorder was
+  // lost on reload.
+  const collectionsState = useCollections(true);
+  const collections = collectionsState.collections;
 
   const visibleItems = libraryItems.filter((item) => {
     const matchesCategory = category === "All" || item.type === category;
@@ -2676,9 +2676,11 @@ function LibraryView({
     return matchesCategory && matchesFilter && searchText.includes(query.toLowerCase());
   });
 
-  const addCollection = () => {
-    setCollections((current) => [...current, { name: "Untitled Collection", count: 0 }]);
-    setEditingCollection(collections.length);
+  const addCollection = async () => {
+    const id = await collectionsState.create("Untitled Collection");
+    if (!id) return;
+    setCollectionDraft("Untitled Collection");
+    setEditingCollection(id);
   };
 
   return (
@@ -2851,7 +2853,7 @@ function LibraryView({
               <span className="section-kicker">MY COLLECTIONS</span>
               <h2>Organize what matters</h2>
             </div>
-            <button className="text-button" onClick={addCollection}>
+            <button className="text-button" onClick={() => void addCollection()}>
               <Plus size={14} /> New collection
             </button>
           </div>
@@ -2864,52 +2866,59 @@ function LibraryView({
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={() => {
                   if (draggedCollection === null || draggedCollection === index) return;
-                  setCollections((current) => {
-                    const reordered = [...current];
-                    const [moved] = reordered.splice(draggedCollection, 1);
-                    reordered.splice(index, 0, moved);
-                    return reordered;
-                  });
+                  const reordered = [...collections];
+                  const [moved] = reordered.splice(draggedCollection, 1);
+                  reordered.splice(index, 0, moved);
+                  // Persisted as `sort_order`, so the order survives a reload.
+                  void collectionsState.reorder(reordered);
                   setDraggedCollection(null);
                 }}
                 onDragEnd={() => setDraggedCollection(null)}
-                key={`${collection.name}-${index}`}
+                key={collection.id}
               >
                 <GripVertical className="collection-grip" size={13} />
                 <span className={`collection-icon collection-tone-${(index % 5) + 1}`}>
                   <Folder size={16} />
                 </span>
-                {editingCollection === index ? (
+                {editingCollection === collection.id ? (
                   <input
                     autoFocus
-                    value={collection.name}
-                    onChange={(event) =>
-                      setCollections((current) =>
-                        current.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, name: event.target.value } : item,
-                        ),
-                      )
-                    }
-                    onBlur={() => setEditingCollection(null)}
+                    value={collectionDraft}
+                    onChange={(event) => setCollectionDraft(event.target.value)}
+                    onBlur={() => {
+                      void collectionsState.rename(collection.id, collectionDraft);
+                      setEditingCollection(null);
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") setEditingCollection(null);
+                      if (event.key === "Enter") event.currentTarget.blur();
+                      if (event.key === "Escape") setEditingCollection(null);
                     }}
                   />
                 ) : (
                   <button className="collection-name">
                     <strong>{collection.name}</strong>
-                    <span>{collection.count} saved items</span>
+                    <span>
+                      {collection.count} saved item{collection.count === 1 ? "" : "s"}
+                    </span>
                   </button>
                 )}
                 <button
                   className="collection-edit"
-                  onClick={() => setEditingCollection(index)}
+                  onClick={() => {
+                    setCollectionDraft(collection.name);
+                    setEditingCollection(collection.id);
+                  }}
                   aria-label={`Rename ${collection.name}`}
                 >
                   <Pencil size={13} />
                 </button>
               </div>
             ))}
+            {!collections.length && !collectionsState.loading && (
+              <p className="settings-hint">
+                No collections yet. Start one and file anything from your library under it.
+              </p>
+            )}
           </div>
         </section>
       </div>

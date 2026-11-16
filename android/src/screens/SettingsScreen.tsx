@@ -7,14 +7,17 @@
  * invisible when it works — saying how many reminders are armed is how you
  * find out it has stopped before you miss something.
  */
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, View,
+} from 'react-native';
 import { Text } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import { ARM_WINDOW_HOURS, armUpcoming, registerForPush } from '../lib/notifications';
+import type { GmailAccountRow } from '@mypro/shared';
 import {
-  Card, FadeIn, Kicker, PageHeading, ToggleRow, type IconName,
+  Card, FadeIn, GhostButton, Kicker, PageHeading, ToggleRow, useToast, type IconName,
 } from '../components/ui';
 import type { View_ } from '../components/TabBar';
 import { colors, radius, shared, space, type, useTheme } from '../theme';
@@ -26,10 +29,31 @@ export function SettingsScreen({
   onNavigate: (view: View_) => void;
   onSignOut: () => void;
 }) {
+  const toast = useToast();
   const { colorMode, setColorMode } = useTheme();
   const [armed, setArmed] = useState<number | null | undefined>(undefined);
   const [pushNote, setPushNote] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+
+  /** Gmail, which Render owns end to end — it holds the OAuth tokens. */
+  const [gmailConfigured, setGmailConfigured] = useState<boolean | null>(null);
+  const [accounts, setAccounts] = useState<GmailAccountRow[]>([]);
+  const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailNote, setGmailNote] = useState<string | null>(null);
+
+  /** What the phone can read offline: books whose text has synced. */
+  const [synced, setSynced] = useState<{ total: number; withText: number } | null>(null);
+
+  const loadGmail = useCallback(async () => {
+    try {
+      const status = await client.api.gmail.status();
+      setGmailConfigured(status.configured);
+      if (!status.configured) return;
+      setAccounts(await client.api.gmail.accounts());
+    } catch {
+      setGmailConfigured(false);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -45,10 +69,64 @@ export function SettingsScreen({
         if (active) setEmail(session?.user?.email ?? null);
       })
       .catch(() => undefined);
+    void loadGmail();
+    void client.api.library
+      .list({ type: 'book' })
+      .then((rows) => {
+        if (!active) return;
+        const withText = rows.filter((row) => {
+          const details = (row.book_details ?? {}) as Record<string, unknown>;
+          const path = Array.isArray(details) ? undefined : details.pdf_json_path;
+          return typeof path === 'string' && !!path;
+        }).length;
+        setSynced({ total: rows.length, withText });
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadGmail]);
+
+  /**
+   * Connecting opens Google's consent page in the browser: the flow ends on
+   * Render, which is where the tokens live, so the mailbox is attached to the
+   * account rather than to this device. Coming back and refreshing shows it.
+   */
+  const connectGmail = async () => {
+    setGmailBusy(true);
+    setGmailNote(null);
+    try {
+      const { url } = await client.api.gmail.connect();
+      await Linking.openURL(url);
+      setGmailNote('Finish in the browser, then tap Refresh.');
+    } catch (caught) {
+      setGmailNote(caught instanceof Error ? caught.message : 'Could not start the connection.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
+
+  const syncGmail = async () => {
+    setGmailBusy(true);
+    setGmailNote(null);
+    try {
+      const { results } = await client.api.gmail.sync();
+      const stored = results.reduce((sum, result) => sum + (result.stored ?? 0), 0);
+      const failed = results.find((result) => result.error);
+      setGmailNote(
+        failed?.error
+          ? failed.error
+          : stored
+            ? `${stored} new message${stored === 1 ? '' : 's'}.`
+            : 'Already up to date.',
+      );
+      await loadGmail();
+    } catch (caught) {
+      setGmailNote(caught instanceof Error ? caught.message : 'Could not sync.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
 
   return (
     <ScrollView
@@ -133,8 +211,124 @@ export function SettingsScreen({
         </Card>
       </FadeIn>
 
-      {/* Other sections */}
+      {/* Connected services */}
       <FadeIn index={4} style={{ marginTop: 12 }}>
+        <Card style={{ gap: 10 }}>
+          <Kicker>Connected services</Kicker>
+          <Text style={{ color: colors.text, fontSize: 15.5 }}>Gmail</Text>
+
+          {gmailConfigured === null ? (
+            <ActivityIndicator size="small" color={colors.textMuted} />
+          ) : !gmailConfigured ? (
+            <Text style={type.meta}>
+              Not available on this server. The Gmail connection needs Google credentials on
+              the backend, and the read-only scope needs Google's review before the app can
+              leave testing.
+            </Text>
+          ) : (
+            <>
+              {accounts.length === 0 ? (
+                <Text style={type.meta}>
+                  Connect a mailbox and your companion can tell you what people have actually
+                  asked you for — and reply, once you approve it.
+                </Text>
+              ) : (
+                <View style={{ gap: 8 }}>
+                  {accounts.map((account) => (
+                    <View
+                      key={account.id}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        paddingVertical: 10,
+                        borderTopWidth: StyleSheet.hairlineWidth,
+                        borderTopColor: colors.dividerFaint,
+                      }}
+                    >
+                      <Ionicons name="mail-outline" size={17} color={colors.textMuted} />
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={{ color: colors.text, fontSize: 14.5 }} numberOfLines={1}>
+                          {account.email}
+                        </Text>
+                        <Text style={type.label}>
+                          {account.sync_error
+                            ? account.sync_error
+                            : account.history_id
+                              ? 'Synced'
+                              : 'Waiting for its first sync'}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => {
+                          void (async () => {
+                            try {
+                              await client.api.gmail.removeAccount(account.id);
+                              toast.show('Mailbox disconnected');
+                              await loadGmail();
+                            } catch {
+                              toast.show('Could not disconnect that.');
+                            }
+                          })();
+                        }}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Disconnect ${account.email}`}
+                      >
+                        <Text style={{ color: colors.danger, fontSize: 13 }}>Disconnect</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                <GhostButton
+                  label={accounts.length ? 'Connect another' : 'Connect Gmail'}
+                  onPress={() => void connectGmail()}
+                  disabled={gmailBusy}
+                  style={{ flex: 1, height: 44 }}
+                />
+                <GhostButton
+                  label={accounts.length ? 'Sync now' : 'Refresh'}
+                  onPress={() => void (accounts.length ? syncGmail() : loadGmail())}
+                  disabled={gmailBusy}
+                  style={{ flex: 1, height: 44 }}
+                />
+              </View>
+
+              {!!gmailNote && <Text style={type.meta}>{gmailNote}</Text>}
+
+              <Text style={type.label}>
+                MyPro stores who wrote, the subject and Gmail's own one-line preview — never
+                the body. Summaries are written on your laptop, so no email text reaches a
+                model you do not run.
+              </Text>
+            </>
+          )}
+        </Card>
+      </FadeIn>
+
+      {/* Storage and sync */}
+      <FadeIn index={5} style={{ marginTop: 12 }}>
+        <Card style={{ gap: 8 }}>
+          <Kicker>Storage and sync</Kicker>
+          <Text style={{ color: colors.text, fontSize: 15.5 }}>
+            {synced
+              ? `${synced.withText} of ${synced.total} book${synced.total === 1 ? '' : 's'} readable here`
+              : 'Checking…'}
+          </Text>
+          <Text style={type.meta}>
+            This phone keeps no PDFs. A book becomes readable here once the device that
+            imported it has extracted its text, which then syncs through your server — so
+            there is nothing on this device to move between device and cloud storage, and the
+            web app is where that choice is made.
+          </Text>
+        </Card>
+      </FadeIn>
+
+      {/* Other sections */}
+      <FadeIn index={6} style={{ marginTop: 12 }}>
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           <SettingsRow
             icon="bulb-outline"
@@ -159,7 +353,7 @@ export function SettingsScreen({
       </FadeIn>
 
       {/* Account */}
-      <FadeIn index={5} style={{ marginTop: 12 }}>
+      <FadeIn index={7} style={{ marginTop: 12 }}>
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           <SettingsRow
             icon="log-out-outline"

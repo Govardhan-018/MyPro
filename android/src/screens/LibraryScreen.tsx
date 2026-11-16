@@ -13,11 +13,14 @@
  * failing silently.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import {
+  Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View,
+} from 'react-native';
 import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import type { LibraryItemRow, LibraryType } from '@mypro/shared';
 import { client } from '../lib/client';
+import { useCollections } from '../lib/useCollections';
 import {
   Card, CardHeading, CategoryChip, ChipRow, DataBanner, EmptyState, FadeIn, FilterChip,
   Loading, PageHeading, PrimaryButton, Progress, Sheet, Thumbnail, useToast, type IconName,
@@ -139,7 +142,7 @@ function toItem(row: LibraryItemRow): Item {
 
 export function LibraryScreen({ onOpen }: { onOpen: (book: BookSummary) => void }) {
   const toast = useToast();
-  const { accent } = useTheme();
+  const { accent, colorMode } = useTheme();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -148,6 +151,9 @@ export function LibraryScreen({ onOpen }: { onOpen: (book: BookSummary) => void 
   const [category, setCategory] = useState<Category>('All');
   const [filter, setFilter] = useState<Filter>('All');
   const [adding, setAdding] = useState(false);
+  const collections = useCollections();
+  const [newCollection, setNewCollection] = useState('');
+  const [filing, setFiling] = useState<Item | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -353,8 +359,10 @@ export function LibraryScreen({ onOpen }: { onOpen: (book: BookSummary) => void 
                   <Pressable
                     key={item.id}
                     onPress={() => open(item)}
+                    onLongPress={() => setFiling(item)}
+                    delayLongPress={300}
                     accessibilityRole="button"
-                    accessibilityLabel={`Open ${item.title}`}
+                    accessibilityLabel={`Open ${item.title}. Long press to file it into a collection.`}
                     style={({ pressed }) => ({
                       flexDirection: 'row',
                       alignItems: 'center',
@@ -398,7 +406,174 @@ export function LibraryScreen({ onOpen }: { onOpen: (book: BookSummary) => void 
             </Card>
           </FadeIn>
         )}
+
+        {/* `.collections-card` — two-column tiles, as the web lays them out
+            at phone width. */}
+        <FadeIn index={4} style={{ marginTop: 12 }}>
+          <Card>
+            <CardHeading kicker="My collections" title="Organize what matters" />
+
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              <TextInput
+                style={[shared.input, { flex: 1, minHeight: 44 }]}
+                placeholder="New collection"
+                placeholderTextColor="rgba(255,255,255,0.44)"
+                value={newCollection}
+                onChangeText={setNewCollection}
+                onSubmitEditing={() => {
+                  void collections.create(newCollection);
+                  setNewCollection('');
+                }}
+                returnKeyType="done"
+                accessibilityLabel="New collection name"
+              />
+              <Pressable
+                onPress={() => {
+                  void collections.create(newCollection);
+                  setNewCollection('');
+                }}
+                disabled={!newCollection.trim()}
+                accessibilityRole="button"
+                accessibilityLabel="Add collection"
+                style={{
+                  width: 48,
+                  height: 44,
+                  borderRadius: radius.md,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: newCollection.trim()
+                    ? colorMode
+                      ? accent
+                      : colors.text
+                    : 'rgba(255,255,255,0.08)',
+                }}
+              >
+                <Ionicons
+                  name="add"
+                  size={20}
+                  color={newCollection.trim() ? '#000000' : 'rgba(255,255,255,0.4)'}
+                />
+              </Pressable>
+            </View>
+
+            {collections.collections.length === 0 ? (
+              <Text style={type.meta}>
+                No collections yet. Start one, then long-press anything in your library to file
+                it.
+              </Text>
+            ) : (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {collections.collections.map((collection) => (
+                  <Pressable
+                    key={collection.id}
+                    onLongPress={() => {
+                      Alert.alert(
+                        'Delete collection?',
+                        `"${collection.name}" will be removed. The items in it stay in your library.`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Delete',
+                            style: 'destructive',
+                            onPress: () => void collections.remove(collection.id),
+                          },
+                        ],
+                      );
+                    }}
+                    delayLongPress={400}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${collection.name}, ${collection.count} items. Long press to delete.`}
+                    style={{
+                      width: '48.5%',
+                      minHeight: 112,
+                      padding: 12,
+                      justifyContent: 'space-between',
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: radius.lg,
+                      backgroundColor: colors.surface,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 12,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: colors.divider,
+                        backgroundColor: 'rgba(255,255,255,0.05)',
+                      }}
+                    >
+                      <Ionicons
+                        name="folder-outline"
+                        size={17}
+                        color={colorMode ? accent : colors.text}
+                      />
+                    </View>
+                    <View style={{ gap: 2 }}>
+                      <Text
+                        style={{ color: colors.text, fontSize: 14.5, fontWeight: '600' }}
+                        numberOfLines={2}
+                      >
+                        {collection.name}
+                      </Text>
+                      <Text style={{ color: colors.textSoft, fontSize: 12 }}>
+                        {collection.count} saved item{collection.count === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </Card>
+        </FadeIn>
       </ScrollView>
+
+      {/* Filing an item onto a shelf — reached by long-pressing its row. */}
+      <Sheet
+        visible={!!filing}
+        onClose={() => setFiling(null)}
+        kicker="File into"
+        title={filing?.title}
+      >
+        {filing && (
+          <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ gap: 2 }}>
+            {collections.collections.length === 0 ? (
+              <Text style={type.meta}>Make a collection first, from the Library screen.</Text>
+            ) : (
+              collections.collections.map((collection) => (
+                <Pressable
+                  key={collection.id}
+                  onPress={() => {
+                    void collections.addItem(collection.id, filing.id);
+                    toast.show(`Filed into ${collection.name}`);
+                    setFiling(null);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`File into ${collection.name}`}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 12,
+                    paddingVertical: 13,
+                    paddingHorizontal: 10,
+                    borderRadius: radius.sm,
+                    backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
+                  })}
+                >
+                  <Ionicons name="folder-outline" size={17} color={colors.textMuted} />
+                  <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>
+                    {collection.name}
+                  </Text>
+                  <Text style={type.label}>{collection.count}</Text>
+                </Pressable>
+              ))
+            )}
+          </ScrollView>
+        )}
+      </Sheet>
 
       <AddSheet
         visible={adding}

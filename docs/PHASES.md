@@ -402,6 +402,29 @@ prose.** Finishes Phase 8.
   Metro resolves it under either linker layout, and `android/android/` is
   ignored as prebuild output.
 
+- ✅ **13.9** The last web-only corners, and a fake feature made real
+  (Nov 2026).
+  **Collections were never real.** `/collections` and `collection_items` have
+  been implemented server-side since the library landed, but the web held
+  five hard-coded names in local state, so every rename, reorder and new
+  shelf was gone on the next reload. Both clients now read and write the real
+  rows: `useCollections` on each side, with rename, delete and a drag-reorder
+  persisted as `sort_order`, and long-pressing a library row on the phone
+  files it onto a shelf.
+  **Health records are writable on the phone.** Add and edit cover the
+  columns the API actually has — name, status, severity, started/ended,
+  doctor, diagnosis, notes — with symptoms as a comma-separated list and one
+  medication, each becoming its own row through `addSymptom` / `addMedication`.
+  The detail sheet gained Edit and Delete, and the phone now reads the
+  `diagnosis` and `consultation_on` it had been dropping.
+  **Gmail** is in Settings: status, connected mailboxes with their sync
+  state, connect (which opens Google's consent page in the browser, since the
+  flow ends on Render where the tokens live), sync now, and disconnect.
+  **Storage sync is deliberately not ported.** The web screen moves PDFs
+  between device storage and the cloud; this phone holds no PDFs, so Settings
+  says how many books have readable synced text and explains where that
+  choice is made instead of showing a screen that could do nothing.
+
 - ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
   sign-in screen now mirrors the web login page — brand bar with the Color
   Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no

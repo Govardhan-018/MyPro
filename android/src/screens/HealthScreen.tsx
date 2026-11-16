@@ -17,13 +17,13 @@
  * rather than a button that cannot finish the job.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import {
-  Card, CardHeading, DataBanner, EmptyState, FadeIn, FilterChip, Kicker, Loading,
-  PageHeading, Sheet, Tag, type IconName,
+  Card, CardHeading, DataBanner, EmptyState, FadeIn, FilterChip, GhostButton, Kicker,
+  Loading, PageHeading, PrimaryButton, Sheet, Tag, useToast, type IconName,
 } from '../components/ui';
 import { colors, radius, shared, space, type, useTheme } from '../theme';
 
@@ -62,6 +62,8 @@ interface Record_ {
   startedOn: string | null;
   endedOn: string | null;
   doctor: string | null;
+  diagnosis: string | null;
+  consultationOn: string | null;
   notes: string | null;
   symptoms: string[];
   symptomStart: string | null;
@@ -105,6 +107,8 @@ function toRecord(row: Record<string, unknown>): Record_ {
     startedOn: str(row.started_on),
     endedOn: str(row.ended_on),
     doctor: str(row.doctor),
+    diagnosis: str(row.diagnosis),
+    consultationOn: str(row.consultation_on),
     notes: str(row.notes),
     symptoms: symptoms.map((s) => str(s.name) ?? '').filter(Boolean),
     symptomStart: str(first.started_on),
@@ -126,10 +130,31 @@ function toRecord(row: Record<string, unknown>): Record_ {
   };
 }
 
+/** A date the API will accept: `z.string().date()`. */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** What the add/edit sheet holds while you fill it in. */
+interface Draft {
+  id: string | null;
+  name: string;
+  status: string;
+  severity: string;
+  startedOn: string;
+  endedOn: string;
+  doctor: string;
+  diagnosis: string;
+  notes: string;
+  /** Comma-separated; each becomes its own `health_symptoms` row. */
+  symptoms: string;
+  medication: string;
+  dosage: string;
+}
+
 /** The web's three status options. */
 const STATUSES = ['All statuses', 'Recovered', 'Recovery ongoing', 'Incomplete record'] as const;
 
 export function HealthScreen() {
+  const toast = useToast();
   const { accent, colorMode } = useTheme();
   const [records, setRecords] = useState<Record_[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,6 +164,8 @@ export function HealthScreen() {
   const [status, setStatus] = useState<string>('All statuses');
   const [year, setYear] = useState<string>('All years');
   const [selected, setSelected] = useState<Record_ | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -156,6 +183,130 @@ export function HealthScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const openCreate = () =>
+    setDraft({
+      id: null,
+      name: '',
+      status: 'Recovery ongoing',
+      severity: '',
+      startedOn: '',
+      endedOn: '',
+      doctor: '',
+      diagnosis: '',
+      notes: '',
+      symptoms: '',
+      medication: '',
+      dosage: '',
+    });
+
+  const openEdit = (record: Record_) => {
+    setSelected(null);
+    setDraft({
+      id: record.id,
+      name: record.name,
+      status: record.status,
+      severity: record.severity ?? '',
+      startedOn: record.startedOn ?? '',
+      endedOn: record.endedOn ?? '',
+      doctor: record.doctor ?? '',
+      diagnosis: record.diagnosis ?? '',
+      notes: record.notes ?? '',
+      // Symptoms and medications are their own rows; editing them here would
+      // mean reconciling deletions, so an edit leaves the existing ones alone
+      // and these add to them.
+      symptoms: '',
+      medication: '',
+      dosage: '',
+    });
+  };
+
+  const saveDraft = async () => {
+    if (!draft) return;
+    const name = draft.name.trim();
+    if (!name) {
+      toast.show('Give the record a name.');
+      return;
+    }
+    for (const [label, value] of [
+      ['Start date', draft.startedOn],
+      ['End date', draft.endedOn],
+    ] as const) {
+      if (value.trim() && !DATE_RE.test(value.trim())) {
+        toast.show(`${label} should look like 2025-11-16.`);
+        return;
+      }
+    }
+
+    const body: Record<string, unknown> = { name };
+    if (draft.status.trim()) body.status = draft.status.trim();
+    if (draft.severity.trim()) body.severity = draft.severity.trim();
+    if (draft.startedOn.trim()) body.started_on = draft.startedOn.trim();
+    if (draft.endedOn.trim()) body.ended_on = draft.endedOn.trim();
+    if (draft.doctor.trim()) body.doctor = draft.doctor.trim();
+    if (draft.diagnosis.trim()) body.diagnosis = draft.diagnosis.trim();
+    if (draft.notes.trim()) body.notes = draft.notes.trim();
+
+    setSaving(true);
+    try {
+      const saved = draft.id
+        ? ((await client.api.health.update(draft.id, body)) as Record<string, unknown>)
+        : ((await client.api.health.create(body)) as Record<string, unknown>);
+      const id = draft.id ?? (typeof saved?.id === 'string' ? saved.id : null);
+
+      if (id) {
+        // Each symptom is its own row; the field takes a comma-separated list.
+        const symptoms = draft.symptoms
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        for (const symptom of symptoms) {
+          await client.api.health.addSymptom(id, { name: symptom }).catch(() => undefined);
+        }
+        if (draft.medication.trim()) {
+          await client.api.health
+            .addMedication(id, {
+              name: draft.medication.trim(),
+              ...(draft.dosage.trim() ? { dosage: draft.dosage.trim() } : {}),
+            })
+            .catch(() => undefined);
+        }
+      }
+
+      setDraft(null);
+      toast.show(draft.id ? 'Record updated' : 'Record added');
+      await load();
+    } catch (caught) {
+      toast.show(caught instanceof Error ? caught.message : 'Could not save that record.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmDelete = (record: Record_) => {
+    Alert.alert(
+      'Delete record?',
+      `"${record.name}" and everything filed under it will be removed. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setSelected(null);
+            try {
+              await client.api.health.remove(record.id);
+              toast.show('Record deleted');
+              await load();
+            } catch {
+              toast.show('Could not delete that.');
+              void load();
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const years = useMemo(() => {
     const set = new Set<string>();
@@ -221,6 +372,9 @@ export function HealthScreen() {
           eyebrow="Personal health history"
           title="Your health, clearly organized."
           lede="A private record of past illnesses, symptoms, medications, and recovery."
+          actionIcon="add"
+          actionLabel="Add a record"
+          onAction={openCreate}
         />
 
         {!!error && <DataBanner message={error} error />}
@@ -459,6 +613,8 @@ export function HealthScreen() {
               <DetailGrid
                 items={[
                   ['Doctor or hospital', selected.doctor ?? 'Not recorded'],
+                  ['Consultation date', dateLabel(selected.consultationOn)],
+                  ['Recorded diagnosis', selected.diagnosis ?? 'Not recorded'],
                   ['Medical notes', selected.notes ?? 'Not recorded'],
                 ]}
               />
@@ -507,12 +663,190 @@ export function HealthScreen() {
               )}
             </DetailSection>
 
-            <Text style={[type.meta, { marginTop: 4 }]}>
-              Records are added and edited in the web app, where the full form lives.
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+              <GhostButton
+                label="Edit"
+                onPress={() => openEdit(selected)}
+                style={{ flex: 1 }}
+              />
+              <GhostButton
+                label="Delete"
+                onPress={() => confirmDelete(selected)}
+                style={{ flex: 1 }}
+              />
+            </View>
+
+            <Text style={[type.meta, { marginTop: 12 }]}>
+              Symptoms and medications are kept as their own entries; adding more from the
+              edit sheet adds to what is already there.
             </Text>
           </ScrollView>
         )}
       </Sheet>
+
+      {/* `.health-form-modal`, which becomes a bottom sheet on mobile. */}
+      <Sheet
+        visible={!!draft}
+        onClose={() => setDraft(null)}
+        kicker={draft?.id ? 'Edit record' : 'New record'}
+        title={draft?.id ? draft.name || 'Record' : 'Add an illness'}
+      >
+        {draft && (
+          <ScrollView keyboardShouldPersistTaps="handled" style={{ flexGrow: 0 }}>
+            <View style={{ gap: 14 }}>
+              <Field
+                label="Illness"
+                value={draft.name}
+                onChange={(name) => setDraft({ ...draft, name })}
+                placeholder="What was it?"
+              />
+
+              <View style={{ gap: 8 }}>
+                <Text style={type.label}>Recovery status</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {STATUSES.filter((option) => option !== 'All statuses').map((option) => (
+                    <FilterChip
+                      key={option}
+                      label={option}
+                      active={draft.status === option}
+                      onPress={() => setDraft({ ...draft, status: option })}
+                    />
+                  ))}
+                </View>
+              </View>
+
+              <Field
+                label="Severity"
+                value={draft.severity}
+                onChange={(severity) => setDraft({ ...draft, severity })}
+                placeholder="Mild, moderate, severe…"
+              />
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Started"
+                    value={draft.startedOn}
+                    onChange={(startedOn) => setDraft({ ...draft, startedOn })}
+                    placeholder="2025-11-16"
+                    keyboard="numbers-and-punctuation"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Ended"
+                    value={draft.endedOn}
+                    onChange={(endedOn) => setDraft({ ...draft, endedOn })}
+                    placeholder="Leave blank if ongoing"
+                    keyboard="numbers-and-punctuation"
+                  />
+                </View>
+              </View>
+
+              <Field
+                label="Symptoms"
+                value={draft.symptoms}
+                onChange={(symptoms) => setDraft({ ...draft, symptoms })}
+                placeholder="Separate with commas"
+              />
+
+              <Field
+                label="Doctor or hospital"
+                value={draft.doctor}
+                onChange={(doctor) => setDraft({ ...draft, doctor })}
+                placeholder="Who you saw"
+              />
+
+              <Field
+                label="Recorded diagnosis"
+                value={draft.diagnosis}
+                onChange={(diagnosis) => setDraft({ ...draft, diagnosis })}
+                placeholder="What you were told"
+              />
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Medication"
+                    value={draft.medication}
+                    onChange={(medication) => setDraft({ ...draft, medication })}
+                    placeholder="Name"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Dosage"
+                    value={draft.dosage}
+                    onChange={(dosage) => setDraft({ ...draft, dosage })}
+                    placeholder="e.g. 500mg"
+                  />
+                </View>
+              </View>
+
+              <Field
+                label="Notes"
+                value={draft.notes}
+                onChange={(notes) => setDraft({ ...draft, notes })}
+                placeholder="Anything worth remembering"
+                multiline
+              />
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                <GhostButton
+                  label="Cancel"
+                  onPress={() => setDraft(null)}
+                  style={{ flex: 1 }}
+                />
+                <PrimaryButton
+                  label={draft.id ? 'Save' : 'Add record'}
+                  onPress={() => void saveDraft()}
+                  busy={saving}
+                  disabled={!draft.name.trim()}
+                  style={{ flex: 1 }}
+                />
+              </View>
+
+              <Text style={type.meta}>
+                Your own record, kept for you. MyPro gives no medical advice, and the
+                assistant cannot read any of this without a grant you give it.
+              </Text>
+            </View>
+          </ScrollView>
+        )}
+      </Sheet>
+    </View>
+  );
+}
+
+/** A labelled text field in the record form. */
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  multiline,
+  keyboard,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  multiline?: boolean;
+  keyboard?: 'default' | 'numbers-and-punctuation';
+}) {
+  return (
+    <View style={{ gap: 7 }}>
+      <Text style={type.label}>{label}</Text>
+      <TextInput
+        style={[shared.input, multiline && { minHeight: 80, textAlignVertical: 'top' }]}
+        placeholder={placeholder}
+        placeholderTextColor="rgba(255,255,255,0.44)"
+        value={value}
+        onChangeText={onChange}
+        multiline={multiline}
+        keyboardType={keyboard ?? 'default'}
+        accessibilityLabel={label}
+      />
     </View>
   );
 }
