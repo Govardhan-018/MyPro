@@ -20,3 +20,8 @@ logs/
 # beside it.
 /.plugins/
 /.opencode-skills/
+
+# `expo prebuild` output. CI regenerates the native project on every run, so
+# it is build output, not source.
+android/android/
+android/ios/

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   AlignLeft,
   ArrowLeft,
@@ -1045,8 +1046,30 @@ const key = `${page}-${idx}`;
               <SlidersHorizontal size={17} />
             </button>
 
-            {isSettingsOpen && (
-              <>
+            {/*
+              Portalled to <body> on purpose.
+
+              The toolbar carries `backdrop-filter`, and a filtered element
+              becomes the containing block for any `position: fixed`
+              descendant — which pinned this sheet to the toolbar's own 52px
+              box, so on a phone it opened above the top of the screen. Taking
+              it out of the toolbar lets the bar keep its glass and lets the
+              sheet belong to the viewport, which is what both of its layouts
+              assume.
+            */}
+            {isSettingsOpen && createPortal(
+              /*
+                The wrapper repeats the reader's own classes so the sheet's
+                `.mypro-dark-reader …` rules keep matching outside the reader
+                subtree, and `display: contents` keeps it out of layout so it
+                adds no box of its own.
+              */
+              <div
+                className={`mypro-dark-reader ${theme}-theme ${
+                  colorMode ? "color-mode" : ""
+                } mode-${readingMode}`}
+                style={{ display: "contents" }}
+              >
                 <div
                   className="reader-settings-backdrop"
                   onClick={() => setIsSettingsOpen(false)}
@@ -1123,7 +1146,8 @@ const key = `${page}-${idx}`;
                     <span>Markers stay anchored to their passage when you change size, width, or mode.</span>
                   </div>
                 </div>
-              </>
+              </div>,
+              document.body,
             )}
           </div>
 

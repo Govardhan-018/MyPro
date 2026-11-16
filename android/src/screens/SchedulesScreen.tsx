@@ -10,7 +10,8 @@
  * the footer says so rather than offering a button that cannot finish.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Text } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import type { ScheduleRow } from '@mypro/shared';
 import { client } from '../lib/client';

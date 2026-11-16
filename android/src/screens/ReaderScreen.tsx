@@ -18,10 +18,11 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, PanResponder, Pressable, ScrollView, StyleSheet, Text,
-  TextInput, View,
+  Animated, Easing, PanResponder, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { chapterAt, type AnnotationRow, type PdfTocEntry } from '@mypro/shared';
 import { client } from '../lib/client';
@@ -51,6 +52,8 @@ type ReaderThemeName = 'dark' | 'dim' | 'sepia' | 'light';
 interface ReaderTheme {
   name: ReaderThemeName;
   label: string;
+  /** Which way `expo-blur` should tint the chrome behind the page. */
+  dark: boolean;
   bg: string;
   text: string;
   muted: string;
@@ -65,44 +68,48 @@ const THEMES: Record<ReaderThemeName, ReaderTheme> = {
   dark: {
     name: 'dark',
     label: 'Dark',
+    dark: true,
     bg: '#050607',
     text: '#E9E9EC',
     muted: '#A0A4AD',
     faint: '#737983',
-    chrome: 'rgba(17,19,23,0.96)',
+    chrome: 'rgba(17,19,23,0.78)',
     chromeBorder: 'rgba(255,255,255,0.12)',
     mark: 'rgba(168,140,242,0.22)',
   },
   dim: {
     name: 'dim',
     label: 'Dim',
+    dark: true,
     bg: '#14161B',
     text: '#D6D8DE',
     muted: '#9BA0AA',
     faint: '#6F7580',
-    chrome: 'rgba(23,26,32,0.96)',
+    chrome: 'rgba(23,26,32,0.78)',
     chromeBorder: 'rgba(255,255,255,0.1)',
     mark: 'rgba(168,140,242,0.22)',
   },
   sepia: {
     name: 'sepia',
     label: 'Sepia',
+    dark: false,
     bg: '#F2E9D8',
     text: '#3B3226',
     muted: '#6E6353',
     faint: '#998D7A',
-    chrome: 'rgba(238,227,207,0.97)',
+    chrome: 'rgba(238,227,207,0.82)',
     chromeBorder: 'rgba(59,50,38,0.14)',
     mark: 'rgba(188,140,80,0.26)',
   },
   light: {
     name: 'light',
     label: 'Light',
+    dark: false,
     bg: '#FAFAF8',
     text: '#1C1C1E',
     muted: '#5B5B60',
     faint: '#8E8E93',
-    chrome: 'rgba(250,250,248,0.97)',
+    chrome: 'rgba(250,250,248,0.82)',
     chromeBorder: 'rgba(0,0,0,0.12)',
     mark: 'rgba(255,205,80,0.4)',
   },
@@ -352,14 +359,21 @@ export function ReaderScreen({
           left: 0,
           right: 0,
           zIndex: 10,
-          backgroundColor: theme.chrome,
           borderBottomWidth: StyleSheet.hairlineWidth,
           borderBottomColor: theme.chromeBorder,
           paddingTop: 50,
           paddingBottom: 10,
           paddingHorizontal: 12,
+          overflow: 'hidden',
         }}
       >
+        {/* `backdrop-filter: blur(22px)` on the web's reader chrome. */}
+        <BlurView
+          intensity={38}
+          tint={theme.dark ? 'dark' : 'light'}
+          style={[StyleSheet.absoluteFill, { backgroundColor: theme.chrome }]}
+          experimentalBlurMethod="dimezisBlurView"
+        />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <ToolbarButton icon="chevron-back" label="Back to library" theme={theme} onPress={onClose} />
           <View style={{ flex: 1, gap: 1, paddingHorizontal: 6 }}>
@@ -483,13 +497,13 @@ export function ReaderScreen({
           bottom: 24,
           zIndex: 10,
           borderRadius: radius.xl,
-          backgroundColor: theme.chrome,
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: theme.chromeBorder,
           paddingHorizontal: 16,
           paddingTop: 12,
           paddingBottom: 14,
           gap: 10,
+          overflow: 'hidden',
           elevation: 12,
           shadowColor: '#000',
           shadowOpacity: 0.4,
@@ -497,6 +511,13 @@ export function ReaderScreen({
           shadowOffset: { width: 0, height: 8 },
         }}
       >
+        {/* `backdrop-filter: blur(22px)` on the web's reader chrome. */}
+        <BlurView
+          intensity={38}
+          tint={theme.dark ? 'dark' : 'light'}
+          style={[StyleSheet.absoluteFill, { backgroundColor: theme.chrome }]}
+          experimentalBlurMethod="dimezisBlurView"
+        />
         {pageCount > 1 && (
           <PageSlider
             page={page}
@@ -536,7 +557,10 @@ export function ReaderScreen({
 
       {/* Appearance sheet */}
       <Sheet visible={appearanceOpen} onClose={() => setAppearanceOpen(false)} title="Reading appearance">
-        <View style={{ gap: 18 }}>
+        {/* Scrolls rather than overflowing: on a short screen, or with the
+            system font scaled up, the swatches and steppers are taller than
+            the sheet's own cap. */}
+        <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 18, paddingBottom: 4 }}>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             {(Object.values(THEMES) as ReaderTheme[]).map((option) => (
               <Pressable
@@ -579,7 +603,7 @@ export function ReaderScreen({
             onLess={() => updatePrefs({ lineHeight: Math.max(1.4, +(prefs.lineHeight - 0.1).toFixed(2)) })}
             onMore={() => updatePrefs({ lineHeight: Math.min(2, +(prefs.lineHeight + 0.1).toFixed(2)) })}
           />
-        </View>
+        </ScrollView>
       </Sheet>
 
       {/* Contents / marks / notes sheet */}

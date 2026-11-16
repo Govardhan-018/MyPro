@@ -11,9 +11,8 @@
  * endpoints the web uses, with the same payload.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Alert, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
-} from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import {
@@ -274,8 +273,15 @@ export function CalendarScreen() {
 
     const body: Record<string, unknown> = {
       title,
+      /*
+       * An all-day event is a *date*, not an instant, and it is read back as
+       * `iso.slice(0, 10)` — the UTC date. Local midnight serialises to the
+       * previous day everywhere east of Greenwich (00:00 on the 16th in IST
+       * is 18:30 on the 15th in UTC), which filed every all-day event one day
+       * early. UTC midnight keeps the stored day and the shown day the same.
+       */
       starts_at: draft.allDay
-        ? new Date(new Date(base).setHours(0, 0, 0, 0)).toISOString()
+        ? `${draft.dateKey}T00:00:00.000Z`
         : at(draft.start),
       all_day: draft.allDay,
     };

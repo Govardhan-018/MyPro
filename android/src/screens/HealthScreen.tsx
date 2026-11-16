@@ -17,9 +17,8 @@
  * rather than a button that cannot finish the job.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Pressable, RefreshControl, ScrollView, Text, TextInput, View,
-} from 'react-native';
+import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import {

@@ -13,7 +13,9 @@
  * companion you stop trusting.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Text } from '../components/Typography';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { LibraryItemRow } from '@mypro/shared';
 import { client } from '../lib/client';
@@ -354,9 +356,18 @@ function AgendaEvent({
  * a ringed disc that picks up the accent in Color Mode.
  */
 function Orb() {
-  const { colorMode, accent } = useTheme();
+  const { colorMode } = useTheme();
+  /* The web sweeps a conic gradient; React Native has only linear, so this
+     runs the same colours along the diagonal. Monochrome keeps the web's
+     white-through-graphite sweep. */
+  const sweep = colorMode
+    ? (['#b69af5', '#9168dc', '#71b7f5', '#70dce5'] as const)
+    : (['#ffffff', '#f2f2f4', '#9a9aa2', '#2a2a2e'] as const);
   return (
-    <View
+    <LinearGradient
+      colors={sweep}
+      start={{ x: 0.1, y: 0 }}
+      end={{ x: 0.9, y: 1 }}
       style={{
         width: 44,
         height: 44,
@@ -364,12 +375,20 @@ function Orb() {
         marginBottom: 18,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: colorMode ? 'rgba(182,154,245,0.45)' : 'rgba(255,255,255,0.22)',
-        backgroundColor: colorMode ? 'rgba(145,104,220,0.16)' : 'rgba(255,255,255,0.07)',
       }}
     >
-      <Ionicons name="sparkles" size={18} color={colorMode ? accent : colors.text} />
-    </View>
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 17,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.surface,
+        }}
+      >
+        <Ionicons name="sparkles" size={16} color={colors.text} />
+      </View>
+    </LinearGradient>
   );
 }

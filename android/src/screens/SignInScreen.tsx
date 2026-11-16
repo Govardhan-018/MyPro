@@ -19,9 +19,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
-  AccessibilityInfo, ActivityIndicator, Animated, Easing, KeyboardAvoidingView,
-  Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  AccessibilityInfo, ActivityIndicator, Animated, Easing, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { isApiConfigured } from '@mypro/shared';
 import { client } from '../lib/client';

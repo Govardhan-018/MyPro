@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
-  AppState, Platform, Pressable, ScrollView, StatusBar as RNStatusBar, Text, View,
+  AppState, Image, Platform, Pressable, ScrollView, StatusBar as RNStatusBar, View,
 } from 'react-native';
+import { Text } from './src/components/Typography';
 import * as Notifications from 'expo-notifications';
+import {
+  DMSans_400Regular, DMSans_500Medium, DMSans_700Bold, useFonts,
+} from '@expo-google-fonts/dm-sans';
 import { Ionicons } from '@expo/vector-icons';
 import { isAgentConfigured, isApiConfigured, type AuthSession } from '@mypro/shared';
 import { client } from './src/lib/client';
 import { armUpcoming, registerForPush } from './src/lib/notifications';
-import { TabBar, type View_ } from './src/components/TabBar';
-import { Card, Loading, ToastProvider } from './src/components/ui';
+import { NAV_COLLAPSED_HEIGHT, TabBar, type View_ } from './src/components/TabBar';
+import { Card, Glass, Loading, ToastProvider } from './src/components/ui';
 import { AssistantScreen } from './src/screens/AssistantScreen';
 import { CalendarScreen } from './src/screens/CalendarScreen';
 import { HealthScreen } from './src/screens/HealthScreen';
@@ -37,6 +41,25 @@ import { colors, shared, space, ThemeProvider, type, useTheme } from './src/them
  * the navigation sheet pinned to the bottom.
  */
 export default function App() {
+  /**
+   * DM Sans is the web app's typeface, so the phone waits for it rather than
+   * painting a frame in Roboto and snapping. The faces are bundled, not
+   * fetched, so this resolves on the first tick.
+   */
+  const [fontsLoaded] = useFonts({
+    DMSans_400Regular,
+    DMSans_500Medium,
+    DMSans_700Bold,
+  });
+
+  if (!fontsLoaded) {
+    return (
+      <View style={[shared.screen, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar style="light" />
+      </View>
+    );
+  }
+
   return (
     <ThemeProvider>
       <ToastProvider>
@@ -177,7 +200,7 @@ function Root() {
         onOpenSettings={() => setView((current) => (current === 'settings' ? 'today' : 'settings'))}
       />
 
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, paddingBottom: NAV_COLLAPSED_HEIGHT }}>
         {view === 'today' ? (
           <TodayScreen
             onOpenBook={setBook}
@@ -232,7 +255,9 @@ function MobileHeader({
 }) {
   const { colorMode, setColorMode, accent } = useTheme();
   return (
-    <View
+    <Glass
+      intensity={40}
+      tint={colors.header}
       style={{
         flexDirection: 'row',
         alignItems: 'center',
@@ -242,7 +267,6 @@ function MobileHeader({
         paddingHorizontal: space.gutter,
         borderBottomWidth: 1,
         borderBottomColor: 'rgba(255,255,255,0.06)',
-        backgroundColor: colors.header,
       }}
     >
       <Brand />
@@ -265,7 +289,7 @@ function MobileHeader({
           onPress={onOpenSettings}
         />
       </View>
-    </View>
+    </Glass>
   );
 }
 
@@ -316,34 +340,32 @@ function HeaderButton({
   );
 }
 
-/** The wordmark. The web uses a logo image; this is its typographic twin. */
+/**
+ * `.brand` — the web app's own wordmark asset, so the two clients carry the
+ * same mark rather than a lookalike. Color Mode cross-fades to the colour
+ * logo exactly as the browser does.
+ */
 function Brand() {
-  const { colorMode, accent } = useTheme();
+  const { colorMode } = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <View
+    <View style={{ width: 92, height: 34, justifyContent: 'center' }}>
+      <Image
+        source={require('./assets/mypro-logo-light.png')}
+        style={{ width: 92, height: 34, opacity: colorMode ? 0 : 1 }}
+        resizeMode="contain"
+        accessibilityLabel="MyPro"
+      />
+      <Image
+        source={require('./assets/mypro-logo-color.png')}
         style={{
-          width: 22,
-          height: 22,
-          borderRadius: 11,
-          borderWidth: 1.5,
-          borderColor: colorMode ? accent : 'rgba(255,255,255,0.55)',
-          alignItems: 'center',
-          justifyContent: 'center',
+          position: 'absolute',
+          width: 92,
+          height: 34,
+          opacity: colorMode ? 1 : 0,
         }}
-      >
-        <View
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: colorMode ? accent : colors.text,
-          }}
-        />
-      </View>
-      <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: 0.2 }}>
-        MyPro
-      </Text>
+        resizeMode="contain"
+        accessible={false}
+      />
     </View>
   );
 }

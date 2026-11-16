@@ -144,6 +144,33 @@ type View =
   | "assistant"
   | "settings";
 
+const VIEWS: View[] = [
+  "today",
+  "calendar",
+  "library",
+  "knowledge",
+  "health",
+  "schedules",
+  "assistant",
+];
+
+/**
+ * The section to open on load, taken from the address bar.
+ *
+ * Without this a refresh always landed back on Today, which is its own small
+ * betrayal halfway through reading a record. The hash is the whole store:
+ * nothing to keep in sync, and the address is shareable.
+ *
+ * Settings is deliberately not restorable — it is a place you visit, not a
+ * place you live, and coming back to it after a reload is never what was
+ * wanted.
+ */
+function viewFromHash(): View {
+  if (typeof window === "undefined") return "today";
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  return (VIEWS as string[]).includes(raw) ? (raw as View) : "today";
+}
+
 /**
  * Deeplinks a notification is allowed to open. Narrow on purpose: the string
  * arrives from a push payload, and a bare whitelist is the whole validation.
@@ -4937,8 +4964,8 @@ function AppShell({
   const notifications = useNotifications(!!userEmail);
   const [bellOpen, setBellOpen] = useState(false);
   // `view` drives navigation highlights immediately; `displayedView` is the page on screen.
-  const [view, setView] = useState<View>("today");
-  const [displayedView, setDisplayedView] = useState<View>("today");
+  const [view, setView] = useState<View>(viewFromHash);
+  const [displayedView, setDisplayedView] = useState<View>(viewFromHash);
   const [entranceToken, setEntranceToken] = useState(0);
   const [assistantVisited, setAssistantVisited] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -5020,6 +5047,13 @@ function AppShell({
 
   const navigate = useCallback((next: View) => {
     setView(next);
+    // Keep the address bar in step so a refresh returns here. `replaceState`
+    // rather than a hash assignment: this records where you are, it does not
+    // add a history entry per tab press.
+    if (typeof window !== "undefined") {
+      const hash = next === "settings" ? "" : `#${next}`;
+      window.history.replaceState(null, "", `${window.location.pathname}${hash}`);
+    }
     pendingRef.current = next;
     // An exit is already running; it will show the latest requested page.
     if (exitRef.current) return;

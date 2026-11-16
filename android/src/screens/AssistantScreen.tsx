@@ -13,9 +13,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView,
-  Text, TextInput, View,
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, View,
 } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { AgentOfflineError, type AssistantMessageRow } from '@mypro/shared';
 import { client } from '../lib/client';

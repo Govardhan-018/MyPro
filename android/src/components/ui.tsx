@@ -9,10 +9,11 @@ import {
   createContext, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  AccessibilityInfo, ActivityIndicator, Animated, Easing, Modal, Pressable,
-  ScrollView, StyleSheet, Text, View,
-  type StyleProp, type ViewStyle,
+  AccessibilityInfo, ActivityIndicator, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle,
 } from 'react-native';
+import { Text } from './Typography';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, shared, space, type, useTheme } from '../theme';
 
@@ -150,6 +151,39 @@ export function Card({
     >
       {children}
     </Pressed>
+  );
+}
+
+/**
+ * `backdrop-filter: blur(…)` — the web's floating chrome (header, nav sheet,
+ * reader dock, composer) is translucent over whatever it covers. React
+ * Native has no such style, so this is `expo-blur` doing the same job: a real
+ * blur of what is behind, with the surface's own tint laid over it.
+ */
+export function Glass({
+  children,
+  intensity = 36,
+  tint = 'rgba(0,0,0,0.72)',
+  style,
+}: {
+  children: React.ReactNode;
+  /** Roughly the web's blur radius, on expo-blur's 0-100 scale. */
+  intensity?: number;
+  /** The colour laid over the blur, as the CSS background would be. */
+  tint?: string;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <View style={[{ overflow: 'hidden' }, style]}>
+      <BlurView
+        intensity={intensity}
+        tint="dark"
+        style={StyleSheet.absoluteFill}
+        experimentalBlurMethod="dimezisBlurView"
+      />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: tint }]} />
+      {children}
+    </View>
   );
 }
 
@@ -515,7 +549,7 @@ export function Progress({
   value: number;
   style?: StyleProp<ViewStyle>;
 }) {
-  const { accent } = useTheme();
+  const { accent, colorMode } = useTheme();
   const clamped = Math.max(0, Math.min(1, value));
   return (
     <View
@@ -531,14 +565,24 @@ export function Progress({
         style,
       ]}
     >
-      <View
-        style={{
-          width: `${clamped * 100}%`,
-          height: '100%',
-          borderRadius: 5,
-          backgroundColor: accent,
-        }}
-      />
+      {colorMode ? (
+        /* `.color-mode .progress i::after` — violet into cyan. */
+        <LinearGradient
+          colors={['#b69af5', '#70dce5']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={{ width: `${clamped * 100}%`, height: '100%', borderRadius: 5 }}
+        />
+      ) : (
+        <View
+          style={{
+            width: `${clamped * 100}%`,
+            height: '100%',
+            borderRadius: 5,
+            backgroundColor: accent,
+          }}
+        />
+      )}
     </View>
   );
 }

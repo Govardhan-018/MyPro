@@ -8,7 +8,8 @@
  * find out it has stopped before you miss something.
  */
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
+import { Text } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import { ARM_WINDOW_HOURS, armUpcoming, registerForPush } from '../lib/notifications';

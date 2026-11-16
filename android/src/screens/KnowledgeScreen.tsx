@@ -8,9 +8,8 @@
  * unchanged.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  RefreshControl, ScrollView, Text, TextInput, View,
-} from 'react-native';
+import { RefreshControl, ScrollView, View } from 'react-native';
+import { Text, TextInput } from '../components/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { client } from '../lib/client';
 import {

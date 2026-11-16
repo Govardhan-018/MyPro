@@ -134,8 +134,21 @@ function rowToEvent(row: Record<string, unknown>): CalEvent {
   };
 }
 
-function combine(date: string, time?: string): string | undefined {
+function combine(date: string, time?: string, allDay = false): string | undefined {
   if (!date) return undefined;
+  if (allDay) {
+    /*
+     * An all-day event is a *date*, not an instant, and `dateKeyOf` reads it
+     * back as `startsAt.slice(0, 10)` — the UTC date.
+     *
+     * Building it from local midnight therefore put every all-day event one
+     * day early for anyone east of Greenwich: 00:00 on the 16th in IST is
+     * 18:30 on the 15th in UTC, and the slice said the 15th. Storing UTC
+     * midnight makes the stored day and the displayed day the same
+     * everywhere.
+     */
+    return `${date}T00:00:00.000Z`;
+  }
   const t = time && /^\d{2}:\d{2}/.test(time) ? time : '00:00';
   const d = new Date(`${date}T${t}:00`);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
@@ -242,7 +255,7 @@ export function useCalendar(focus: Date): CalendarState {
   const toBody = (input: NewEventInput): Record<string, unknown> => {
     const title = input.title.trim();
     if (!title) throw new Error('Give the event a title.');
-    const starts_at = combine(input.date, input.allDay ? '00:00' : input.startTime);
+    const starts_at = combine(input.date, input.startTime, input.allDay);
     if (!starts_at) throw new Error('Pick a date for the event.');
     const ends_at = input.allDay ? undefined : combine(input.date, input.endTime);
     if (ends_at && new Date(ends_at) <= new Date(starts_at)) {
