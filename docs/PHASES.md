@@ -314,6 +314,17 @@ anything.** There are 21 skills and **zero tests in the entire repo**.
 **Goal: leave the laptop shut for a day and lose nothing but freshly generated
 prose.** Finishes Phase 8.
 
+As of Nov 2026 the phone carries the web app's design language, typeface and
+logo, its reader, and every feature that is not tied to holding the PDF
+itself (13.5–13.9 below). **13.2, the offline cache, is the only real work
+left in this phase** — which is also the one thing standing between the app
+and its own goal, since everything but the reader still needs the network.
+
+Two differences are architecture rather than backlog, and should not be
+"fixed": the phone reads reflowed text instead of the PDF, and its Pages tab
+is a map of page numbers instead of thumbnails. Both follow from the file
+never leaving the device that imported it.
+
 - ✅ **13.1** Today, Assistant chat, Calendar, Health, Knowledge screens on
   Android, reusing `shared/` — done as 8.3.
 - **13.2** A local cache so the app is useful with no connection. **The only
@@ -340,6 +351,20 @@ prose.** Finishes Phase 8.
   is untouched). The reader still renders synced extracted text: original
   PDF rasterisation on the phone would need the file itself, which never
   leaves the importing device by design.
+- ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
+  sign-in screen now mirrors the web login page — brand bar with the Color
+  Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no
+  native Lottie module joins the APK), the welcome copy and its three
+  pillars, then the account panel with Apple / Google / email, one live
+  feedback line, show-password, and the sign-in ↔ create-account switch.
+  Apple and Google call the same shared `signInWithOAuth` the web calls and
+  report the same "not available yet" message rather than looking live.
+  **The bug it shipped with:** `EXPO_PUBLIC_API_URL` set to the bare Render
+  host made every call 404 with NestJS's `Cannot POST /auth/login`, because
+  both backends mount under `app.setGlobalPrefix('api/v1')`. `normalizeEnv`
+  in `shared/src/env.ts` now appends the prefix when it is missing (and
+  leaves a complete URL alone), so the host on its own works for both
+  clients. `android/.env.example` documents the app's two variables for the
 - ✅ **13.7** The Android app rebuilt in the web app's own visual language,
   and a round of mobile UI bug fixes in both clients (Nov 2026).
   `android/src/theme.tsx` is now a transcription of the browser's phone
@@ -425,20 +450,6 @@ prose.** Finishes Phase 8.
   says how many books have readable synced text and explains where that
   choice is made instead of showing a screen that could do nothing.
 
-- ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
-  sign-in screen now mirrors the web login page — brand bar with the Color
-  Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no
-  native Lottie module joins the APK), the welcome copy and its three
-  pillars, then the account panel with Apple / Google / email, one live
-  feedback line, show-password, and the sign-in ↔ create-account switch.
-  Apple and Google call the same shared `signInWithOAuth` the web calls and
-  report the same "not available yet" message rather than looking live.
-  **The bug it shipped with:** `EXPO_PUBLIC_API_URL` set to the bare Render
-  host made every call 404 with NestJS's `Cannot POST /auth/login`, because
-  both backends mount under `app.setGlobalPrefix('api/v1')`. `normalizeEnv`
-  in `shared/src/env.ts` now appends the prefix when it is missing (and
-  leaves a complete URL alone), so the host on its own works for both
-  clients. `android/.env.example` documents the app's two variables for the
   first time.
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your
@@ -495,8 +506,13 @@ neighbours; this is what makes it one tool.
   `schedule_runs` on the same drain loop; one-click export of everything
 - **18.2** **The theme tokens.** `--graphite`, `--medium`, `--soft`,
   `--accent`, `--deep` and `--secondary` are all `#ffffff`, used ~97 times.
-  That single decision has already produced three separate invisible-element
-  bugs (calendar events, the segmented control, every progress bar). Replace
+  That single decision has already produced four separate invisible-element
+  bugs (calendar events, the segmented control, every progress bar, and the
+  selected Day/Week/Month segment, which was `#000` on a `#111` card). Each
+  has been patched where it surfaced, and the Android app sidesteps the whole
+  thing — `android/src/theme.tsx` is a graded scale, which is what this item
+  asks for on the web. The cause is still here: the next one will show up the
+  same way, as something that renders but cannot be seen. Replace the tokens
   with a graded monochrome scale.
 - **18.3** A documented upgrade path *if* spending ever becomes an option
 
