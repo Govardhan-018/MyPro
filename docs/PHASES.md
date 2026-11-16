@@ -329,9 +329,12 @@ never leaving the device that imported it.
 hand-matching did not change that.** 8,936 lines of Android UI are maintained
 by hand against the web's 17,796 lines of UI and CSS, with only 220 lines
 genuinely native — so the two drift by default, and closing the visible gaps
-only moves them. `docs/ANDROID_UPGRADE.md` has the measurement, the options
-and the recommendation (a WebView shell that keeps the native clock), plus a
-two-minute test to run before committing to any of it.
+only moves them. **Decided (Nov 2026): the phone becomes a thin native shell
+around the web app.** `docs/ANDROID_UPGRADE.md` has the measurement, the
+route, and how the shell is made to feel native from one flag and one CSS
+block. Two things it calls out: web push must be disabled inside the shell or
+every notification arrives twice, and the offline cache stays its own piece —
+which is 13.2 below.
 
 - ✅ **13.1** Today, Assistant chat, Calendar, Health, Knowledge screens on
   Android, reusing `shared/` — done as 8.3.
