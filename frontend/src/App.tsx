@@ -2789,17 +2789,35 @@ function LibraryView({
         </div>
       </div>
 
-      <div className="library-primary-grid">
-        <section className="glass-card continue-learning-card">
-          <div className="card-heading">
-            <div>
-              <span className="section-kicker">CONTINUE</span>
-              <h2>Pick up where you left off</h2>
-            </div>
-            <span className="library-result-count">{visibleItems.length} items</span>
-          </div>
-          <div className="learning-list">
-            {visibleItems.map((item) => (
+      <div className="library-groups">
+        {[
+          { key: "Podcasts", label: "Podcasts", match: (i: LibraryItem) => i.type === "Podcasts" },
+          {
+            key: "Books",
+            label: "Books",
+            match: (i: LibraryItem) => i.type === "Books" && Boolean(i.pdfFileName || i.pdfUrl),
+          },
+          {
+            key: "Physical",
+            label: "Physical Books",
+            match: (i: LibraryItem) => i.type === "Books" && !(i.pdfFileName || i.pdfUrl),
+          },
+          { key: "Articles", label: "Articles", match: (i: LibraryItem) => i.type === "Articles" },
+          { key: "Notes", label: "Notes", match: (i: LibraryItem) => i.type === "Notes" },
+        ].map((group) => {
+          const groupItems = visibleItems.filter(group.match);
+          if (!groupItems.length) return null;
+          return (
+            <section className="glass-card continue-learning-card" key={group.key}>
+              <div className="card-heading">
+                <div>
+                  <span className="section-kicker">{group.label.toUpperCase()}</span>
+                  <h2>{group.label}</h2>
+                </div>
+                <span className="library-result-count">{groupItems.length} items</span>
+              </div>
+              <div className="learning-list">
+                {groupItems.map((item) => (
               <article className="learning-row" key={item.title}>
                 <button
                   className={`learning-thumbnail ${item.type.toLowerCase()} ${item.tone}`}
@@ -2834,60 +2852,18 @@ function LibraryView({
                   </div>
                 </div>
               </article>
-            ))}
-            {visibleItems.length === 0 && (
-              <div className="library-empty">
-                <Search size={20} />
-                <strong>No matching items</strong>
-                <span>Try another category, filter, or search.</span>
+                ))}
               </div>
-            )}
+            </section>
+          );
+        })}
+        {visibleItems.length === 0 && (
+          <div className="library-empty">
+            <Search size={20} />
+            <strong>No matching items</strong>
+            <span>Try another category, filter, or search.</span>
           </div>
-        </section>
-
-        <section className="glass-card recent-notes-card">
-          <div className="card-heading">
-            <div>
-              <span className="section-kicker">RECENT NOTES</span>
-              <h2>Ideas worth returning to</h2>
-            </div>
-            <StickyNote size={17} />
-          </div>
-          <div className="recent-notes-list">
-            {[
-              {
-                title: "Attention creates quality",
-                preview: "The quality of attention changes the quality of the work itself.",
-                source: "The Creative Act · Chapter 18",
-                date: "Updated today",
-              },
-              {
-                title: "Designing for trust",
-                preview: "Calm systems explain what changed without demanding attention.",
-                source: "Design Better · Episode 42",
-                date: "May 24",
-              },
-              {
-                title: "Weekly reflection",
-                preview: "Protect the first hour of the day for focused reading and notes.",
-                source: "Personal note · Learning review",
-                date: "May 21",
-              },
-            ].map((note) => (
-              <article className="recent-note-row" key={note.title}>
-                <div>
-                  <h3>{note.title}</h3>
-                  <p>{note.preview}</p>
-                  <span>{note.source}</span>
-                  <small>{note.date}</small>
-                </div>
-                <button aria-label={`Open ${note.title}`}>
-                  <ArrowRight size={15} />
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
+        )}
       </div>
 
       <div className="library-secondary-grid">
