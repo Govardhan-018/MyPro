@@ -1,30 +1,32 @@
 /**
- * The reader — MYPRO 2.0's first-class reading environment on the phone.
+ * The reader — the web app's reading environment, as a phone screen.
  *
- * It renders the extracted text that the device holding the PDF produced —
- * there is no PDF file here to rasterise, which is the architecture, not an
- * omission: the file stays on the device that imported it. What this screen
- * owns is making that text read beautifully:
+ * It carries the same controls as `MyProDarkReader`: the two reading modes,
+ * the three background themes, the font-size / line-spacing / reading-width
+ * settings, in-book search, the Contents / Pages / Marks / Notes
+ * destinations, the five-colour highlight palette and the five annotation
+ * kinds, with the same filter, sort and search over them.
  *
- *  - four reading themes (dark / dim / sepia / light), per-device
- *  - adjustable type size and line spacing, persisted
- *  - immersive mode: chrome fades away; tap the page to bring it back
- *  - a glass footer with page slider, position and percentage
- *  - contents, bookmarks/highlights and notes, each one tap from the header,
- *    every entry jumping back to its page
- *  - the same long-press annotation model as the web, unchanged anchors
+ * What it renders is the extracted text the device holding the PDF produced.
+ * There is no PDF file here to rasterise, and that is the architecture rather
+ * than an omission: the file stays on the device that imported it, and only
+ * the structured text syncs. So "Pages" is a page map rather than a strip of
+ * thumbnails, and everything else behaves as it does in the browser.
  *
  * Reading position still syncs through Render, so the web app agrees.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, PanResponder, Pressable, ScrollView, StyleSheet, View,
+  Animated, Easing, FlatList, PanResponder, Pressable, ScrollView, StyleSheet, View,
+  type ViewToken,
 } from 'react-native';
 import { Text, TextInput } from '../components/Typography';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import { chapterAt, type AnnotationRow, type PdfTocEntry } from '@mypro/shared';
+import {
+  chapterAt, type AnnotationKind, type AnnotationRow, type PdfTocEntry,
+} from '@mypro/shared';
 import { client } from '../lib/client';
 import { useBookText } from '../lib/useBookText';
 import { anchorKey, useAnnotations } from '../lib/useAnnotations';
@@ -36,18 +38,12 @@ import type { BookSummary } from './LibraryScreen';
 const SWIPE_DISTANCE = 60;
 const SWIPE_SLOPE = 1.4;
 
-/** What a long-press opens on. */
-interface Selection {
-  paragraph: number;
-  text: string;
-  existing: AnnotationRow[];
-}
-
 /* ------------------------------------------------------------------------ */
-/* Reading appearance                                                        */
+/* The web's reading options, value for value                                */
 /* ------------------------------------------------------------------------ */
 
-type ReaderThemeName = 'dark' | 'dim' | 'sepia' | 'light';
+type ReadingMode = 'paginated' | 'continuous';
+type ReaderThemeName = 'dark' | 'sepia' | 'paper';
 
 interface ReaderTheme {
   name: ReaderThemeName;
@@ -55,13 +51,13 @@ interface ReaderTheme {
   /** Which way `expo-blur` should tint the chrome behind the page. */
   dark: boolean;
   bg: string;
+  /** The page panel, which sits a step off the canvas as it does on the web. */
+  sheet: string;
   text: string;
   muted: string;
   faint: string;
   chrome: string;
   chromeBorder: string;
-  /** The highlight wash — must stay translucent so the type survives it. */
-  mark: string;
 }
 
 const THEMES: Record<ReaderThemeName, ReaderTheme> = {
@@ -70,59 +66,111 @@ const THEMES: Record<ReaderThemeName, ReaderTheme> = {
     label: 'Dark',
     dark: true,
     bg: '#050607',
+    sheet: '#111317',
     text: '#E9E9EC',
     muted: '#A0A4AD',
     faint: '#737983',
     chrome: 'rgba(17,19,23,0.78)',
     chromeBorder: 'rgba(255,255,255,0.12)',
-    mark: 'rgba(168,140,242,0.22)',
-  },
-  dim: {
-    name: 'dim',
-    label: 'Dim',
-    dark: true,
-    bg: '#14161B',
-    text: '#D6D8DE',
-    muted: '#9BA0AA',
-    faint: '#6F7580',
-    chrome: 'rgba(23,26,32,0.78)',
-    chromeBorder: 'rgba(255,255,255,0.1)',
-    mark: 'rgba(168,140,242,0.22)',
   },
   sepia: {
     name: 'sepia',
     label: 'Sepia',
     dark: false,
-    bg: '#F2E9D8',
+    bg: '#EFE4D0',
+    sheet: '#F6EDDC',
     text: '#3B3226',
     muted: '#6E6353',
     faint: '#998D7A',
     chrome: 'rgba(238,227,207,0.82)',
-    chromeBorder: 'rgba(59,50,38,0.14)',
-    mark: 'rgba(188,140,80,0.26)',
+    chromeBorder: 'rgba(59,50,38,0.16)',
   },
-  light: {
-    name: 'light',
-    label: 'Light',
+  paper: {
+    name: 'paper',
+    label: 'Paper',
     dark: false,
-    bg: '#FAFAF8',
+    bg: '#F2F2F0',
+    sheet: '#FFFFFF',
     text: '#1C1C1E',
     muted: '#5B5B60',
     faint: '#8E8E93',
     chrome: 'rgba(250,250,248,0.82)',
     chromeBorder: 'rgba(0,0,0,0.12)',
-    mark: 'rgba(255,205,80,0.4)',
   },
 };
+
+/** `[1.5, 1.7, 1.9]` — Snug, Normal, Airy. */
+const LINE_SPACINGS: { value: number; label: string }[] = [
+  { value: 1.5, label: 'Snug' },
+  { value: 1.7, label: 'Normal' },
+  { value: 1.9, label: 'Airy' },
+];
+
+/**
+ * The web's 640 / 720 / 800 column widths, as the side margins a phone can
+ * actually offer: a narrower column is a wider margin.
+ */
+const READING_WIDTHS: { value: number; label: string }[] = [
+  { value: 34, label: 'Narrow' },
+  { value: 24, label: 'Comfort' },
+  { value: 16, label: 'Wide' },
+];
+
+const FONT_MIN = 14;
+const FONT_MAX = 22;
+
+/** `--ann-*` — the accent palette the web marks passages with. */
+const ANNOTATION_COLORS: Record<string, string> = {
+  yellow: '#e8d27a',
+  lavender: '#b69af5',
+  cyan: '#70dce5',
+  mint: '#83d9b0',
+  coral: '#f5938b',
+};
+const HIGHLIGHT_COLORS = ['yellow', 'lavender', 'cyan', 'mint', 'coral'] as const;
+
+const ANNOTATION_META: Record<AnnotationKind, { label: string; color: string; icon: IconName }> = {
+  note: { label: 'Note', color: 'lavender', icon: 'create-outline' },
+  quote: { label: 'Quote', color: 'cyan', icon: 'chatbox-ellipses-outline' },
+  summary: { label: 'Summary', color: 'mint', icon: 'document-text-outline' },
+  question: { label: 'Question', color: 'coral', icon: 'help-circle-outline' },
+  highlight: { label: 'Highlight', color: 'yellow', icon: 'color-wand-outline' },
+};
+
+type AnnFilter = 'All' | AnnotationKind | 'bookmark';
+type AnnSort = 'page' | 'recent' | 'type';
+
+const ANN_FILTERS: { id: AnnFilter; label: string }[] = [
+  { id: 'All', label: 'All' },
+  { id: 'note', label: 'Notes' },
+  { id: 'highlight', label: 'Highlights' },
+  { id: 'quote', label: 'Quotes' },
+  { id: 'summary', label: 'Summaries' },
+  { id: 'question', label: 'Questions' },
+  { id: 'bookmark', label: 'Bookmarks' },
+];
+
+/* ------------------------------------------------------------------------ */
+/* Stored preferences                                                        */
+/* ------------------------------------------------------------------------ */
 
 interface ReaderPrefs {
   theme: ReaderThemeName;
   fontSize: number;
-  lineHeight: number; // multiplier
+  lineHeight: number;
+  mode: ReadingMode;
+  /** The horizontal page margin, from `READING_WIDTHS`. */
+  margin: number;
 }
 
 const PREFS_KEY = 'mypro.readerPrefs';
-const DEFAULT_PREFS: ReaderPrefs = { theme: 'dark', fontSize: 17, lineHeight: 1.65 };
+const DEFAULT_PREFS: ReaderPrefs = {
+  theme: 'dark',
+  fontSize: 17,
+  lineHeight: 1.7,
+  mode: 'continuous',
+  margin: 24,
+};
 
 function useReaderPrefs(): [ReaderPrefs, (patch: Partial<ReaderPrefs>) => void] {
   const [prefs, setPrefs] = useState<ReaderPrefs>(DEFAULT_PREFS);
@@ -136,12 +184,14 @@ function useReaderPrefs(): [ReaderPrefs, (patch: Partial<ReaderPrefs>) => void] 
           theme: parsed.theme && parsed.theme in THEMES ? parsed.theme : DEFAULT_PREFS.theme,
           fontSize:
             typeof parsed.fontSize === 'number'
-              ? Math.min(22, Math.max(14, parsed.fontSize))
+              ? Math.min(FONT_MAX, Math.max(FONT_MIN, parsed.fontSize))
               : DEFAULT_PREFS.fontSize,
           lineHeight:
             typeof parsed.lineHeight === 'number'
               ? Math.min(2, Math.max(1.4, parsed.lineHeight))
               : DEFAULT_PREFS.lineHeight,
+          mode: parsed.mode === 'paginated' ? 'paginated' : 'continuous',
+          margin: typeof parsed.margin === 'number' ? parsed.margin : DEFAULT_PREFS.margin,
         });
       })
       .catch(() => undefined);
@@ -158,40 +208,53 @@ function useReaderPrefs(): [ReaderPrefs, (patch: Partial<ReaderPrefs>) => void] 
   return [prefs, update];
 }
 
+/** What a long-press opens on. */
+interface Selection {
+  page: number;
+  paragraph: number;
+  text: string;
+  existing: AnnotationRow[];
+}
+
+/** One in-book search hit. */
+interface SearchHit {
+  page: number;
+  paragraph: number;
+  snippet: string;
+}
+
+type NavTab = 'contents' | 'pages' | 'marks' | 'notes';
+
 /* ------------------------------------------------------------------------ */
 /* The screen                                                                */
 /* ------------------------------------------------------------------------ */
 
-type NavTab = 'contents' | 'marks' | 'notes';
-
-export function ReaderScreen({
-  book,
-  onClose,
-}: {
-  book: BookSummary;
-  onClose: () => void;
-}) {
+export function ReaderScreen({ book, onClose }: { book: BookSummary; onClose: () => void }) {
   const { source } = useBookText(book.id);
   const [page, setPage] = useState(book.currentPage || 1);
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [noteDraft, setNoteDraft] = useState<string | null>(null);
   const [prefs, updatePrefs] = useReaderPrefs();
   const [chromeVisible, setChromeVisible] = useState(true);
-  /** Last scroll offset and the idle timer, for the dock's auto-hide. */
-  const lastOffset = useRef(0);
-  const chromeIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [navSheet, setNavSheet] = useState<NavTab | null>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [navSheet, setNavSheet] = useState<NavTab | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [noteDraft, setNoteDraft] = useState<{ kind: AnnotationKind; body: string } | null>(null);
+  const [annFilter, setAnnFilter] = useState<AnnFilter>('All');
+  const [annSort, setAnnSort] = useState<AnnSort>('page');
+  const [annSearch, setAnnSearch] = useState('');
+
   const scrollRef = useRef<ScrollView>(null);
+  const flowRef = useRef<FlatList<number>>(null);
   const status = source?.status ?? 'loading';
   const pageCount = source?.pageCount || book.totalPages || 0;
   const marks = useAnnotations(book.id);
   const theme = THEMES[prefs.theme];
 
-  const content = source?.page(page) ?? null;
   const chapter = useMemo(() => chapterAt(source?.toc ?? [], page), [source, page, status]);
   const bookmarked = marks.bookmarks.some((mark) => mark.page === page);
   const percent = pageCount ? Math.min(100, Math.round((page / pageCount) * 100)) : 0;
+  const continuous = prefs.mode === 'continuous';
 
   /* Chrome fade ----------------------------------------------------------- */
   const chrome = useRef(new Animated.Value(1)).current;
@@ -204,7 +267,24 @@ export function ReaderScreen({
     }).start();
   }, [chromeVisible, chrome]);
 
-  /* Page turning ----------------------------------------------------------- */
+  /** Reading downward tucks the chrome away; a pause brings it back. */
+  const lastOffset = useRef(0);
+  const chromeIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onReadingScroll = (offset: number) => {
+    const delta = offset - lastOffset.current;
+    lastOffset.current = offset;
+    if (Math.abs(delta) > 6) setChromeVisible(!(delta > 0 && offset > 80));
+    if (chromeIdle.current) clearTimeout(chromeIdle.current);
+    chromeIdle.current = setTimeout(() => setChromeVisible(true), 900);
+  };
+  useEffect(
+    () => () => {
+      if (chromeIdle.current) clearTimeout(chromeIdle.current);
+    },
+    [],
+  );
+
+  /* Page turning (paginated) ---------------------------------------------- */
   /**
    * Page turning lives in a ref so the PanResponder — created once — always
    * sees the current page and bounds. Rebuilding the responder on every page
@@ -224,8 +304,8 @@ export function ReaderScreen({
     () =>
       PanResponder.create({
         /* Claim the gesture only once it is clearly a sideways drag, so
-         * vertical scrolling through a long page still belongs to the
-         * ScrollView — and so taps still reach the paragraphs. */
+           vertical scrolling still belongs to the ScrollView and taps still
+           reach the paragraphs. */
         onMoveShouldSetPanResponder: (_event, gesture) =>
           Math.abs(gesture.dx) > 18 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * SWIPE_SLOPE,
         onPanResponderRelease: (_event, gesture) => {
@@ -237,18 +317,12 @@ export function ReaderScreen({
   );
 
   useEffect(() => {
+    if (continuous) return;
     scrollRef.current?.scrollTo({ y: 0, animated: false });
     lastOffset.current = 0;
-  }, [page]);
+  }, [page, continuous]);
 
-  useEffect(
-    () => () => {
-      if (chromeIdle.current) clearTimeout(chromeIdle.current);
-    },
-    [],
-  );
-
-  /* Progress sync ----------------------------------------------------------- */
+  /* Progress sync ---------------------------------------------------------- */
   // Remember where you stopped, so the web app and the phone agree.
   useEffect(() => {
     if (!pageCount) return;
@@ -289,7 +363,37 @@ export function ReaderScreen({
     };
   }, [book.id]);
 
-  /* Helpers ----------------------------------------------------------------- */
+  /* In-book search --------------------------------------------------------- */
+  /**
+   * Searches the synced text rather than the file. Capped, because a long
+   * book with a common word would otherwise build a list nobody scrolls.
+   */
+  const hits = useMemo<SearchHit[]>(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle.length < 2 || !source || !pageCount) return [];
+    const found: SearchHit[] = [];
+    for (let n = 1; n <= pageCount && found.length < 120; n++) {
+      const content = source.page(n);
+      if (!content?.paragraphs?.length) continue;
+      content.paragraphs.forEach((paragraph, index) => {
+        if (found.length >= 120) return;
+        const at = paragraph.toLowerCase().indexOf(needle);
+        if (at === -1) return;
+        const from = Math.max(0, at - 40);
+        found.push({
+          page: n,
+          paragraph: index,
+          snippet:
+            (from > 0 ? '…' : '') +
+            paragraph.slice(from, at + needle.length + 60).trim() +
+            '…',
+        });
+      });
+    }
+    return found;
+  }, [query, source, pageCount, status]);
+
+  /* Helpers ---------------------------------------------------------------- */
   const message = (): string => {
     if (status === 'error') return source?.error || 'This book could not be opened.';
     if (status === 'unavailable') {
@@ -299,29 +403,30 @@ export function ReaderScreen({
       return 'This PDF has no text layer — it looks scanned. Open it once in the web app and it will be read with text recognition, then sync here.';
     }
     if (status === 'loading') return 'Fetching the text…';
-    if (content?.empty) return 'This page has no text.';
     return 'This page is not in the synced text.';
   };
 
-  const openSelection = (paragraph: number, text: string) => {
+  const openSelection = (atPage: number, paragraph: number, text: string) => {
     setSelection({
+      page: atPage,
       paragraph,
       text,
-      existing: marks.byAnchor.get(anchorKey(page, paragraph)) ?? [],
+      existing: marks.byAnchor.get(anchorKey(atPage, paragraph)) ?? [],
     });
   };
 
   const saveNote = async () => {
-    if (!selection || noteDraft === null) return;
-    const body = noteDraft.trim();
+    if (!selection || !noteDraft) return;
+    const body = noteDraft.body.trim();
     if (body) {
       await marks.add({
-        kind: 'note',
-        page,
+        kind: noteDraft.kind,
+        page: selection.page,
         paragraph: selection.paragraph,
         anchorText: selection.text,
         body,
         chapter: chapter?.title ?? null,
+        color: ANNOTATION_META[noteDraft.kind].color,
       });
     }
     setNoteDraft(null);
@@ -330,17 +435,135 @@ export function ReaderScreen({
 
   const jumpTo = (target: number) => {
     setNavSheet(null);
-    if (target >= 1 && (!pageCount || target <= pageCount)) setPage(target);
+    setSearchOpen(false);
+    if (target < 1 || (pageCount && target > pageCount)) return;
+    setPage(target);
+    if (continuous) {
+      // The flow is indexed from zero; keep the two in step.
+      flowRef.current?.scrollToIndex({ index: target - 1, animated: false });
+    }
   };
 
-  /* Annotation lists for the sheets ----------------------------------------- */
-  const allAnnotations = useMemo(() => {
-    const rows: AnnotationRow[] = [];
-    for (const bucket of marks.byAnchor.values()) rows.push(...bucket);
-    return rows.sort((a, b) => (a.page ?? 0) - (b.page ?? 0));
-  }, [marks.byAnchor]);
-  const highlightRows = allAnnotations.filter((row) => row.kind === 'highlight');
-  const noteRows = allAnnotations.filter((row) => row.kind !== 'highlight');
+  /* The annotation list behind Marks and Notes ----------------------------- */
+  const annotations = useMemo(() => {
+    const needle = annSearch.trim().toLowerCase();
+    let rows = marks.rows.filter((row) => {
+      if (annFilter === 'bookmark') return false;
+      if (annFilter !== 'All' && row.kind !== annFilter) return false;
+      if (!needle) return true;
+      return (
+        (row.body ?? '').toLowerCase().includes(needle) ||
+        (row.anchor_text ?? '').toLowerCase().includes(needle) ||
+        (row.chapter ?? '').toLowerCase().includes(needle)
+      );
+    });
+    rows = [...rows].sort((a, b) => {
+      if (annSort === 'page') return (a.page ?? 0) - (b.page ?? 0);
+      if (annSort === 'recent') return (b.created_at ?? '').localeCompare(a.created_at ?? '');
+      return a.kind.localeCompare(b.kind);
+    });
+    return rows;
+  }, [marks.rows, annFilter, annSort, annSearch]);
+
+  /** One page's paragraphs, with their marks applied. */
+  const renderPage = (pageNumber: number) => {
+    const content = source?.page(pageNumber) ?? null;
+    if (!content?.paragraphs?.length) {
+      return (
+        <View
+          key={`empty-${pageNumber}`}
+          style={{
+            borderRadius: radius.lg,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: theme.chromeBorder,
+            padding: space.lg,
+            marginBottom: 18,
+          }}
+        >
+          <Text style={{ color: theme.muted, fontSize: 14.5, lineHeight: 21 }}>
+            {content?.empty ? 'This page has no text.' : message()}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <View
+        key={`page-${pageNumber}`}
+        style={{
+          backgroundColor: theme.sheet,
+          borderRadius: radius.lg,
+          paddingHorizontal: prefs.margin,
+          paddingTop: 26,
+          paddingBottom: 22,
+          marginBottom: continuous ? 14 : 0,
+          gap: Math.round(prefs.fontSize * 1.05),
+        }}
+      >
+        {content.paragraphs.map((paragraph, index) => {
+          const rows = marks.byAnchor.get(anchorKey(pageNumber, index)) ?? [];
+          const highlight = rows.find((row) => row.kind === 'highlight');
+          const noted = rows.some((row) => row.kind !== 'highlight');
+          const wash = highlight
+            ? `${ANNOTATION_COLORS[highlight.color ?? 'yellow'] ?? ANNOTATION_COLORS.yellow}3d`
+            : 'transparent';
+          return (
+            <Pressable
+              key={`${pageNumber}-${index}`}
+              onLongPress={() => openSelection(pageNumber, index, paragraph)}
+              onPress={() => {
+                /* A marked paragraph opens its marks; anywhere else, a tap
+                   toggles the chrome — the Apple Books gesture. */
+                if (rows.length) openSelection(pageNumber, index, paragraph);
+                else setChromeVisible((visible) => !visible);
+              }}
+              delayLongPress={280}
+            >
+              <Text
+                style={{
+                  color: theme.text,
+                  fontSize: prefs.fontSize,
+                  lineHeight: Math.round(prefs.fontSize * prefs.lineHeight),
+                  /* A wash, never a solid fill: a solid background would
+                     erase the type underneath it. */
+                  backgroundColor: wash,
+                }}
+              >
+                {paragraph}
+                {noted ? <Text style={{ color: theme.faint }}> ◦</Text> : null}
+              </Text>
+            </Pressable>
+          );
+        })}
+
+        {/* `.sheet-bottom-meta` — a quiet page number for orientation. */}
+        <Text
+          style={{
+            color: theme.faint,
+            fontSize: 10.5,
+            letterSpacing: 1,
+            textAlign: 'right',
+            marginTop: 6,
+          }}
+        >
+          PAGE {pageNumber}
+          {pageCount ? ` OF ${pageCount}` : ''}
+        </Text>
+      </View>
+    );
+  };
+
+  /** Which page the flow is showing, so the dock and chapter keep up. */
+  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const first = viewableItems.find((item) => item.isViewable);
+    if (first?.index != null) setPage(first.index + 1);
+  }).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 40 }).current;
+
+  const pages = useMemo(
+    () => Array.from({ length: Math.max(pageCount, 1) }, (_, index) => index + 1),
+    [pageCount],
+  );
 
   /* ------------------------------------------------------------------------ */
 
@@ -367,7 +590,6 @@ export function ReaderScreen({
           overflow: 'hidden',
         }}
       >
-        {/* `backdrop-filter: blur(22px)` on the web's reader chrome. */}
         <BlurView
           intensity={38}
           tint={theme.dark ? 'dark' : 'light'}
@@ -388,6 +610,12 @@ export function ReaderScreen({
             )}
           </View>
           <ToolbarButton
+            icon="search"
+            label="Search in book"
+            theme={theme}
+            onPress={() => setSearchOpen(true)}
+          />
+          <ToolbarButton
             icon={bookmarked ? 'bookmark' : 'bookmark-outline'}
             label={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
             theme={theme}
@@ -395,7 +623,7 @@ export function ReaderScreen({
           />
           <ToolbarButton
             icon="text"
-            label="Reading appearance"
+            label="Reading settings"
             theme={theme}
             onPress={() => setAppearanceOpen(true)}
           />
@@ -408,80 +636,53 @@ export function ReaderScreen({
         </View>
       </Animated.View>
 
-      {/* The page */}
-      <ScrollView
-        ref={scrollRef}
-        scrollEventThrottle={32}
-        onScroll={(event) => {
-          /* Reading downward tucks the chrome away; a pause brings it back.
-             The toolbar and the control bar float over the column, so without
-             this they sit on whatever line happens to be at the edge of the
-             screen. */
-          const offset = event.nativeEvent.contentOffset.y;
-          const delta = offset - lastOffset.current;
-          lastOffset.current = offset;
-          if (Math.abs(delta) > 6) setChromeVisible(!(delta > 0 && offset > 80));
-          if (chromeIdle.current) clearTimeout(chromeIdle.current);
-          chromeIdle.current = setTimeout(() => setChromeVisible(true), 900);
-        }}
-        contentContainerStyle={{
-          paddingTop: 116,
-          paddingBottom: 140,
-          paddingHorizontal: 24,
-          gap: Math.round(prefs.fontSize * 1.05),
-        }}
-        {...swipe.panHandlers}
-      >
-        {content?.paragraphs.length ? (
-          content.paragraphs.map((paragraph, index) => {
-            const annotations = marks.byAnchor.get(anchorKey(page, index)) ?? [];
-            const highlighted = annotations.some((a) => a.kind === 'highlight');
-            const noted = annotations.some((a) => a.kind !== 'highlight');
-            return (
-              <Pressable
-                key={`${page}-${index}`}
-                onLongPress={() => openSelection(index, paragraph)}
-                onPress={() => {
-                  /* A marked paragraph opens its marks; anywhere else, a tap
-                   * toggles immersive chrome — the Apple Books gesture. */
-                  if (annotations.length) openSelection(index, paragraph);
-                  else setChromeVisible((visible) => !visible);
-                }}
-                delayLongPress={280}
-              >
-                <Text
-                  style={{
-                    color: theme.text,
-                    fontSize: prefs.fontSize,
-                    lineHeight: Math.round(prefs.fontSize * prefs.lineHeight),
-                    /* A highlight is a translucent wash, never a solid fill:
-                       a solid background would erase the type. */
-                    backgroundColor: highlighted ? theme.mark : 'transparent',
-                  }}
-                >
-                  {paragraph}
-                  {noted ? <Text style={{ color: theme.faint }}> ◦</Text> : null}
-                </Text>
-              </Pressable>
-            );
-          })
-        ) : (
-          <Pressable
-            onPress={() => setChromeVisible((visible) => !visible)}
+      {/* The page, or the flow of pages. */}
+      {continuous ? (
+        <FlatList
+          ref={flowRef}
+          data={pages}
+          keyExtractor={(item) => `p${item}`}
+          renderItem={({ item }) => renderPage(item)}
+          initialScrollIndex={Math.max(0, (book.currentPage || 1) - 1)}
+          onScrollToIndexFailed={() => undefined}
+          onViewableItemsChanged={onViewable}
+          viewabilityConfig={viewabilityConfig}
+          onScroll={(event) => onReadingScroll(event.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={32}
+          windowSize={5}
+          initialNumToRender={2}
+          maxToRenderPerBatch={3}
+          contentContainerStyle={{
+            paddingTop: 110,
+            paddingBottom: 150,
+            paddingHorizontal: 12,
+          }}
+        />
+      ) : (
+        <ScrollView
+          ref={scrollRef}
+          onScroll={(event) => onReadingScroll(event.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={32}
+          contentContainerStyle={{
+            paddingTop: 110,
+            paddingBottom: 150,
+            paddingHorizontal: 12,
+          }}
+          {...swipe.panHandlers}
+        >
+          {renderPage(page)}
+          <Text
             style={{
-              borderRadius: radius.lg,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: theme.chromeBorder,
-              padding: space.lg,
-              marginTop: 40,
+              color: theme.faint,
+              fontSize: 11.5,
+              textAlign: 'center',
+              marginTop: 14,
             }}
           >
-            <Text style={{ color: theme.muted, fontSize: 14.5, lineHeight: 21 }}>
-              {message()}
-            </Text>
-          </Pressable>
-        )}
-      </ScrollView>
+            Swipe to turn · long-press a paragraph to mark it
+          </Text>
+        </ScrollView>
+      )}
 
       {/* Floating glass reading controls */}
       <Animated.View
@@ -511,7 +712,6 @@ export function ReaderScreen({
           shadowOffset: { width: 0, height: 8 },
         }}
       >
-        {/* `backdrop-filter: blur(22px)` on the web's reader chrome. */}
         <BlurView
           intensity={38}
           tint={theme.dark ? 'dark' : 'light'}
@@ -519,12 +719,7 @@ export function ReaderScreen({
           experimentalBlurMethod="dimezisBlurView"
         />
         {pageCount > 1 && (
-          <PageSlider
-            page={page}
-            pageCount={pageCount}
-            theme={theme}
-            onSeek={(target) => jumpTo(target)}
-          />
+          <PageSlider page={page} pageCount={pageCount} theme={theme} onSeek={jumpTo} />
         )}
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <ToolbarButton
@@ -532,7 +727,7 @@ export function ReaderScreen({
             label="Previous page"
             theme={theme}
             disabled={page <= 1}
-            onPress={() => turn.current(-1)}
+            onPress={() => (continuous ? jumpTo(page - 1) : turn.current(-1))}
           />
           <Text
             style={{
@@ -540,7 +735,6 @@ export function ReaderScreen({
               textAlign: 'center',
               color: theme.muted,
               fontSize: 12.5,
-              fontVariant: ['tabular-nums'],
             }}
           >
             {pageCount ? `Page ${page} of ${pageCount} · ${percent}%` : `Page ${page}`}
@@ -550,103 +744,235 @@ export function ReaderScreen({
             label="Next page"
             theme={theme}
             disabled={!!pageCount && page >= pageCount}
-            onPress={() => turn.current(1)}
+            onPress={() => (continuous ? jumpTo(page + 1) : turn.current(1))}
           />
         </View>
       </Animated.View>
 
-      {/* Appearance sheet */}
-      <Sheet visible={appearanceOpen} onClose={() => setAppearanceOpen(false)} title="Reading appearance">
-        {/* Scrolls rather than overflowing: on a short screen, or with the
-            system font scaled up, the swatches and steppers are taller than
-            the sheet's own cap. */}
+      {/* Reading settings — the web's sheet, control for control. */}
+      <Sheet
+        visible={appearanceOpen}
+        onClose={() => setAppearanceOpen(false)}
+        kicker="Reading environment"
+        title="Display & Theme"
+      >
         <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 18, paddingBottom: 4 }}>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            {(Object.values(THEMES) as ReaderTheme[]).map((option) => (
-              <Pressable
-                key={option.name}
-                onPress={() => updatePrefs({ theme: option.name })}
-                accessibilityRole="button"
-                accessibilityLabel={`${option.label} theme`}
-                accessibilityState={{ selected: prefs.theme === option.name }}
-                style={{ flex: 1, alignItems: 'center', gap: 6 }}
-              >
-                <View
-                  style={{
-                    width: '100%',
-                    height: 56,
-                    borderRadius: radius.md,
-                    backgroundColor: option.bg,
-                    borderWidth: prefs.theme === option.name ? 2 : StyleSheet.hairlineWidth,
-                    borderColor:
-                      prefs.theme === option.name ? colors.violet : colors.borderStrong,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Text style={{ color: option.text, fontSize: 17 }}>Aa</Text>
-                </View>
-                <Text style={type.label}>{option.label}</Text>
-              </Pressable>
-            ))}
-          </View>
+          <Setting label="Reading mode">
+            <Options
+              options={[
+                { value: 'paginated', label: 'Paginated' },
+                { value: 'continuous', label: 'Continuous' },
+              ]}
+              value={prefs.mode}
+              onChange={(mode) => updatePrefs({ mode })}
+            />
+          </Setting>
 
-          <Stepper
-            label="Text size"
-            value={`${prefs.fontSize}`}
-            onLess={() => updatePrefs({ fontSize: Math.max(14, prefs.fontSize - 1) })}
-            onMore={() => updatePrefs({ fontSize: Math.min(22, prefs.fontSize + 1) })}
-          />
-          <Stepper
-            label="Line spacing"
-            value={prefs.lineHeight.toFixed(2)}
-            onLess={() => updatePrefs({ lineHeight: Math.max(1.4, +(prefs.lineHeight - 0.1).toFixed(2)) })}
-            onMore={() => updatePrefs({ lineHeight: Math.min(2, +(prefs.lineHeight + 0.1).toFixed(2)) })}
-          />
+          <Setting label="Background theme">
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {(Object.values(THEMES) as ReaderTheme[]).map((option) => {
+                const active = prefs.theme === option.name;
+                return (
+                  <Pressable
+                    key={option.name}
+                    onPress={() => updatePrefs({ theme: option.name })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${option.label} theme`}
+                    accessibilityState={{ selected: active }}
+                    style={{
+                      flex: 1,
+                      alignItems: 'center',
+                      gap: 8,
+                      paddingVertical: 12,
+                      borderRadius: radius.md,
+                      borderWidth: active ? 2 : StyleSheet.hairlineWidth,
+                      borderColor: active ? colors.violet : colors.borderStrong,
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: 11,
+                        backgroundColor: option.bg,
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: 'rgba(255,255,255,0.25)',
+                      }}
+                    />
+                    <Text style={{ color: colors.text, fontSize: 12.5 }}>{option.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Setting>
+
+          <Setting label={`Font size (${prefs.fontSize}px)`}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <StepButton
+                label="Decrease font size"
+                glyph="A−"
+                onPress={() =>
+                  updatePrefs({ fontSize: Math.max(FONT_MIN, prefs.fontSize - 1) })
+                }
+              />
+              <View style={{ flex: 1 }}>
+                <Track
+                  fraction={(prefs.fontSize - FONT_MIN) / (FONT_MAX - FONT_MIN)}
+                  onSeek={(f) =>
+                    updatePrefs({
+                      fontSize: Math.round(FONT_MIN + f * (FONT_MAX - FONT_MIN)),
+                    })
+                  }
+                />
+              </View>
+              <StepButton
+                label="Increase font size"
+                glyph="A+"
+                onPress={() =>
+                  updatePrefs({ fontSize: Math.min(FONT_MAX, prefs.fontSize + 1) })
+                }
+              />
+            </View>
+          </Setting>
+
+          <Setting label="Line spacing">
+            <Options
+              options={LINE_SPACINGS.map((s) => ({ value: s.value, label: s.label }))}
+              value={prefs.lineHeight}
+              onChange={(lineHeight) => updatePrefs({ lineHeight })}
+            />
+          </Setting>
+
+          <Setting label="Reading width">
+            <Options
+              options={READING_WIDTHS.map((w) => ({ value: w.value, label: w.label }))}
+              value={prefs.margin}
+              onChange={(margin) => updatePrefs({ margin })}
+            />
+          </Setting>
+
+          <Text style={[type.meta, { marginTop: 2 }]}>
+            Marks stay anchored to their passage when you change size, width, or mode.
+          </Text>
         </ScrollView>
       </Sheet>
 
-      {/* Contents / marks / notes sheet */}
+      {/* In-book search */}
+      <Sheet
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        kicker="Search"
+        title={`In ${book.title}`}
+      >
+        <View style={{ gap: 12 }}>
+          <View
+            style={{
+              height: 50,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              paddingHorizontal: space.md,
+              borderWidth: 1,
+              borderColor: colors.borderStrong,
+              borderRadius: radius.lg,
+              backgroundColor: colors.surface,
+            }}
+          >
+            <Ionicons name="search" size={17} color={colors.textSoft} />
+            <TextInput
+              style={{ flex: 1, color: colors.text, fontSize: 16, paddingVertical: 0 }}
+              placeholder="Find a word or phrase"
+              placeholderTextColor="rgba(255,255,255,0.44)"
+              value={query}
+              onChangeText={setQuery}
+              autoFocus
+              returnKeyType="search"
+              accessibilityLabel="Search in this book"
+            />
+          </View>
+
+          {query.trim().length < 2 ? (
+            <Text style={type.meta}>Type at least two characters.</Text>
+          ) : hits.length === 0 ? (
+            <Text style={type.meta}>No matches in the synced text.</Text>
+          ) : (
+            <>
+              <Text style={type.meta}>
+                {hits.length === 120 ? 'First 120 matches' : `${hits.length} matches`}
+              </Text>
+              <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 2 }}>
+                {hits.map((hit) => (
+                  <Pressable
+                    key={`${hit.page}-${hit.paragraph}`}
+                    onPress={() => jumpTo(hit.page)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Go to page ${hit.page}`}
+                    style={({ pressed }) => ({
+                      gap: 4,
+                      paddingVertical: 11,
+                      paddingHorizontal: 10,
+                      borderRadius: radius.sm,
+                      backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
+                    })}
+                  >
+                    <Text style={type.label}>Page {hit.page}</Text>
+                    <Text style={{ color: colors.textStrong, fontSize: 13.5, lineHeight: 19 }}>
+                      {hit.snippet}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </>
+          )}
+        </View>
+      </Sheet>
+
+      {/* Contents · Pages · Marks · Notes */}
       <Sheet visible={navSheet !== null} onClose={() => setNavSheet(null)}>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: space.md }}>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: space.md }}>
           {(
             [
               { key: 'contents', label: 'Contents' },
+              { key: 'pages', label: 'Pages' },
               { key: 'marks', label: 'Marks' },
               { key: 'notes', label: 'Notes' },
             ] as { key: NavTab; label: string }[]
-          ).map((tabOption) => (
-            <Pressable
-              key={tabOption.key}
-              onPress={() => setNavSheet(tabOption.key)}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: navSheet === tabOption.key }}
-              style={{
-                flex: 1,
-                alignItems: 'center',
-                paddingVertical: 9,
-                borderRadius: radius.md,
-                backgroundColor: navSheet === tabOption.key ? colors.surfaceActive : 'transparent',
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: navSheet === tabOption.key ? colors.borderStrong : 'transparent',
-              }}
-            >
-              <Text
+          ).map((tab) => {
+            const active = navSheet === tab.key;
+            return (
+              <Pressable
+                key={tab.key}
+                onPress={() => setNavSheet(tab.key)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
                 style={{
-                  color: navSheet === tabOption.key ? colors.text : colors.textFaint,
-                  fontSize: 13.5,
-                  fontWeight: navSheet === tabOption.key ? '600' : '400',
+                  flex: 1,
+                  alignItems: 'center',
+                  paddingVertical: 9,
+                  borderRadius: radius.sm,
+                  backgroundColor: active ? colors.text : 'transparent',
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: active ? colors.text : colors.border,
                 }}
               >
-                {tabOption.label}
-              </Text>
-            </Pressable>
-          ))}
+                <Text
+                  style={{
+                    color: active ? '#000000' : colors.textMuted,
+                    fontSize: 13,
+                    fontWeight: active ? '600' : '400',
+                  }}
+                >
+                  {tab.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
 
-        <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 4, paddingBottom: 8 }}>
-          {navSheet === 'contents' &&
-            ((source?.toc?.length ?? 0) > 0 ? (
+        {navSheet === 'contents' && (
+          <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 2 }}>
+            {(source?.toc?.length ?? 0) > 0 ? (
               (source?.toc ?? []).map((entry: PdfTocEntry) => (
                 <Pressable
                   key={entry.id}
@@ -667,8 +993,7 @@ export function ReaderScreen({
                     {!!entry.part && <Text style={type.label}>{entry.part}</Text>}
                     <Text
                       style={{
-                        color:
-                          chapter && chapter.id === entry.id ? colors.text : colors.textStrong,
+                        color: chapter && chapter.id === entry.id ? colors.text : colors.textStrong,
                         fontSize: 14.5,
                         fontWeight: chapter && chapter.id === entry.id ? '700' : '400',
                       }}
@@ -684,62 +1009,202 @@ export function ReaderScreen({
               <Text style={[type.meta, { padding: 10 }]}>
                 This book has no table of contents in its synced text.
               </Text>
-            ))}
+            )}
+          </ScrollView>
+        )}
 
-          {navSheet === 'marks' && (
-            <>
-              {marks.bookmarks.length === 0 && highlightRows.length === 0 && (
-                <Text style={[type.meta, { padding: 10 }]}>
-                  No bookmarks or highlights yet. Long-press a paragraph to highlight it; the
-                  bookmark button in the toolbar marks the page.
-                </Text>
-              )}
-              {marks.bookmarks
+        {navSheet === 'pages' && (
+          <ScrollView style={{ maxHeight: 420 }}>
+            {/* The web shows page thumbnails. There is no PDF on the phone to
+                draw them from, so this is the same navigation as a map of
+                pages, marking the one you are on and the ones you marked. */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {pages.map((number) => {
+                const current = number === page;
+                const hasMark =
+                  marks.bookmarks.some((mark) => mark.page === number) ||
+                  marks.rows.some((row) => row.page === number);
+                return (
+                  <Pressable
+                    key={number}
+                    onPress={() => jumpTo(number)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Go to page ${number}`}
+                    accessibilityState={{ selected: current }}
+                    style={{
+                      width: 52,
+                      height: 62,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 4,
+                      borderRadius: radius.sm,
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: current ? colors.text : colors.border,
+                      backgroundColor: current ? colors.text : 'rgba(255,255,255,0.03)',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: current ? '#000000' : colors.textStrong,
+                        fontSize: 14,
+                        fontWeight: current ? '700' : '400',
+                      }}
+                    >
+                      {number}
+                    </Text>
+                    <View
+                      style={{
+                        width: 4,
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: hasMark
+                          ? current
+                            ? 'rgba(0,0,0,0.5)'
+                            : colors.violet
+                          : 'transparent',
+                      }}
+                    />
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ScrollView>
+        )}
+
+        {navSheet === 'marks' && (
+          <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: 2 }}>
+            {marks.bookmarks.length === 0 ? (
+              <Text style={[type.meta, { padding: 10 }]}>
+                No bookmarks yet. The bookmark button in the toolbar marks the page you are on.
+              </Text>
+            ) : (
+              marks.bookmarks
                 .slice()
                 .sort((a, b) => a.page - b.page)
                 .map((mark) => (
                   <SheetRow
                     key={mark.id}
                     icon="bookmark"
+                    tint={colors.text}
                     title={`Page ${mark.page}`}
                     subtitle={chapterTitleFor(source?.toc ?? [], mark.page)}
                     onPress={() => jumpTo(mark.page)}
                   />
-                ))}
-              {highlightRows.map((row) => (
-                <SheetRow
-                  key={row.id}
-                  icon="color-wand-outline"
-                  title={row.anchor_text ? `“${row.anchor_text.slice(0, 80)}${row.anchor_text.length > 80 ? '…' : ''}”` : 'Highlight'}
-                  subtitle={row.page ? `Page ${row.page}${row.chapter ? ` · ${row.chapter}` : ''}` : undefined}
-                  onPress={() => row.page && jumpTo(row.page)}
-                />
-              ))}
-            </>
-          )}
+                ))
+            )}
+          </ScrollView>
+        )}
 
-          {navSheet === 'notes' &&
-            (noteRows.length ? (
-              noteRows.map((row) => (
-                <SheetRow
-                  key={row.id}
-                  icon="create-outline"
-                  title={row.body || 'Note'}
-                  subtitle={`${row.page ? `Page ${row.page}` : ''}${
-                    row.anchor_text ? ` · “${row.anchor_text.slice(0, 60)}…”` : ''
-                  }`}
-                  onPress={() => row.page && jumpTo(row.page)}
-                />
-              ))
-            ) : (
-              <Text style={[type.meta, { padding: 10 }]}>
-                No notes in this book yet. Long-press a paragraph and choose “Add note”.
-              </Text>
-            ))}
-        </ScrollView>
+        {navSheet === 'notes' && (
+          <View style={{ gap: 10 }}>
+            <View
+              style={{
+                height: 44,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                paddingHorizontal: 14,
+                borderWidth: 1,
+                borderColor: colors.borderStrong,
+                borderRadius: radius.md,
+                backgroundColor: 'rgba(255,255,255,0.04)',
+              }}
+            >
+              <Ionicons name="search" size={15} color={colors.textSoft} />
+              <TextInput
+                style={{ flex: 1, color: colors.text, fontSize: 15, paddingVertical: 0 }}
+                placeholder="Search your marks"
+                placeholderTextColor="rgba(255,255,255,0.44)"
+                value={annSearch}
+                onChangeText={setAnnSearch}
+                accessibilityLabel="Search your marks"
+              />
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ flexGrow: 0 }}
+              contentContainerStyle={{ gap: 6 }}
+            >
+              {ANN_FILTERS.filter((f) => f.id !== 'bookmark').map((filter) => {
+                const active = annFilter === filter.id;
+                return (
+                  <Pressable
+                    key={filter.id}
+                    onPress={() => setAnnFilter(filter.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={{
+                      height: 32,
+                      paddingHorizontal: 12,
+                      borderRadius: radius.pill,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: active ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: active ? colors.text : colors.textMuted,
+                        fontSize: 12.5,
+                      }}
+                    >
+                      {filter.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={type.label}>Sort</Text>
+              <Options
+                options={[
+                  { value: 'page', label: 'Page' },
+                  { value: 'recent', label: 'Recent' },
+                  { value: 'type', label: 'Type' },
+                ]}
+                value={annSort}
+                onChange={setAnnSort}
+              />
+            </View>
+
+            <ScrollView style={{ maxHeight: 300 }} contentContainerStyle={{ gap: 2 }}>
+              {annotations.length === 0 ? (
+                <Text style={[type.meta, { padding: 10 }]}>
+                  Nothing here yet. Long-press a passage to highlight it or attach a note.
+                </Text>
+              ) : (
+                annotations.map((row) => (
+                  <SheetRow
+                    key={row.id}
+                    icon={ANNOTATION_META[row.kind]?.icon ?? 'create-outline'}
+                    tint={
+                      ANNOTATION_COLORS[row.color ?? ANNOTATION_META[row.kind]?.color ?? 'yellow'] ??
+                      colors.text
+                    }
+                    title={
+                      row.body ||
+                      (row.anchor_text
+                        ? `“${row.anchor_text.slice(0, 80)}${
+                            row.anchor_text.length > 80 ? '…' : ''
+                          }”`
+                        : ANNOTATION_META[row.kind]?.label ?? 'Mark')
+                    }
+                    subtitle={`${ANNOTATION_META[row.kind]?.label ?? row.kind}${
+                      row.page ? ` · Page ${row.page}` : ''
+                    }${row.chapter ? ` · ${row.chapter}` : ''}`}
+                    onPress={() => row.page && jumpTo(row.page)}
+                  />
+                ))
+              )}
+            </ScrollView>
+          </View>
+        )}
       </Sheet>
 
-      {/* Selection sheet — highlight / note on a long-pressed paragraph. */}
+      {/* Selection — highlight in any of five colours, or attach a mark. */}
       <Sheet
         visible={!!selection}
         onClose={() => {
@@ -765,7 +1230,19 @@ export function ReaderScreen({
                       gap: 6,
                     }}
                   >
-                    <Text style={type.eyebrow}>{annotation.kind}</Text>
+                    <Text
+                      style={[
+                        type.label,
+                        {
+                          color:
+                            ANNOTATION_COLORS[
+                              annotation.color ?? ANNOTATION_META[annotation.kind]?.color ?? 'yellow'
+                            ] ?? colors.textSoft,
+                        },
+                      ]}
+                    >
+                      {ANNOTATION_META[annotation.kind]?.label ?? annotation.kind}
+                    </Text>
                     {!!annotation.body && <Text style={type.body}>{annotation.body}</Text>}
                     <Pressable
                       onPress={() => void marks.remove(annotation.id)}
@@ -778,55 +1255,124 @@ export function ReaderScreen({
                   </View>
                 ))}
 
-                <View style={{ flexDirection: 'row', gap: 10 }}>
-                  <GhostButton
-                    style={{ flex: 1 }}
-                    label={
-                      selection.existing.some((a) => a.kind === 'highlight')
-                        ? 'Unhighlight'
-                        : 'Highlight'
-                    }
-                    onPress={() => {
-                      void (async () => {
-                        const highlight = selection.existing.find((a) => a.kind === 'highlight');
-                        if (highlight) await marks.remove(highlight.id);
-                        else
-                          await marks.add({
-                            kind: 'highlight',
-                            page,
-                            paragraph: selection.paragraph,
-                            anchorText: selection.text,
-                            chapter: chapter?.title ?? null,
-                          });
-                        setSelection(null);
-                      })();
-                    }}
-                  />
-                  <GhostButton
-                    style={{ flex: 1 }}
-                    label="Add note"
-                    onPress={() => setNoteDraft('')}
-                  />
+                {/* The five-colour palette, as the web's highlight picker. */}
+                <View style={{ gap: 8 }}>
+                  <Text style={type.label}>Highlight</Text>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    {HIGHLIGHT_COLORS.map((name) => {
+                      const existing = selection.existing.find((a) => a.kind === 'highlight');
+                      const active = existing?.color === name;
+                      return (
+                        <Pressable
+                          key={name}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Highlight ${name}`}
+                          accessibilityState={{ selected: active }}
+                          onPress={() => {
+                            void (async () => {
+                              if (existing) await marks.remove(existing.id);
+                              if (!active) {
+                                await marks.add({
+                                  kind: 'highlight',
+                                  page: selection.page,
+                                  paragraph: selection.paragraph,
+                                  anchorText: selection.text,
+                                  chapter: chapter?.title ?? null,
+                                  color: name,
+                                });
+                              }
+                              setSelection(null);
+                            })();
+                          }}
+                          style={{
+                            flex: 1,
+                            height: 40,
+                            borderRadius: radius.sm,
+                            backgroundColor: `${ANNOTATION_COLORS[name]}40`,
+                            borderWidth: active ? 2 : StyleSheet.hairlineWidth,
+                            borderColor: active ? ANNOTATION_COLORS[name] : colors.border,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {active && (
+                            <Ionicons name="checkmark" size={16} color={ANNOTATION_COLORS[name]} />
+                          )}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* The four written kinds the API knows. */}
+                <View style={{ gap: 8 }}>
+                  <Text style={type.label}>Add</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {(['note', 'quote', 'summary', 'question'] as AnnotationKind[]).map((kind) => (
+                      <Pressable
+                        key={kind}
+                        onPress={() => setNoteDraft({ kind, body: '' })}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add ${ANNOTATION_META[kind].label}`}
+                        style={({ pressed }) => ({
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 7,
+                          paddingHorizontal: 14,
+                          height: 40,
+                          borderRadius: radius.pill,
+                          borderWidth: StyleSheet.hairlineWidth,
+                          borderColor: colors.borderStrong,
+                          backgroundColor: pressed
+                            ? 'rgba(255,255,255,0.08)'
+                            : 'rgba(255,255,255,0.03)',
+                        })}
+                      >
+                        <Ionicons
+                          name={ANNOTATION_META[kind].icon}
+                          size={14}
+                          color={ANNOTATION_COLORS[ANNOTATION_META[kind].color]}
+                        />
+                        <Text style={{ color: colors.text, fontSize: 13.5 }}>
+                          {ANNOTATION_META[kind].label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
               </>
             ) : (
               <>
+                <Text style={type.label}>{ANNOTATION_META[noteDraft.kind].label}</Text>
                 <TextInput
-                  style={[shared.input, { minHeight: 90, textAlignVertical: 'top' }]}
-                  placeholder="What did this make you think?"
-                  placeholderTextColor={colors.textFaint}
-                  value={noteDraft}
-                  onChangeText={setNoteDraft}
+                  style={[shared.input, { minHeight: 96, textAlignVertical: 'top' }]}
+                  placeholder={
+                    noteDraft.kind === 'question'
+                      ? 'What do you want to come back to?'
+                      : noteDraft.kind === 'summary'
+                        ? 'Sum this passage up in your own words'
+                        : noteDraft.kind === 'quote'
+                          ? 'Why is this worth keeping?'
+                          : 'What did this make you think?'
+                  }
+                  placeholderTextColor="rgba(255,255,255,0.44)"
+                  value={noteDraft.body}
+                  onChangeText={(body) => setNoteDraft({ ...noteDraft, body })}
                   multiline
                   autoFocus
                 />
                 <View style={{ flexDirection: 'row', gap: 10 }}>
-                  <View style={{ flex: 1 }}>
-                    <GhostButton label="Cancel" onPress={() => setNoteDraft(null)} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <PrimaryButton label="Save note" onPress={() => void saveNote()} />
-                  </View>
+                  <GhostButton
+                    label="Cancel"
+                    onPress={() => setNoteDraft(null)}
+                    style={{ flex: 1 }}
+                  />
+                  <PrimaryButton
+                    label={`Save ${ANNOTATION_META[noteDraft.kind].label.toLowerCase()}`}
+                    onPress={() => void saveNote()}
+                    disabled={!noteDraft.body.trim()}
+                    style={{ flex: 1 }}
+                  />
                 </View>
               </>
             )}
@@ -840,6 +1386,163 @@ export function ReaderScreen({
 /* ------------------------------------------------------------------------ */
 /* Pieces                                                                    */
 /* ------------------------------------------------------------------------ */
+
+/** A labelled block in the settings sheet (`.setting-label` + its control). */
+function Setting({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <View style={{ gap: 9 }}>
+      <Text style={type.label}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
+/** The web's segmented option rows, used for mode, spacing, width and sort. */
+function Options<T extends string | number>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        padding: 3,
+        borderRadius: radius.sm,
+        backgroundColor: 'rgba(255,255,255,0.06)',
+      }}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={String(option.value)}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={option.label}
+            style={{
+              flex: 1,
+              minHeight: 36,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 8,
+              backgroundColor: active ? 'rgba(255,255,255,0.16)' : 'transparent',
+            }}
+          >
+            <Text
+              style={{
+                color: active ? colors.text : colors.textMuted,
+                fontSize: 13,
+                fontWeight: active ? '600' : '400',
+              }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function StepButton({
+  glyph,
+  label,
+  onPress,
+}: {
+  glyph: string;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        width: 44,
+        height: 40,
+        borderRadius: radius.sm,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: colors.borderStrong,
+        backgroundColor: pressed ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+      })}
+    >
+      <Text style={{ color: colors.text, fontSize: 15 }}>{glyph}</Text>
+    </Pressable>
+  );
+}
+
+/** A draggable track, for the font-size slider. */
+function Track({
+  fraction,
+  onSeek,
+}: {
+  fraction: number;
+  onSeek: (fraction: number) => void;
+}) {
+  const [width, setWidth] = useState(0);
+  const widthRef = useRef(0);
+  widthRef.current = width;
+  const seek = useRef(onSeek);
+  seek.current = onSeek;
+
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (event) =>
+          seek.current(clamp01(event.nativeEvent.locationX / (widthRef.current || 1))),
+        onPanResponderMove: (event) =>
+          seek.current(clamp01(event.nativeEvent.locationX / (widthRef.current || 1))),
+      }),
+    [],
+  );
+
+  const value = clamp01(fraction);
+  return (
+    <View
+      {...responder.panHandlers}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      accessibilityRole="adjustable"
+      accessibilityLabel="Font size"
+      style={{ height: 36, justifyContent: 'center' }}
+    >
+      <View
+        pointerEvents="none"
+        style={{
+          height: 4,
+          borderRadius: 2,
+          backgroundColor: 'rgba(255,255,255,0.16)',
+          overflow: 'hidden',
+        }}
+      >
+        <View style={{ width: `${value * 100}%`, height: '100%', backgroundColor: colors.violet }} />
+      </View>
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: Math.max(0, value * Math.max(0, width - 16)),
+          width: 16,
+          height: 16,
+          borderRadius: 8,
+          backgroundColor: colors.text,
+        }}
+      />
+    </View>
+  );
+}
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 function ToolbarButton({
   icon,
@@ -878,20 +1581,21 @@ function ToolbarButton({
 
 /** The chapter a page falls in, for bookmark subtitles. */
 function chapterTitleFor(toc: PdfTocEntry[], page: number): string | undefined {
-  const entry = chapterAt(toc, page);
-  return entry?.title;
+  return chapterAt(toc, page)?.title;
 }
 
-/** One tappable row in the Marks / Notes sheets. */
+/** One tappable row in the Marks / Notes lists. */
 function SheetRow({
   icon,
   title,
   subtitle,
+  tint = colors.textMuted,
   onPress,
 }: {
   icon: IconName;
   title: string;
   subtitle?: string;
+  tint?: string;
   onPress: () => void;
 }) {
   return (
@@ -909,7 +1613,7 @@ function SheetRow({
         backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
       })}
     >
-      <Ionicons name={icon} size={16} color={colors.textMuted} />
+      <Ionicons name={icon} size={16} color={tint} />
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={{ color: colors.textStrong, fontSize: 14 }} numberOfLines={2}>
           {title}
@@ -926,7 +1630,7 @@ function SheetRow({
 }
 
 /**
- * Draggable progress slider. Pure PanResponder on a measured track — no
+ * The dock's progress slider. Pure PanResponder on a measured track — no
  * native slider dependency, which keeps the APK build untouched.
  */
 function PageSlider({
@@ -952,8 +1656,11 @@ function PageSlider({
   const pageFor = (x: number): number => {
     const w = widthRef.current;
     if (w <= 0) return 1;
-    const fraction = Math.max(0, Math.min(1, x / w));
-    return Math.max(1, Math.min(countRef.current, Math.round(fraction * (countRef.current - 1)) + 1));
+    const fraction = clamp01(x / w);
+    return Math.max(
+      1,
+      Math.min(countRef.current, Math.round(fraction * (countRef.current - 1)) + 1),
+    );
   };
 
   const responder = useMemo(
@@ -1000,13 +1707,7 @@ function PageSlider({
             overflow: 'hidden',
           }}
         >
-          <View
-            style={{
-              width: `${fraction * 100}%`,
-              height: '100%',
-              backgroundColor: theme.muted,
-            }}
-          />
+          <View style={{ width: `${fraction * 100}%`, height: '100%', backgroundColor: theme.muted }} />
         </View>
         <View
           pointerEvents="none"
@@ -1020,43 +1721,6 @@ function PageSlider({
           }}
         />
       </View>
-    </View>
-  );
-}
-
-function Stepper({
-  label,
-  value,
-  onLess,
-  onMore,
-}: {
-  label: string;
-  value: string;
-  onLess: () => void;
-  onMore: () => void;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-      <Text style={[type.body, { flex: 1, color: colors.text }]}>{label}</Text>
-      <Pressable
-        onPress={onLess}
-        accessibilityRole="button"
-        accessibilityLabel={`Decrease ${label.toLowerCase()}`}
-        style={[shared.ghostButton, { paddingVertical: 8, paddingHorizontal: 16 }]}
-      >
-        <Text style={{ color: colors.text, fontSize: 16 }}>−</Text>
-      </Pressable>
-      <Text style={{ color: colors.textMuted, fontSize: 14, width: 44, textAlign: 'center' }}>
-        {value}
-      </Text>
-      <Pressable
-        onPress={onMore}
-        accessibilityRole="button"
-        accessibilityLabel={`Increase ${label.toLowerCase()}`}
-        style={[shared.ghostButton, { paddingVertical: 8, paddingHorizontal: 16 }]}
-      >
-        <Text style={{ color: colors.text, fontSize: 16 }}>+</Text>
-      </Pressable>
     </View>
   );
 }

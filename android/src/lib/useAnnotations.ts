@@ -24,6 +24,8 @@ export interface Bookmark {
 export interface AnnotationsState {
   /** Keyed `page:paragraph`, so a paragraph's marks are one lookup away. */
   byAnchor: Map<string, AnnotationRow[]>;
+  /** Every annotation, newest first — what the Notes list reads. */
+  rows: AnnotationRow[];
   bookmarks: Bookmark[];
   loading: boolean;
   error: string | null;
@@ -34,6 +36,8 @@ export interface AnnotationsState {
     anchorText: string;
     body?: string;
     chapter?: string | null;
+    /** The web's accent palette: yellow, lavender, cyan, mint, coral. */
+    color?: string | null;
   }) => Promise<void>;
   remove: (id: string) => Promise<void>;
   toggleBookmark: (page: number) => Promise<void>;
@@ -102,6 +106,7 @@ export function useAnnotations(itemId: string | null): AnnotationsState {
           anchor_text: input.anchorText.slice(0, 600),
           body: input.body ?? null,
           chapter: input.chapter ?? null,
+          color: input.color ?? null,
         });
         setRows((current) => [created, ...current]);
       } catch (caught) {
@@ -142,6 +147,7 @@ export function useAnnotations(itemId: string | null): AnnotationsState {
 
   return {
     byAnchor,
+    rows,
     bookmarks,
     loading,
     error,

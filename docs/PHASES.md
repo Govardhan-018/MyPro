@@ -383,6 +383,25 @@ prose.** Finishes Phase 8.
   `.npmrc` for the APK. `@babel/runtime` is now an explicit dependency of the
   Android app, which is what lets Metro resolve it under either layout.
 
+- ✅ **13.8** Reader parity, and the typeface (Nov 2026). The phone's
+  reader now carries the web reader's controls value for value: both reading
+  modes (continuous is a virtualised flow of page panels, paginated keeps the
+  swipe), the three background themes (dark / sepia / paper), font size
+  14-22, line spacing 1.5 / 1.7 / 1.9 and the three reading widths, all
+  persisted; in-book search over the synced text, capped at 120 hits, each
+  jumping to its page; Contents, Pages, Marks and Notes, with the five-colour
+  highlight palette (`--ann-*`) and all five annotation kinds, filtered,
+  sorted and searched as the browser does. Highlight colour round-trips
+  through `annotations.color`, which the API has always accepted.
+  Pages is a page map rather than thumbnails: there is no PDF on the phone to
+  draw them from, which is the same reason the reader shows reflowed text.
+  DM Sans is bundled (`@expo-google-fonts/dm-sans`) and resolved per weight
+  by `src/components/Typography.tsx`, since React Native has no font
+  inheritance; `expo-blur` and `expo-linear-gradient` supply the glass and
+  gradients CSS gave the web. `@babel/runtime` is an explicit dependency so
+  Metro resolves it under either linker layout, and `android/android/` is
+  ignored as prebuild output.
+
 - ✅ **13.6** Sign-in parity and the `/api/v1` trap (Nov 2026). The Android
   sign-in screen now mirrors the web login page — brand bar with the Color
   Mode toggle, the rolling-cubes mark (rebuilt with RN `Animated`, so no
