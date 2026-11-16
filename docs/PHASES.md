@@ -325,6 +325,14 @@ Two differences are architecture rather than backlog, and should not be
 is a map of page numbers instead of thumbnails. Both follow from the file
 never leaving the device that imported it.
 
+**It still does not look exactly like the web, and four rounds of
+hand-matching did not change that.** 8,936 lines of Android UI are maintained
+by hand against the web's 17,796 lines of UI and CSS, with only 220 lines
+genuinely native — so the two drift by default, and closing the visible gaps
+only moves them. `docs/ANDROID_UPGRADE.md` has the measurement, the options
+and the recommendation (a WebView shell that keeps the native clock), plus a
+two-minute test to run before committing to any of it.
+
 - ✅ **13.1** Today, Assistant chat, Calendar, Health, Knowledge screens on
   Android, reusing `shared/` — done as 8.3.
 - **13.2** A local cache so the app is useful with no connection. **The only
