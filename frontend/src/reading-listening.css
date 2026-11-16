@@ -1608,11 +1608,26 @@
 .podcast-mini-bar {
   display: none;
 }
+/* When minimised the backdrop must not cover or blur the app: it becomes an
+   inert, transparent passthrough so taps reach the page, and it drops below the
+   nav sheet (z 40) so opening the nav drawer covers the mini bar. */
+.modal-backdrop.podcast-backdrop.collapsed {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+  display: block;
+  padding: 0;
+  z-index: 38;
+}
 .mypro-podcast-modal.collapsed {
   position: fixed;
   left: 10px;
   right: 10px;
-  bottom: calc(80px + env(safe-area-inset-bottom));
+  /* Sit just above the floating nav bar, never over it. */
+  bottom: calc(102px + env(safe-area-inset-bottom));
   top: auto;
   width: auto;
   max-width: none;
@@ -1622,10 +1637,13 @@
   padding: 0;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(18, 18, 22, 0.94);
+  background: rgba(18, 18, 22, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
   animation: none;
-  z-index: 45;
+  pointer-events: auto;
+  z-index: 38;
 }
 .mypro-podcast-modal.collapsed .podcast-modal-header,
 .mypro-podcast-modal.collapsed .podcast-player-content,
@@ -1725,7 +1743,7 @@
 
 /* Keep page content clear of the mini bar (which sits just above the nav). */
 .mini-player-active .view-scroll {
-  padding-bottom: calc(176px + env(safe-area-inset-bottom)) !important;
+  padding-bottom: calc(182px + env(safe-area-inset-bottom)) !important;
 }
 
 /* ================= Simplified secondary action + notes ================= */

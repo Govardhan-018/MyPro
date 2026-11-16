@@ -287,10 +287,10 @@ export function MyProPodcastPlayer({
   const expand = () => onExpandedChange?.(true);
 
   return (
-    <>
-      {expanded && (
-        <div className="modal-backdrop podcast-backdrop" onMouseDown={collapse} />
-      )}
+    <div
+      className={`modal-backdrop podcast-backdrop ${expanded ? "" : "collapsed"}`}
+      onMouseDown={expanded ? collapse : undefined}
+    >
       <div
         className={`mypro-podcast-modal glass-card ${colorMode ? "color-mode" : ""} ${
           expanded ? "" : "collapsed"
@@ -712,6 +712,6 @@ export function MyProPodcastPlayer({
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }
