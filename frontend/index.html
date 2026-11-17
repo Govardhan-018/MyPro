@@ -4,15 +4,18 @@
     <!-- figma:head-start -->
     <meta charset="UTF-8" />
     <!--
-      viewport-fit=cover lets the app paint under the notch and the home
-      indicator; the safe-area insets in the CSS keep content clear of both.
-      interactive-widget=resizes-content makes the on-screen keyboard shrink
-      the viewport, so `dvh` sizing and bottom-anchored sheets stay above it
-      instead of being covered.
+      No `viewport-fit=cover`. It lets the page paint under the system bars,
+      but Android browsers report `env(safe-area-inset-bottom)` as 0 in an
+      ordinary tab — so there is nothing to compensate with, and the bottom
+      navigation ended up underneath the system navigation bar with its
+      labels sliced off.
+
+      `interactive-widget=resizes-content` stays: it makes the on-screen
+      keyboard shrink the viewport, so bottom-anchored sheets sit above it.
     -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#000000" />
     <title><!-- figma:title --></title>

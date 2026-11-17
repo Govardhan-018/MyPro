@@ -383,11 +383,19 @@ export function MyProPodcastPlayer({
   const collapse = () => onExpandedChange?.(false);
   const expand = () => onExpandedChange?.(true);
 
-  return (
-    <div
-      className={`modal-backdrop podcast-backdrop ${expanded ? "" : "collapsed"}`}
-      onMouseDown={expanded ? collapse : undefined}
-    >
+  /*
+   * The backdrop exists only while the player is expanded.
+   *
+   * It used to wrap the mini bar too, as a 0x0 pointer-events:none shell —
+   * but `.modal-backdrop` carries `backdrop-filter`, and a filtered element
+   * becomes the containing block for any `position: fixed` descendant. The
+   * mini bar is fixed, so it was being positioned against that empty 0x0 box
+   * at the top of the page instead of against the viewport: `bottom: 106px`
+   * resolved to 106px *above* y=0, parking the bar off the top of the screen
+   * where it simply could not be seen. Collapsed, there is now no wrapper at
+   * all for it to be caught by.
+   */
+  const player = (
       <div
         className={`mypro-podcast-modal glass-card ${colorMode ? "color-mode" : ""} ${
           expanded ? "" : "collapsed"
@@ -867,6 +875,13 @@ export function MyProPodcastPlayer({
           </div>
         )}
       </div>
+  );
+
+  if (!expanded) return player;
+
+  return (
+    <div className="modal-backdrop podcast-backdrop" onMouseDown={collapse}>
+      {player}
     </div>
   );
 }

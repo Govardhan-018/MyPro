@@ -56,6 +56,9 @@ export function MobileNavSheet({
   const [drag, setDrag] = useState<number | null>(null);
   const startY = useRef(0);
   const sheetRef = useRef<HTMLDivElement>(null);
+  /** The always-visible parts, measured for `--mobile-nav-height`. */
+  const grabberRef = useRef<HTMLButtonElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
 
   const close = useCallback(() => setOpen(false), []);
 
@@ -70,30 +73,35 @@ export function MobileNavSheet({
   }, [open, close]);
 
   /**
-   * Publish the collapsed bar's height as `--mobile-nav-height`.
+   * Publish the bar's height as `--mobile-nav-height`, for anything that has
+   * to sit clear of it (the podcast mini-player, a page's scroll padding).
    *
-   * Everything that has to sit clear of this bar — the podcast mini-player,
-   * the scroll padding under a page — used to carry its own hard-coded copy
-   * of that number, so growing the drag handle by eight pixels silently put
-   * the mini-player on top of the nav. Measured once and shared instead.
-   * Only the collapsed height is published; the expanded sheet is a layer
-   * over the page, not something to reserve room for.
+   * It measures the grabber and the tab row — the two parts that are always
+   * on screen — and never the <nav> itself. Measuring the nav meant that
+   * closing the drawer published whatever height the sheet happened to be
+   * mid-transition, often several hundred pixels, which then stuck: the
+   * mini-player was pushed that far up and simply vanished off the top.
+   * These two children do not change height with the drawer, so there is
+   * nothing to re-check when it opens.
    */
   useEffect(() => {
-    const node = sheetRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    const grabber = grabberRef.current;
+    const tabs = tabsRef.current;
+    if (!grabber || !tabs || typeof ResizeObserver === "undefined") return;
     const publish = () => {
-      if (open) return;
-      const height = Math.round(node.getBoundingClientRect().height);
+      const height = Math.round(
+        grabber.getBoundingClientRect().height + tabs.getBoundingClientRect().height,
+      );
       if (height > 0) {
         document.documentElement.style.setProperty("--mobile-nav-height", `${height}px`);
       }
     };
     publish();
     const observer = new ResizeObserver(publish);
-    observer.observe(node);
+    observer.observe(grabber);
+    observer.observe(tabs);
     return () => observer.disconnect();
-  }, [open]);
+  }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
     startY.current = e.clientY;
@@ -147,6 +155,7 @@ export function MobileNavSheet({
       >
         <button
           type="button"
+          ref={grabberRef}
           className="mobile-nav-grabber"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -160,7 +169,7 @@ export function MobileNavSheet({
           <ChevronUp size={13} className={open ? "flipped" : ""} />
         </button>
 
-        <div className="mobile-nav-tabs">
+        <div className="mobile-nav-tabs" ref={tabsRef}>
           {tabIds.map((id) => {
             const item = items.find((navItem) => navItem.id === id);
             if (!item) return null;

@@ -7209,13 +7209,8 @@ button {
   .learning-row-menu > button {
     min-width: 44px;
   }
-  /* A drag strip rather than a button, but it is still the only way to
-     reach half the sections, so it gets a finger's worth of height. */
-  .dark-app .bottom-nav .mobile-nav-grabber,
-  .mobile-nav-grabber {
-    min-height: 40px;
-    padding: 11px 0 6px;
-  }
+  /* The grabber keeps the height the design gave it. Forcing it taller
+     pushed the tab labels down into the system navigation bar. */
 }
 
 /* Modal controls need a finger too — measured at 320px, the close
