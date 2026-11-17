@@ -1614,19 +1614,23 @@
 /* Minimised: the backdrop must not cover the screen at all (no dark wash, no
    blur). It collapses to zero size; the mini bar is position:fixed so it still
    shows, and the app underneath is fully interactive. */
+/*
+ * Collapsed, the wrapper generates no box at all.
+ *
+ * `display: contents` is the point: `.modal-backdrop` carries
+ * `backdrop-filter`, and a filtered element is the containing block for every
+ * `position: fixed` descendant — so the mini bar was being positioned against
+ * this empty shell rather than the viewport, which threw it off the top of the
+ * screen. An element with no box cannot be a containing block. The wrapper
+ * still has to exist in the DOM (removing it remounts the player and destroys
+ * the YouTube iframe), it just stops being a box.
+ */
 .modal-backdrop.podcast-backdrop.collapsed {
-  position: static;
-  inset: auto;
-  width: 0;
-  height: 0;
-  padding: 0;
-  margin: 0;
+  display: contents;
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 38;
+  animation: none;
 }
 .mypro-podcast-modal.collapsed {
   position: fixed;
@@ -1654,9 +1658,32 @@
   z-index: 38;
 }
 .mypro-podcast-modal.collapsed .podcast-modal-header,
-.mypro-podcast-modal.collapsed .podcast-player-content,
 .mypro-podcast-modal.collapsed .podcast-editor-pane {
   display: none !important;
+}
+
+/*
+ * The player pane is never `display: none`.
+ *
+ * It holds the YouTube iframe, and taking an iframe out of the render tree
+ * makes the browser suspend it — so minimising the player stopped the audio
+ * dead and left the mini bar's play button controlling nothing. Stowing it as
+ * a 1px sliver keeps it rendered and playing, which is exactly what the
+ * "Audio Only" mode already relied on.
+ */
+.mypro-podcast-modal.collapsed .podcast-player-content,
+.podcast-player-content.stowed {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0.01;
+  pointer-events: none;
 }
 .mypro-podcast-modal.collapsed .podcast-mini-bar {
   display: flex;

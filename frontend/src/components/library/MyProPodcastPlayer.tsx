@@ -384,18 +384,24 @@ export function MyProPodcastPlayer({
   const expand = () => onExpandedChange?.(true);
 
   /*
-   * The backdrop exists only while the player is expanded.
+   * One wrapper, always rendered, expanded or not.
    *
-   * It used to wrap the mini bar too, as a 0x0 pointer-events:none shell —
-   * but `.modal-backdrop` carries `backdrop-filter`, and a filtered element
-   * becomes the containing block for any `position: fixed` descendant. The
-   * mini bar is fixed, so it was being positioned against that empty 0x0 box
-   * at the top of the page instead of against the viewport: `bottom: 106px`
-   * resolved to 106px *above* y=0, parking the bar off the top of the screen
-   * where it simply could not be seen. Collapsed, there is now no wrapper at
-   * all for it to be caught by.
+   * It cannot be conditional: changing the shape of the tree around the
+   * modal makes React unmount and remount it, which destroys the YouTube
+   * iframe inside — so minimising killed the audio outright.
+   *
+   * Collapsed, the wrapper is `display: contents` (see the stylesheet), so
+   * it generates no box at all. That matters because `.modal-backdrop`
+   * carries `backdrop-filter`, and a filtered element becomes the containing
+   * block for `position: fixed` descendants: the mini bar was being placed
+   * against that empty shell instead of the viewport, which put it off the
+   * top of the screen. No box, no containing block, no remount.
    */
-  const player = (
+  return (
+    <div
+      className={`modal-backdrop podcast-backdrop ${expanded ? "" : "collapsed"}`}
+      onMouseDown={expanded ? collapse : undefined}
+    >
       <div
         className={`mypro-podcast-modal glass-card ${colorMode ? "color-mode" : ""} ${
           expanded ? "" : "collapsed"
@@ -496,7 +502,7 @@ export function MyProPodcastPlayer({
         </div>
 
         {/* ================= METADATA EDITOR VIEW ================= */}
-        {isEditingMeta ? (
+        {isEditingMeta && (
           <div className="podcast-editor-pane">
             <div className="editor-heading">
               <h3>Edit Episode & YouTube Link</h3>
@@ -581,9 +587,24 @@ export function MyProPodcastPlayer({
               </button>
             </div>
           </div>
-        ) : (
-          /* ================= PLAYER VIEW ================= */
-          <div className="podcast-player-content">
+        )}
+
+        {/*
+          ================= PLAYER VIEW =================
+          Always mounted, never `display: none`.
+
+          The YouTube iframe lives in here. Unmounting it (the edit pane used
+          to replace this whole block) destroys the player, and hiding it with
+          `display: none` (which is what minimising did) takes it out of the
+          render tree, which the browser treats as a reason to suspend it — so
+          the audio stopped the moment you minimised, and the mini bar's play
+          button then had nothing left to control. Hidden states shrink it to a
+          1px sliver instead, the same trick "Audio Only" already used.
+        */}
+        <div
+          className={`podcast-player-content ${isEditingMeta ? "stowed" : ""}`}
+          aria-hidden={isEditingMeta || !expanded}
+        >
             {/* Main Stage: Artwork / Embedded Player.
                 One player instance serves both modes — "Audio Only" shrinks it
                 rather than unmounting it, so switching never interrupts what
@@ -864,8 +885,7 @@ export function MyProPodcastPlayer({
                 ))}
               </div>
             </div>
-          </div>
-        )}
+        </div>
 
         {/* Toast */}
         {toastMessage && (
@@ -875,13 +895,6 @@ export function MyProPodcastPlayer({
           </div>
         )}
       </div>
-  );
-
-  if (!expanded) return player;
-
-  return (
-    <div className="modal-backdrop podcast-backdrop" onMouseDown={collapse}>
-      {player}
     </div>
   );
 }
