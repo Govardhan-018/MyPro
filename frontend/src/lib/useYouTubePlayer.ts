@@ -173,6 +173,9 @@ export function useYouTubePlayer({
     else player.unMute();
   }, []);
 
+  // `currentTime` ticks while playing, so this object changes identity several
+  // times a second. Callers must therefore depend on the individual callbacks
+  // (which are stable) rather than on the whole object.
   return {
     containerRef,
     ready,

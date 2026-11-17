@@ -60,7 +60,7 @@ button {
 }
 
 .app-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   background:
     radial-gradient(circle at 75% 0%, rgba(255, 255, 255, 0.08), transparent 30%), #000000;
@@ -71,7 +71,7 @@ button {
 .sidebar {
   width: 244px;
   flex: 0 0 244px;
-  height: 100vh;
+  height: 100dvh;
   position: sticky;
   top: 0;
   z-index: 30;
@@ -162,7 +162,7 @@ button {
 .auth-splash {
   display: grid;
   place-items: center;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 .nav-label {
   display: block;
@@ -223,7 +223,7 @@ button {
 .app-main {
   flex: 1;
   min-width: 0;
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -2143,7 +2143,10 @@ button {
   white-space: nowrap;
   font-size: 11px;
 }
+/* This button opens the row's overflow menu; it lives in a positioned
+   wrapper now, so the shared icon-button sizing has to follow it there. */
 .learning-title-line > button,
+.learning-row-menu > button,
 .recent-note-row > button,
 .collection-edit {
   width: 29px;
@@ -2157,6 +2160,7 @@ button {
   place-items: center;
 }
 .learning-title-line > button:hover,
+.learning-row-menu > button:hover,
 .recent-note-row > button:hover,
 .collection-edit:hover {
   color: #ffffff;
@@ -2921,7 +2925,7 @@ button {
 
 /* Welcome */
 .welcome {
-  min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
   overflow: hidden;
   display: grid;
@@ -3472,7 +3476,7 @@ button {
 
 /* Premium login and welcome experience */
 .login-welcome {
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 0 42px;
   display: block;
   overflow-x: hidden;
@@ -3513,7 +3517,7 @@ button {
 }
 .login-layout {
   width: min(1200px, 100%);
-  min-height: calc(100vh - 188px);
+  min-height: calc(100dvh - 188px);
   margin: 0 auto;
   padding: 28px 0 46px;
   display: grid;
@@ -4232,7 +4236,9 @@ button {
     width: 255px;
   }
   .app-main {
-    height: calc(100vh - 70px);
+    /* dvh, not vh: the on-screen keyboard shrinks the viewport, and a
+       vh-sized shell left the composer and form buttons underneath it. */
+    height: calc(100dvh - 70px);
   }
   .mobile-header {
     height: 61px;
@@ -5576,7 +5582,8 @@ button {
   .learning-title-line {
     align-items: flex-start;
   }
-  .learning-title-line > button {
+  .learning-title-line > button,
+  .learning-row-menu > button {
     width: 36px;
     height: 36px;
     margin: -6px -8px 0 0;
@@ -7075,4 +7082,210 @@ button {
 .settings-inline-action:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* ===================================================================
+   Controls added while fixing dead UI (library row menu, notification
+   panel dismissal). Mobile-first: touch targets are at least 44px and
+   popovers are pinned to the viewport on a phone rather than to a
+   container that may be clipped.
+   =================================================================== */
+
+.learning-row-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.learning-row-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+}
+.learning-row-menu-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 45;
+  display: flex;
+  min-width: 164px;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 13px;
+  background: #0c0c0c;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.6);
+}
+.learning-row-menu-pop button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  text-align: left;
+}
+.learning-row-menu-pop button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+}
+.learning-row-menu-pop button.danger {
+  color: #ff9b9b;
+}
+.learning-row-menu-pop button.danger:hover {
+  background: rgba(255, 110, 110, 0.12);
+}
+
+.notification-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+}
+.notification-panel-close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--soft);
+}
+.notification-panel-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+}
+
+@media (max-width: 760px) {
+  /* Not `position: fixed`: the card above this carries `backdrop-filter`,
+     which makes it the containing block for fixed descendants — the sheet
+     landed 128px below the fold. Absolute, anchored to the button, with
+     the row scrolled into view by the handler that opens it. */
+  .learning-row-menu-pop {
+    right: 0;
+    min-width: 190px;
+  }
+  .learning-row-menu-pop button {
+    min-height: 48px;
+    font-size: 15px;
+  }
+  .notification-panel-close {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* ===================================================================
+   Touch targets on phones.
+   Measured in the browser at 375px: several controls sat between 18px
+   and 40px tall, under the ~44px a finger needs. These raise the box
+   without changing type size, colour or shape, so the design is the
+   same — it is just reachable.
+   =================================================================== */
+@media (max-width: 760px) {
+  .mobile-header-button {
+    width: 44px;
+    height: 44px;
+  }
+  .calendar-actions .segmented button,
+  .segmented button {
+    min-height: 44px;
+  }
+  .library-filters button,
+  .library-categories button {
+    min-height: 44px;
+  }
+  .learning-footer button,
+  .learning-row-menu > button,
+  .illness-record-footer button,
+  .card-heading .text-button,
+  .collections-card .text-button {
+    min-height: 44px;
+  }
+  .learning-row-menu > button {
+    min-width: 44px;
+  }
+  /* A drag strip rather than a button, but it is still the only way to
+     reach half the sections, so it gets a finger's worth of height. */
+  .dark-app .bottom-nav .mobile-nav-grabber,
+  .mobile-nav-grabber {
+    min-height: 40px;
+    padding: 11px 0 6px;
+  }
+}
+
+/* Modal controls need a finger too — measured at 320px, the close
+   button was 34px and the "All day" checkbox a 16px square. */
+@media (max-width: 760px) {
+  .modal-heading .icon-button,
+  .assistant-settings-head .quiet-button {
+    width: 44px;
+    height: 44px;
+  }
+  .health-form-footer button,
+  .modal-footer button {
+    min-height: 44px;
+  }
+  .field-label input[type="checkbox"],
+  .settings-toggle-row input[type="checkbox"],
+  .settings-panel input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+  }
+  /* Under 16px, iOS Safari zooms the page when a field takes focus and
+     leaves the layout offset afterwards. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+.field-checkbox {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: #ffffff;
+}
+@media (max-width: 760px) {
+  .field-checkbox {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+@media (max-width: 760px) {
+  /* The assistant's two main controls measured 19px and 34px square. */
+  .assistant-menu > .quiet-button {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    margin-right: -8px;
+  }
+  .composer-tools .send-button {
+    width: 44px;
+    height: 44px;
+  }
+  .composer-tools {
+    justify-content: flex-end;
+  }
+}
+
+/* A page's one-line context: a count, not a paragraph explaining the page. */
+.page-heading .page-meta {
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+@media (max-width: 760px) {
+  .page-heading .page-meta {
+    font-size: 13px;
+  }
 }

@@ -85,6 +85,83 @@ const ANNOTATION_META: Record<
 
 const HIGHLIGHT_COLORS: AnnotationColor[] = ["yellow", "lavender", "cyan", "mint", "coral"];
 
+/** Enough hits to be useful; past this the count is shown as "200+". */
+const SEARCH_LIMIT = 200;
+
+/** The three spacings worth one tap; the slider covers everything between. */
+const LINE_PRESETS = [
+  { value: 1.5, label: "Snug" },
+  { value: 1.7, label: "Normal" },
+  { value: 1.9, label: "Airy" },
+] as const;
+
+/** Any spacing the slider can produce, not just the presets. */
+const LINE_MIN = 1.2;
+const LINE_MAX = 2.4;
+
+/* ---- Display preferences -------------------------------------------------
+ * Theme, type size, spacing, column width, ruled paper and reading mode are
+ * how *you* read, not properties of one book, and they were state with a
+ * hard-coded default — so every book opened back at dark/17px/continuous no
+ * matter what you had set a minute earlier. They live on the device.
+ * ------------------------------------------------------------------------ */
+const PREFS_KEY = 'mypro.reader.display';
+
+interface ReaderPrefs {
+  theme: ReaderTheme;
+  fontSize: number;
+  lineSpacing: number;
+  readingWidth: number;
+  ruledPage: boolean;
+  readingMode: ReadingMode;
+}
+
+const DEFAULT_PREFS: ReaderPrefs = {
+  theme: 'dark',
+  fontSize: 17,
+  lineSpacing: 1.7,
+  readingWidth: 720,
+  ruledPage: false,
+  readingMode: 'continuous',
+};
+
+function readPrefs(): ReaderPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const saved = JSON.parse(raw) as Partial<ReaderPrefs>;
+    // Validate rather than trust: a stale or hand-edited value must not be
+    // able to render the page unreadable.
+    const oneOf = <T,>(value: unknown, allowed: readonly T[], fallback: T): T =>
+      allowed.includes(value as T) ? (value as T) : fallback;
+    const clamp = (value: unknown, min: number, max: number, fallback: number) =>
+      typeof value === 'number' && value >= min && value <= max ? value : fallback;
+    return {
+      theme: oneOf(saved.theme, ['dark', 'sepia', 'original'] as const, DEFAULT_PREFS.theme),
+      fontSize: clamp(saved.fontSize, 14, 22, DEFAULT_PREFS.fontSize),
+      // A free range now, not three fixed steps — the slider can land anywhere.
+      lineSpacing: clamp(saved.lineSpacing, LINE_MIN, LINE_MAX, DEFAULT_PREFS.lineSpacing),
+      readingWidth: oneOf(saved.readingWidth, [640, 720, 800] as const, DEFAULT_PREFS.readingWidth),
+      ruledPage: saved.ruledPage === true,
+      readingMode: oneOf(
+        saved.readingMode,
+        ['paginated', 'continuous'] as const,
+        DEFAULT_PREFS.readingMode,
+      ),
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+function writePrefs(prefs: ReaderPrefs): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    /* private mode / storage disabled — the session keeps them anyway */
+  }
+}
+
 const ANN_FILTERS: { id: AnnFilter; label: string }[] = [
   { id: "All", label: "All" },
   { id: "note", label: "Notes" },
@@ -111,6 +188,32 @@ function toHighlightColor(color?: AnnotationColor): HighlightItem["color"] {
   if (color === "yellow") return "monochrome";
   if (color === "lavender" || color === "cyan" || color === "mint") return color;
   return "monochrome";
+}
+
+/**
+ * When an annotation was made, as a sortable number.
+ *
+ * `createdAt` is an ISO timestamp for anything loaded from the server and a
+ * human phrase ("Just now", "Earlier") for the rest, so neither string
+ * comparison nor `Date.parse` alone can order the list. Annotations created in
+ * this session carry their time in their id, which covers the gap.
+ */
+function recencyOf(a: Annotation): number {
+  const parsed = Date.parse(a.createdAt);
+  if (!Number.isNaN(parsed)) return parsed;
+  const fromId = /^ann-(\d+)$/.exec(a.id);
+  return fromId ? Number(fromId[1]) : 0;
+}
+
+/** `createdAt` for the sidebar: an ISO stamp read as a date, anything else as-is. */
+function stampLabel(value: string): string {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed) || !/^\d{4}-\d{2}-\d{2}/.test(value)) return value;
+  const date = new Date(parsed);
+  const now = new Date();
+  return date.toDateString() === now.toDateString()
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** Seed the unified annotation list from any legacy notes/highlights on the book. */
@@ -156,9 +259,14 @@ export function MyProDarkReader({
   const { source: pdfText, revision: pdfRevision } = usePdfText(book, isOpen);
   const pdfStatus = pdfText?.status ?? "unavailable";
   const hasPdfText = pdfStatus !== "unavailable";
-  const totalPages = pdfText?.pageCount || book.totalPages || 320;
-  const [currentPage, setCurrentPage] = useState<number>(book.currentPage || 128);
-  const [theme, setTheme] = useState<ReaderTheme>("dark");
+  const totalPages = pdfText?.pageCount || book.totalPages || 1;
+  // Page 1, not 128. The old default opened a book you had never read in the
+  // middle, while `flowStart` below still began at 1 — so the crumb and the
+  // page you were looking at disagreed until the first scroll corrected it.
+  const [currentPage, setCurrentPage] = useState<number>(book.currentPage || 1);
+  /** This device's reading preferences, restored from the last session. */
+  const [prefs] = useState<ReaderPrefs>(readPrefs);
+  const [theme, setTheme] = useState<ReaderTheme>(prefs.theme);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   // The panel slides over the page at every width now, so it starts closed —
   // reading is the default state of a reader.
@@ -168,25 +276,29 @@ export function MyProDarkReader({
   >("toc");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  /** Which hit of {@link searchHits} is showing. */
+  const [searchIndex, setSearchIndex] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [fontSize, setFontSize] = useState<number>(17);
-  const [lineSpacing, setLineSpacing] = useState<number>(1.7);
-  const [readingWidth, setReadingWidth] = useState<number>(720);
+  const [fontSize, setFontSize] = useState<number>(prefs.fontSize);
+  const [lineSpacing, setLineSpacing] = useState<number>(prefs.lineSpacing);
+  const [readingWidth, setReadingWidth] = useState<number>(prefs.readingWidth);
   // Optional lined-paper backdrop (Samsung/Apple Notes style), spaced to the
   // current line height so rules sit behind each line of text.
-  const [ruledPage, setRuledPage] = useState<boolean>(false);
+  const [ruledPage, setRuledPage] = useState<boolean>(prefs.ruledPage);
   // Continuous is the default: one column you scroll top to bottom, pages
   // loading in as you reach them. Paged mode is still a setting.
-  const [readingMode, setReadingMode] = useState<ReadingMode>("continuous");
+  const [readingMode, setReadingMode] = useState<ReadingMode>(prefs.readingMode);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  /** What is being typed in the page box, until Enter or blur commits it. */
+  const [pageDraft, setPageDraft] = useState<string | null>(null);
+  /** First page shown in the thumbnails panel (24 at a time). */
+  const [thumbStart, setThumbStart] = useState(1);
 
-  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>(
-    book.bookmarks || [
-      { id: "bm-1", page: 14, title: "How to Notice", createdAt: "May 18" },
-      { id: "bm-2", page: 128, title: "Attention as a Practice", createdAt: "Today" },
-    ],
-  );
+  // Never seed demo bookmarks: `readerSync.flush` treats anything not loaded
+  // from the server as new, so these two were *created* against whichever book
+  // you opened without any.
+  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>(book.bookmarks ?? []);
   const [annotations, setAnnotations] = useState<Annotation[]>(() => seedAnnotations(book));
 
   // Active text selection → drives the floating contextual toolbar.
@@ -312,37 +424,6 @@ export function MyProDarkReader({
     };
   }, [isOpen, editor]);
 
-  // Keyboard navigation (disabled while typing or editing an annotation).
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        editor
-      ) {
-        if (e.key === "Escape" && editor) setEditor(null);
-        return;
-      }
-      if (e.key === "ArrowRight" || e.key === "PageDown") {
-        e.preventDefault();
-        setCurrentPage((p) => Math.min(totalPages, p + 1));
-      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
-        e.preventDefault();
-        setCurrentPage((p) => Math.max(1, p - 1));
-      } else if (e.key === "Escape") {
-        if (moreOpen) setMoreOpen(false);
-        else if (isSettingsOpen) setIsSettingsOpen(false);
-        else if (isSearching) setIsSearching(false);
-        else if (activeMarker) setActiveMarker(null);
-        else if (selection) setSelection(null);
-        else if (isNarrow() && isSidebarOpen) setIsSidebarOpen(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, totalPages, isSettingsOpen, isSearching, activeMarker, selection, editor, moreOpen, isSidebarOpen]);
-
   // Auto-save: derive legacy notes/highlights so existing views keep working,
   // and persist the full annotation list alongside them.
   useEffect(() => {
@@ -365,10 +446,13 @@ export function MyProDarkReader({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, bookmarks, annotations, isOpen]);
 
+  const toastTimer = useRef<number | undefined>(undefined);
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(""), 2200);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMessage(""), 2200);
   };
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
   // ----- Page content -----
   /** The PDF's own outline when it has one, else the item's, else the sample. */
@@ -440,7 +524,18 @@ export function MyProDarkReader({
     [currentPage, getPageContent],
   );
   const currentChapter = useMemo(() => chapterForPage(currentPage), [currentPage, chapterForPage]);
-  const progressPercent = Math.round((currentPage / totalPages) * 100);
+  const progressPercent = totalPages
+    ? Math.min(100, Math.round((currentPage / totalPages) * 100))
+    : 0;
+
+  /**
+   * Zoom used to be a `scale()` on the page wrapper, which only applies in
+   * paginated mode — so in continuous mode (the default) the buttons moved a
+   * percentage and nothing else. Scaling the type instead works in both, and
+   * leaves the scroll height honest for the page observers.
+   */
+  const sheetFontSize =
+    readingMode === "continuous" ? (fontSize * zoomLevel) / 100 : fontSize;
 
   // Pages in the canvas: one when paged, the loaded flow when continuous.
   const visiblePages = useMemo(() => {
@@ -470,6 +565,53 @@ export function MyProDarkReader({
     [readingMode, totalPages],
   );
 
+  // Keyboard navigation (disabled while typing or editing an annotation).
+  // Declared after `flowTo` because it depends on it.
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        editor
+      ) {
+        if (e.key === "Escape" && editor) setEditor(null);
+        return;
+      }
+      // `setCurrentPage` alone only moved the label in continuous mode — and
+      // the scroll observer then put it straight back. `flowTo` actually
+      // turns the page in both modes.
+      if (e.key === "ArrowRight" || e.key === "PageDown") {
+        e.preventDefault();
+        flowTo(Math.min(totalPages, currentPage + 1));
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        flowTo(Math.max(1, currentPage - 1));
+      } else if (e.key === "Escape") {
+        if (moreOpen) setMoreOpen(false);
+        else if (isSettingsOpen) setIsSettingsOpen(false);
+        else if (isSearching) setIsSearching(false);
+        else if (activeMarker) setActiveMarker(null);
+        else if (selection) setSelection(null);
+        else if (isNarrow() && isSidebarOpen) setIsSidebarOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    isOpen,
+    totalPages,
+    currentPage,
+    flowTo,
+    isSettingsOpen,
+    isSearching,
+    activeMarker,
+    selection,
+    editor,
+    moreOpen,
+    isSidebarOpen,
+  ]);
+
   /** Prepend a few pages, holding your place: growing upward moves the
    *  content under you, so the scroll position is compensated by hand. */
   const loadEarlier = useCallback(() => {
@@ -483,14 +625,42 @@ export function MyProDarkReader({
     });
   }, []);
 
-  // Starting a continuous read, or switching into it, anchors on the page you
-  // were reading.
+  /**
+   * Switching into the scrolling column anchors it on the page you were
+   * reading.
+   *
+   * This used to keep the old `flowStart` whenever the current page happened
+   * to fall inside the loaded range — so paging forward to 208 in paged mode
+   * and switching back put you at the top of the column at 205, three pages
+   * behind where you actually were. The column now always begins at the page
+   * you are on.
+   */
   useEffect(() => {
     if (readingMode !== "continuous") return;
-    setFlowStart((start) => (currentPage < start || currentPage > flowEnd ? currentPage : start));
-    setFlowEnd((end) => Math.max(end, currentPage + 3));
+    setFlowStart(currentPage);
+    setFlowEnd(currentPage + 3);
+    programmaticScroll.current = true;
+    requestAnimationFrame(() => {
+      canvasRef.current?.scrollTo({ top: 0 });
+      setTimeout(() => {
+        programmaticScroll.current = false;
+      }, 300);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readingMode]);
+
+  // Remember how this device likes to read, for the next book and the next
+  // session.
+  useEffect(() => {
+    writePrefs({ theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode });
+  }, [theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode]);
+
+  // A half-typed page number must not outlive the page it was typed against:
+  // jumping by the scrubber or the contents left the box showing a number
+  // that had nothing to do with what was on screen.
+  useEffect(() => {
+    setPageDraft(null);
+  }, [currentPage]);
 
   // Load the next pages as the bottom of the column comes into view.
   useEffect(() => {
@@ -680,7 +850,8 @@ export function MyProDarkReader({
         timer = window.setTimeout(run, 120);
         return;
       }
-      setActiveMarker(id);
+      // A search jump carries no annotation id; don't clear the current one.
+      if (id) setActiveMarker(id);
       setPendingScroll(null);
     };
     timer = window.setTimeout(run, 120);
@@ -714,10 +885,48 @@ export function MyProDarkReader({
     }
     if (annSort === "page") list.sort((a, b) => a.page - b.page);
     else if (annSort === "type") list.sort((a, b) => a.kind.localeCompare(b.kind));
+    // "Recently created" was offered in the select and never implemented, so
+    // it silently showed whatever order the server happened to return.
+    else if (annSort === "recent") list.sort((a, b) => recencyOf(b) - recencyOf(a));
     return list;
   }, [annotations, annFilter, annSearch, annSort]);
 
   const activeAnnotation = annotations.find((a) => a.id === activeMarker) || null;
+
+  /* ----- Document search -------------------------------------------------
+   * This was a text field next to a hardcoded "3 matches": typing did
+   * nothing. It now searches the pages whose text has been extracted — all
+   * of them once extraction finishes, and the loaded ones before that —
+   * which is the only text the device actually holds.
+   * -------------------------------------------------------------------- */
+  const searchHits = useMemo(() => {
+    const needle = searchQuery.trim().toLowerCase();
+    if (needle.length < 2) return [] as { page: number; paragraph: number; excerpt: string }[];
+    const hits: { page: number; paragraph: number; excerpt: string }[] = [];
+    for (let page = 1; page <= totalPages && hits.length < SEARCH_LIMIT; page++) {
+      const paragraphs = getPageContent(page).paragraphs;
+      paragraphs.forEach((text, paragraph) => {
+        const at = text.toLowerCase().indexOf(needle);
+        if (at === -1) return;
+        hits.push({
+          page,
+          paragraph,
+          excerpt: `${at > 24 ? "…" : ""}${text.slice(Math.max(0, at - 24), at + needle.length + 40)}…`,
+        });
+      });
+    }
+    return hits;
+  }, [searchQuery, totalPages, getPageContent]);
+
+  const goToHit = (index: number) => {
+    const hit = searchHits[index];
+    if (!hit) return;
+    setSearchIndex(index);
+    const loaded =
+      readingMode === "continuous" && hit.page >= flowStart && hit.page <= flowEnd;
+    if (hit.page !== currentPage && !loaded) flowTo(hit.page);
+    setPendingScroll(`${hit.page}|${hit.paragraph}|`);
+  };
 
   if (!isOpen) return null;
 
@@ -866,10 +1075,15 @@ const key = `${page}-${idx}`;
   const renderSheet = (page: number) => {
     const content = getPageContent(page);
     // Scrolling through a chapter should not re-announce it on every page;
-    // the heading appears only where the chapter actually changes.
+    // the heading appears where the chapter actually changes — and always on
+    // the first sheet of the column, which has no page above it to have
+    // announced the chapter. Without that, opening a book mid-chapter showed
+    // a wall of paragraphs with nothing saying what you were reading.
     const previous = page > 1 ? getPageContent(page - 1) : null;
+    const isFirstLoaded = page === visiblePages[0];
     const showHeading =
       readingMode === "paginated" ||
+      isFirstLoaded ||
       !previous ||
       previous.chapterTitle !== content.chapterTitle;
     return (
@@ -879,9 +1093,9 @@ const key = `${page}-${idx}`;
         className={`reader-page-sheet ${theme}`}
         style={
           {
-            fontSize: `${fontSize}px`,
+            fontSize: `${sheetFontSize.toFixed(2)}px`,
             lineHeight: lineSpacing,
-            "--rule-step": `${(fontSize * lineSpacing).toFixed(2)}px`,
+            "--rule-step": `${(sheetFontSize * lineSpacing).toFixed(2)}px`,
           } as React.CSSProperties
         }
       >
@@ -1010,13 +1224,61 @@ const key = `${page}-${idx}`;
                 autoFocus
                 placeholder="Search words in document..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSearchIndex(0);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") setIsSearching(false);
+                  if (e.key === "Enter" && searchHits.length) {
+                    e.preventDefault();
+                    goToHit(
+                      e.shiftKey
+                        ? (searchIndex - 1 + searchHits.length) % searchHits.length
+                        : searchHits.length === 1 || !searchHits[searchIndex]
+                          ? 0
+                          : (searchIndex + 1) % searchHits.length,
+                    );
+                  }
                 }}
               />
-              {searchQuery && <span className="match-count">3 matches</span>}
-              <button type="button" className="icon-button" onClick={() => setIsSearching(false)}>
+              {searchQuery.trim().length >= 2 && (
+                <span className="match-count">
+                  {searchHits.length === 0
+                    ? "No matches"
+                    : `${Math.min(searchIndex + 1, searchHits.length)} of ${searchHits.length}${
+                        searchHits.length >= SEARCH_LIMIT ? "+" : ""
+                      }`}
+                </span>
+              )}
+              {searchHits.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Previous match"
+                    onClick={() =>
+                      goToHit((searchIndex - 1 + searchHits.length) % searchHits.length)
+                    }
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Next match"
+                    onClick={() => goToHit((searchIndex + 1) % searchHits.length)}
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close search"
+                onClick={() => setIsSearching(false)}
+              >
                 <X size={14} />
               </button>
             </div>
@@ -1130,13 +1392,34 @@ const key = `${page}-${idx}`;
                 </div>
 
                 <div className="setting-section">
-                  <span className="setting-label">LINE SPACING</span>
+                  <span className="setting-label">
+                    LINE SPACING ({lineSpacing.toFixed(2)}×)
+                  </span>
                   <div className="reader-segmented">
-                    {[1.5, 1.7, 1.9].map((v) => (
-                      <button key={v} className={lineSpacing === v ? "active" : ""} onClick={() => setLineSpacing(v)}>
-                        {v === 1.5 ? "Snug" : v === 1.7 ? "Normal" : "Airy"}
+                    {LINE_PRESETS.map(({ value, label }) => (
+                      <button
+                        key={value}
+                        className={Math.abs(lineSpacing - value) < 0.001 ? "active" : ""}
+                        onClick={() => setLineSpacing(value)}
+                      >
+                        {label}
                       </button>
                     ))}
+                  </div>
+                  {/* The three presets are the quick answer; this is for
+                      anyone who wants the gap exactly where they like it. */}
+                  <div className="line-gap-row">
+                    <AlignJustify size={13} aria-hidden="true" />
+                    <input
+                      type="range"
+                      min={1.2}
+                      max={2.4}
+                      step={0.05}
+                      value={lineSpacing}
+                      aria-label="Line spacing"
+                      onChange={(e) => setLineSpacing(Number(e.target.value))}
+                    />
+                    <span className="line-gap-value">{lineSpacing.toFixed(2)}×</span>
                   </div>
                 </div>
 
@@ -1169,7 +1452,7 @@ const key = `${page}-${idx}`;
 
                   <div className="setting-note">
                     <Info size={13} />
-                    <span>Markers stay anchored to their passage when you change size, width, or mode.</span>
+                    <span>Markers stay anchored when the layout changes.</span>
                   </div>
                 </div>
               </div>,
@@ -1246,7 +1529,17 @@ const key = `${page}-${idx}`;
               <List size={14} />
               <span>Contents</span>
             </button>
-            <button type="button" className={`sidebar-tab-btn ${sidebarTab === "thumbnails" ? "active" : ""}`} onClick={() => setSidebarTab("thumbnails")}>
+            <button
+              type="button"
+              className={`sidebar-tab-btn ${sidebarTab === "thumbnails" ? "active" : ""}`}
+              onClick={() => {
+                // Open on the page being read, not always at the front.
+                setThumbStart(
+                  Math.max(1, Math.min(Math.max(1, totalPages - 23), currentPage - 11)),
+                );
+                setSidebarTab("thumbnails");
+              }}
+            >
               <Layers size={14} />
               <span>Pages</span>
             </button>
@@ -1283,8 +1576,10 @@ const key = `${page}-${idx}`;
 
             {sidebarTab === "thumbnails" && (
               <div className="thumbnails-grid">
+                {/* A window around where you are. Fixed at pages 1–24, this
+                    panel could not reach page 25 of a 320-page book. */}
                 {Array.from({ length: Math.min(24, totalPages) }, (_, i) => {
-                  const pageNum = i + 1;
+                  const pageNum = thumbStart + i;
                   return (
                     <button
                       type="button"
@@ -1300,6 +1595,29 @@ const key = `${page}-${idx}`;
                     </button>
                   );
                 })}
+                {totalPages > 24 && (
+                  <div className="thumbnails-pager">
+                    <button
+                      type="button"
+                      onClick={() => setThumbStart((s) => Math.max(1, s - 24))}
+                      disabled={thumbStart <= 1}
+                    >
+                      <ChevronLeft size={13} /> Earlier
+                    </button>
+                    <span>
+                      {thumbStart}–{Math.min(totalPages, thumbStart + 23)} of {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setThumbStart((s) => Math.min(Math.max(1, totalPages - 23), s + 24))
+                      }
+                      disabled={thumbStart + 24 > totalPages}
+                    >
+                      Later <ChevronRight size={13} />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1311,7 +1629,7 @@ const key = `${page}-${idx}`;
                     <span className="badge-count">{bookmarks.length}</span>
                   </div>
                   {bookmarks.length === 0 ? (
-                    <p className="empty-subtext">No bookmarks yet. Tap the bookmark icon to save pages.</p>
+                    <p className="empty-subtext">No bookmarks yet.</p>
                   ) : (
                     [...bookmarks]
                       .sort((a, b) => a.page - b.page)
@@ -1403,7 +1721,7 @@ const key = `${page}-${idx}`;
                                 )}
                                 <span className="entry-source">
                                   {meta.label} · p. {a.page}
-                                  {a.chapter ? ` · ${a.chapter}` : ""} · {a.createdAt}
+                                  {a.chapter ? ` · ${a.chapter}` : ""} · {stampLabel(a.createdAt)}
                                 </span>
                               </div>
                             </button>
@@ -1419,7 +1737,7 @@ const key = `${page}-${idx}`;
                       })}
                   {annFilter !== "bookmark" && sidebarEntries.length === 0 && (
                     <p className="empty-subtext">
-                      No annotations yet. Select text in the book to add a note, quote, summary, question, or highlight.
+                      Select any passage to add a note, quote, summary, question or highlight.
                     </p>
                   )}
                 </div>
@@ -1491,14 +1809,25 @@ const key = `${page}-${idx}`;
           </button>
           <div className="page-indicator-pill">
             <span>Page</span>
+            {/* Committed on Enter or blur. Jumping on every keystroke meant
+                typing "50" went to page 5 first — restarting the flow and
+                scrolling to the top — before it ever saw the 0. */}
             <input
               type="number"
+              inputMode="numeric"
               min={1}
               max={totalPages}
-              value={currentPage}
-              onChange={(e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val) && val >= 1 && val <= totalPages) flowTo(val);
+              aria-label={`Page number, 1 to ${totalPages}`}
+              value={pageDraft ?? currentPage}
+              onChange={(e) => setPageDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") setPageDraft(null);
+              }}
+              onBlur={() => {
+                const val = parseInt(pageDraft ?? "", 10);
+                setPageDraft(null);
+                if (!Number.isNaN(val)) flowTo(Math.min(Math.max(1, val), totalPages));
               }}
             />
             <span className="total-of">of {totalPages}</span>

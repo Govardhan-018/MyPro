@@ -7,9 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type Dispatch,
   type ReactNode,
-  type SetStateAction,
 } from "react";
 import type { LottieHandle } from "lottie-react";
 import {
@@ -45,8 +43,6 @@ import {
   Library,
   LogOut,
   Mail,
-  Mic,
-  Paperclip,
   Palette,
   Pencil,
   Pill,
@@ -101,7 +97,7 @@ import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
 import { usePush, type PushStatus } from "./lib/usePush";
 import { useGmail } from "./lib/useGmail";
-import { browserTimezone, useProfile } from "./lib/useProfile";
+import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 import {
   entrySource,
@@ -194,6 +190,12 @@ const LottieSvg = lazy(() =>
 
 /** Resolves public assets against Vite's base URL so sub-path deployments work. */
 const asset = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
+
+/**
+ * The identity of a library item, for React keys and for `updateItem`.
+ * Saved rows have an id; prototype/local ones only have a title.
+ */
+const itemKey = (item: LibraryItem): string => item.id ?? item.title;
 
 const PROTOTYPE_LATENCY_MS = 900;
 
@@ -658,7 +660,7 @@ function TodayView({
           </div>
           <span className="section-kicker">MYPRO INSIGHT</span>
           <h2>Plan your day with me.</h2>
-          <p>Organize your schedule, reading, and reminders.</p>
+          <p>Schedule, reading and reminders.</p>
           <button onClick={() => navigate("assistant")}>
             Plan it with me <ArrowRight size={15} />
           </button>
@@ -1067,11 +1069,13 @@ function CalendarView() {
               className="field-label"
               style={{ flexDirection: "row", alignItems: "center", gap: "8px" }}
             >
+              {/* The inline 16px box beat every stylesheet, so this one
+                  checkbox stayed a 16px target on a phone. */}
               <input
                 type="checkbox"
+                className="field-checkbox"
                 checked={form.allDay}
                 onChange={(e) => setField("allDay", e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: "#ffffff" }}
               />
               All day
             </label>
@@ -1158,7 +1162,11 @@ function MobileWeekAgenda({
   todayIso: string;
   onOpenEvent: (ev: CalEvent) => void;
 }) {
-  const [selected, setSelected] = useState(0);
+  // Open on today when today is in the week on screen, not always on Monday.
+  const [selected, setSelected] = useState(() => {
+    const index = weekDays.findIndex((day) => day.iso === todayIso);
+    return index === -1 ? 0 : index;
+  });
   const selectedDay = weekDays[selected];
   // All-day events belong in the agenda too — they used to be filtered out
   // here and in the grid, so they were invisible everywhere but Month.
@@ -1388,6 +1396,18 @@ function MonthCalendar({
   const offset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const [selectedIso, setSelectedIso] = useState(todayIso);
+  // Paging to another month left the selection on today's date, so the phone's
+  // month agenda kept showing "Today" and no cell appeared selected. Follow
+  // the month: this one's 1st, or today when today is in it.
+  const monthKey = `${year}-${month}`;
+  const lastMonthKey = useRef(monthKey);
+  if (lastMonthKey.current !== monthKey) {
+    lastMonthKey.current = monthKey;
+    const firstIso = isoDate(new Date(year, month, 1));
+    if (!selectedIso.startsWith(firstIso.slice(0, 7))) {
+      setSelectedIso(todayIso.startsWith(firstIso.slice(0, 7)) ? todayIso : firstIso);
+    }
+  }
   const selectedEvents = eventsByDate.get(selectedIso) ?? [];
 
   return (
@@ -2325,8 +2345,8 @@ function AssistantView() {
             <div className="assistant-intro">
               <RollingCubes thinking={isThinking} />
               <span className="section-kicker">YOUR COMPANION</span>
-              <h1>Hi, how can I help you today?</h1>
-              <p>I can organize your time, knowledge, and health — all in one thoughtful space.</p>
+              <h1>How can I help?</h1>
+              <p>Your time, knowledge and health — in one place.</p>
             </div>
           ) : (
             <div className="conversation" ref={conversationRef}>
@@ -2406,15 +2426,10 @@ function AssistantView() {
               placeholder={offline ? "Your laptop agent is asleep…" : "Ask MyPro anything..."}
               disabled={offline}
             />
+            {/* The attach and microphone buttons that used to sit here had no
+                handler and nothing to send to — `/assistant/messages` carries
+                text only. They are gone rather than left looking live. */}
             <div className="composer-tools">
-              <div>
-                <IconButton label="Attach file">
-                  <Paperclip size={18} />
-                </IconButton>
-                <IconButton label="Use voice">
-                  <Mic size={18} />
-                </IconButton>
-              </div>
               <button
                 className={`send-button ${isThinking ? "sending" : ""}`}
                 onClick={() => send()}
@@ -2427,9 +2442,9 @@ function AssistantView() {
           {error ? (
             <p className="composer-error">{error}</p>
           ) : offline ? (
-            <p>Wake your laptop to chat with your companion. Everything else keeps working.</p>
+            <p>Wake your laptop to chat. Everything else keeps working.</p>
           ) : (
-            <p>MyPro keeps your personal data private and under your control.</p>
+            <p>Private, and under your control.</p>
           )}
         </div>
         {configured && settingsOpen && (
@@ -2542,19 +2557,17 @@ const emptyAddForm = {
 };
 
 function LibraryView({
-  colorMode,
   items: libraryItems,
-  setItems: setLibraryItems,
   onOpenMedia,
   onCreateItem,
+  onRemoveItem,
   loading,
   error,
 }: {
-  colorMode: boolean;
   items: LibraryItem[];
-  setItems: Dispatch<SetStateAction<LibraryItem[]>>;
   onOpenMedia: (item: LibraryItem) => void;
   onCreateItem: (item: LibraryItem) => Promise<LibraryItem>;
+  onRemoveItem: (item: LibraryItem) => Promise<void>;
   loading: boolean;
   error: string | null;
 }) {
@@ -2727,13 +2740,38 @@ function LibraryView({
     setEditingCollection(id);
   };
 
+  // The toolbar advertised ⌘K; nothing listened for it until now.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /** A count beats a sentence in the page header. */
+  const inProgressCount = libraryItems.filter(
+    (item) => item.progress > 0 && item.progress < 100,
+  ).length;
+
+  /** The per-item overflow menu — open for one item at a time. */
+  const [rowMenu, setRowMenu] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<LibraryItem | null>(null);
+
   return (
     <div className="page-content foundation-view library-view">
       <header className="page-heading">
         <div>
-          <div className="eyebrow muted-eyebrow">MY LIBRARY</div>
+          <div className="eyebrow muted-eyebrow">LIBRARY</div>
           <h1>Your ideas, all in one place.</h1>
-          <p>Books, listening, articles, and the notes you want to keep.</p>
+          <p className="page-meta">
+            {libraryItems.length} {libraryItems.length === 1 ? "item" : "items"}
+            {inProgressCount > 0 ? ` · ${inProgressCount} in progress` : ""}
+          </p>
         </div>
         <button className="primary-button" onClick={() => setShowAdd(true)}>
           <Plus size={17} /> Add to library
@@ -2755,6 +2793,7 @@ function LibraryView({
         <label className="library-search">
           <Search size={17} />
           <input
+            ref={searchRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search your library"
@@ -2818,7 +2857,7 @@ function LibraryView({
               </div>
               <div className="learning-list">
                 {groupItems.map((item) => (
-              <article className="learning-row" key={item.title}>
+              <article className="learning-row" key={item.id ?? item.title}>
                 <button
                   className={`learning-thumbnail ${item.type.toLowerCase()} ${item.tone}`}
                   onClick={() => onOpenMedia(item)}
@@ -2832,9 +2871,55 @@ function LibraryView({
                       <span className={`content-type type-${item.tone}`}>{item.type}</span>
                       <h3>{item.title}</h3>
                     </div>
-                    <button aria-label={`More options for ${item.title}`}>
-                      <Ellipsis size={17} />
-                    </button>
+                    {/* This button did nothing at all before. */}
+                    <div className="learning-row-menu">
+                      <button
+                        aria-label={`More options for ${item.title}`}
+                        aria-expanded={rowMenu === (item.id ?? item.title)}
+                        onClick={(event) => {
+                          const key = item.id ?? item.title;
+                          setRowMenu((open) => (open === key ? null : key));
+                          // On a phone the row is often near the bottom of the
+                          // screen; bring it up so the menu has room under it.
+                          const row = event.currentTarget.closest("article");
+                          if (row) {
+                            requestAnimationFrame(() =>
+                              row.scrollIntoView({ block: "center", behavior: "smooth" }),
+                            );
+                          }
+                        }}
+                      >
+                        <Ellipsis size={17} />
+                      </button>
+                      {rowMenu === (item.id ?? item.title) && (
+                        <>
+                          <div
+                            className="learning-row-menu-backdrop"
+                            onClick={() => setRowMenu(null)}
+                            aria-hidden="true"
+                          />
+                          <div className="learning-row-menu-pop">
+                            <button
+                              onClick={() => {
+                                setRowMenu(null);
+                                onOpenMedia(item);
+                              }}
+                            >
+                              <Play size={13} /> Open
+                            </button>
+                            <button
+                              className="danger"
+                              onClick={() => {
+                                setRowMenu(null);
+                                setConfirmRemove(item);
+                              }}
+                            >
+                              <Trash2 size={13} /> Remove
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <p>{item.creator}</p>
                   <div className="learning-progress-line">
@@ -2935,9 +3020,7 @@ function LibraryView({
               </div>
             ))}
             {!collections.length && !collectionsState.loading && (
-              <p className="settings-hint">
-                No collections yet. Start one and file anything from your library under it.
-              </p>
+              <p className="settings-hint">No collections yet.</p>
             )}
           </div>
         </section>
@@ -3167,6 +3250,42 @@ function LibraryView({
           </div>
         </div>
       )}
+      {confirmRemove && (
+        <div className="modal-backdrop" onMouseDown={() => setConfirmRemove(null)}>
+          <div className="event-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-heading">
+              <div>
+                <span className="section-kicker">REMOVE FROM LIBRARY</span>
+                <h2>Remove “{confirmRemove.title}”?</h2>
+              </div>
+              <IconButton label="Close" onClick={() => setConfirmRemove(null)}>
+                <X size={18} />
+              </IconButton>
+            </div>
+            <p className="settings-hint">
+              The item and its reading progress are removed. This cannot be undone.
+            </p>
+            <div className="modal-footer">
+              <button className="secondary-button" onClick={() => setConfirmRemove(null)}>
+                Cancel
+              </button>
+              <button
+                className="secondary-button event-delete-button"
+                onClick={async () => {
+                  const item = confirmRemove;
+                  setConfirmRemove(null);
+                  await onRemoveItem(item);
+                  setToast(`“${item.title}” removed`);
+                  await request(2600);
+                  setToast("");
+                }}
+              >
+                <Trash2 size={15} /> Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {toast && (
         <div className="app-toast" role="status">
           <CheckCircle2 size={16} /> {toast}
@@ -3210,6 +3329,49 @@ const seededKnowledge: KnowledgeEntry[] = [
   },
 ];
 
+/**
+ * Entry dates arrive two ways: an ISO timestamp from `/knowledge`, or a
+ * human string ("Today", "May 21") from the locally-derived fallback. The ISO
+ * one was printed raw, so real data read `2026-11-17T08:12:33.941Z`.
+ */
+function knowledgeDate(value: string): string {
+  if (!value) return "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const today = new Date();
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+  return sameDay
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** The UI's library types, in the vocabulary a knowledge entry records. */
+const KNOWLEDGE_SOURCE: Record<LibraryItem["type"], KnowledgeEntry["sourceType"]> = {
+  Books: "book",
+  Podcasts: "podcast",
+  Articles: "article",
+  Notes: "note",
+};
+
+/**
+ * Where an entry came from inside its source. A podcast note's `page` is the
+ * position in seconds, so "Page 214" was simply wrong for every note taken
+ * while listening.
+ */
+function sourceLocation(entry: KnowledgeEntry): string {
+  if (entry.sourceType !== "podcast") return `Page ${entry.page}`;
+  const total = Math.max(0, Math.round(entry.page));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return hours ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
+
 const knowledgeTabs: { id: "All" | KnowledgeKind; label: string; icon: typeof BookOpen }[] = [
   { id: "All", label: "All", icon: ClipboardList },
   { id: "Note", label: "Notes", icon: StickyNote },
@@ -3225,7 +3387,6 @@ function KnowledgeView({
   onJumpToSource,
 }: {
   items: LibraryItem[];
-  colorMode: boolean;
   onJumpToSource: (title: string, page: number) => void;
 }) {
   const [tab, setTab] = useState<"All" | KnowledgeKind>("All");
@@ -3233,6 +3394,7 @@ function KnowledgeView({
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   // Reads /knowledge (all annotations + bookmarks) when configured; otherwise
   // falls back to the locally-derived entries so the prototype still works.
   const knowledge = useKnowledge();
@@ -3243,6 +3405,22 @@ function KnowledgeView({
     if (!source) return;
     if (source.kind === "annotation") api.reader.deleteAnnotation(source.id).catch(() => {});
     else api.reader.deleteBookmark(source.id).catch(() => {});
+  };
+
+  /**
+   * Commit an edit. The pencil used to write to local state only, so a
+   * rewritten note read as saved and was the original again on reload.
+   * Bookmarks have no editable body, so only annotations are sent.
+   */
+  const commitEdit = (entry: KnowledgeEntry) => {
+    setEditingId(null);
+    const next = edits[entry.id];
+    if (next === undefined || next === entry.text) return;
+    const source = knowledge.configured ? entrySource(entry.id) : null;
+    if (source?.kind !== "annotation") return;
+    api.reader.updateAnnotation(source.id, { body: next }).catch(() => {
+      setEditError("That edit could not be saved. It will be back as it was on reload.");
+    });
   };
 
   const localEntries = useMemo(() => {
@@ -3270,6 +3448,7 @@ function KnowledgeView({
             heading: annotation.title,
             bookTitle: item.title,
             page: annotation.page,
+            sourceType: KNOWLEDGE_SOURCE[item.type],
             date: annotation.createdAt,
             tone: colorToTone[annotation.color || ""] || tone,
             tags: annotation.tags?.length ? annotation.tags : [annotation.kind],
@@ -3283,6 +3462,7 @@ function KnowledgeView({
             text: highlight.text,
             bookTitle: item.title,
             page: highlight.page,
+            sourceType: KNOWLEDGE_SOURCE[item.type],
             date: item.accessed,
             tone: colorToTone[highlight.color] || tone,
             tags: [item.type.toLowerCase()],
@@ -3295,6 +3475,7 @@ function KnowledgeView({
             text: note.text,
             bookTitle: item.title,
             page: note.page,
+            sourceType: KNOWLEDGE_SOURCE[item.type],
             date: note.createdAt,
             tone,
             tags: ["note"],
@@ -3308,6 +3489,7 @@ function KnowledgeView({
           text: bookmark.title,
           bookTitle: item.title,
           page: bookmark.page,
+          sourceType: KNOWLEDGE_SOURCE[item.type],
           date: bookmark.createdAt,
           tone,
           tags: ["bookmark"],
@@ -3340,15 +3522,18 @@ function KnowledgeView({
     <div className="page-content knowledge-view">
       <header className="page-heading">
         <div>
-          <div className="eyebrow muted-eyebrow">MY KNOWLEDGE</div>
-          <h1>Everything you saved, connected.</h1>
-          <p>Notes, highlights, quotes, summaries, and questions — organized across your library.</p>
+          <div className="eyebrow muted-eyebrow">KNOWLEDGE</div>
+          <h1>Everything you saved.</h1>
+          <p className="page-meta">
+            {visible.length} {visible.length === 1 ? "entry" : "entries"}
+            {tab === "All" ? "" : ` · ${tab.toLowerCase()}`}
+          </p>
         </div>
       </header>
 
-      {knowledge.error && (
+      {(knowledge.error || editError) && (
         <div className="data-banner data-banner-error" role="alert">
-          {knowledge.error}
+          {knowledge.error ?? editError}
         </div>
       )}
       {knowledge.loading && !knowledge.error && (
@@ -3412,7 +3597,7 @@ function KnowledgeView({
                 onChange={(event) =>
                   setEdits((current) => ({ ...current, [entry.id]: event.target.value }))
                 }
-                onBlur={() => setEditingId(null)}
+                onBlur={() => commitEdit(entry)}
               />
             ) : (
               <p className="knowledge-text">{edits[entry.id] ?? entry.text}</p>
@@ -3428,17 +3613,17 @@ function KnowledgeView({
                 onClick={() => onJumpToSource(entry.bookTitle, entry.page)}
               >
                 <ExternalLink size={13} />
-                {entry.bookTitle} → Page {entry.page}
+                {entry.bookTitle || "Your library"} → {sourceLocation(entry)}
               </button>
-              <time>{entry.date}</time>
+              <time>{knowledgeDate(entry.date)}</time>
             </div>
           </article>
         ))}
         {visible.length === 0 && (
           <div className="library-empty">
             <Brain size={20} />
-            <strong>Nothing here yet</strong>
-            <span>Highlights and notes you save while reading appear here.</span>
+            <strong>Nothing saved yet</strong>
+            <span>Highlights and notes land here as you read.</span>
           </div>
         )}
       </div>
@@ -3617,7 +3802,7 @@ function HealthView() {
   const [form, setForm] = useState(emptyIllnessForm);
   const [documentNames, setDocumentNames] = useState<string[]>([]);
   const [savingMode, setSavingMode] = useState<"draft" | "final" | null>(null);
-  const request = useSimulatedRequest();
+  const [formError, setFormError] = useState<string | null>(null);
 
   const years = Array.from(
     new Set(
@@ -3649,6 +3834,7 @@ function HealthView() {
     setEditingId(null);
     setForm(emptyIllnessForm);
     setDocumentNames([]);
+    setFormError(null);
   };
 
   const saveIllness = async (asDraft: boolean) => {
@@ -3697,8 +3883,16 @@ function HealthView() {
       recoveryHelp: form.recoveryHelp || undefined,
       recoveryNotes: form.recoveryNotes || undefined,
     };
+    // A failed save used to reject out of the click handler: the modal stayed
+    // open, the buttons stayed disabled and nothing said why.
     try {
       await health.saveRecord(record, editingId !== null);
+      setFormError(null);
+    } catch (caught) {
+      setFormError(
+        caught instanceof Error ? caught.message : "That record could not be saved.",
+      );
+      return;
     } finally {
       setSavingMode(null);
     }
@@ -3748,9 +3942,12 @@ function HealthView() {
     <div className="page-content foundation-view health-history-view">
       <header className="page-heading">
         <div>
-          <div className="eyebrow muted-eyebrow">PERSONAL HEALTH HISTORY</div>
-          <h1>Your health, clearly organized.</h1>
-          <p>A private record of past illnesses, symptoms, medications, and recovery.</p>
+          <div className="eyebrow muted-eyebrow">HEALTH</div>
+          <h1>Your health history.</h1>
+          <p className="page-meta">
+            {records.length} {records.length === 1 ? "record" : "records"}
+            {totalMedications > 0 ? ` · ${totalMedications} medications` : ""}
+          </p>
         </div>
         <button className="primary-button" onClick={() => setShowForm(true)}>
           <Plus size={17} /> Add Previous Illness
@@ -3771,10 +3968,8 @@ function HealthView() {
       <div className="health-privacy-note">
         <Archive size={17} />
         <p>
-          <strong>Personal reference only.</strong> You decide what to record and share. This demo
-          does not provide medical advice or claim secure storage.
+          <strong>Personal reference only.</strong> Not medical advice.
         </p>
-        <span>Demo records</span>
       </div>
 
       <section className="health-overview">
@@ -3941,8 +4136,8 @@ function HealthView() {
               </HealthDetailSection>
               <HealthDetailSection icon={Pill} label="D" title="Medication history">
                 {selectedRecord.medications.length ? (
-                  selectedRecord.medications.map((medication) => (
-                    <div className="medication-history-row" key={medication.name}>
+                  selectedRecord.medications.map((medication, index) => (
+                    <div className="medication-history-row" key={`${medication.name}-${index}`}>
                       <h4>{medication.name}</h4>
                       <DetailGrid
                         items={[
@@ -3964,17 +4159,18 @@ function HealthView() {
                 )}
               </HealthDetailSection>
               <HealthDetailSection icon={FileText} label="E" title="Tests and documents">
+                {/* Only the filename is recorded, so there is nothing to open —
+                    these are a list, not buttons that do nothing. */}
                 {selectedRecord.documents.length ? (
                   <div className="health-documents">
-                    {selectedRecord.documents.map((document) => (
-                      <button key={document.name}>
+                    {selectedRecord.documents.map((document, index) => (
+                      <div key={`${document.name}-${index}`}>
                         <FileText size={15} />
                         <span>
                           <strong>{document.name}</strong>
                           <small>{document.type}</small>
                         </span>
-                        <ExternalLink size={13} />
-                      </button>
+                      </div>
                     ))}
                   </div>
                 ) : (
@@ -4197,6 +4393,11 @@ function HealthView() {
               </HealthFormSection>
             </div>
             <div className="health-form-footer">
+              {formError && (
+                <p className="composer-error" role="alert">
+                  {formError}
+                </p>
+              )}
               <button
                 className="secondary-button"
                 onClick={() => saveIllness(true)}
@@ -4365,6 +4566,7 @@ function SettingsView({
   onSignOut,
   userEmail,
   notifications,
+  profile,
 }: {
   books: LibraryItem[];
   onUpdateBookStorage: (
@@ -4378,12 +4580,13 @@ function SettingsView({
   onSignOut: () => void;
   userEmail: string | null;
   notifications: NotificationsState;
+  /** Shared with App, which needs it for Color Mode — one GET /me, not two. */
+  profile: ProfileState;
 }) {
   const [showStorage, setShowStorage] = useState(false);
   const [open, setOpen] = useState<
     "profile" | "notifications" | "mail" | "privacy" | null
   >(null);
-  const profile = useProfile(true);
   const push = usePush(!!userEmail);
   const gmail = useGmail(!!userEmail);
   const [name, setName] = useState("");
@@ -4397,10 +4600,17 @@ function SettingsView({
     setTimezone(profile.profile.timezone);
   }, [profile.loaded, profile.profile.display_name, profile.profile.timezone]);
 
+  const noteTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(noteTimer.current), []);
+
   const saveProfile = async () => {
-    await profile.save({ display_name: name.trim(), timezone: timezone.trim() || browserTimezone() });
+    await profile.save({
+      display_name: name.trim(),
+      timezone: timezone.trim() || browserTimezone(),
+    });
     setSavedNote(true);
-    setTimeout(() => setSavedNote(false), 2200);
+    window.clearTimeout(noteTimer.current);
+    noteTimer.current = window.setTimeout(() => setSavedNote(false), 2200);
   };
 
   if (showStorage) {
@@ -4429,7 +4639,6 @@ function SettingsView({
         <div>
           <div className="eyebrow muted-eyebrow">SETTINGS</div>
           <h1>Make MyPro yours.</h1>
-          <p>Manage connected sources, preferences, and privacy.</p>
         </div>
       </header>
 
@@ -4514,10 +4723,7 @@ function SettingsView({
               <span className={`settings-status-dot live-${notifications.live}`} aria-hidden="true" />
               <div>
                 <strong>In-app notifications — {liveLabel}</strong>
-                <small>
-                  Scheduled briefs and your companion’s nudges arrive the moment they are
-                  written, over Supabase Realtime.
-                </small>
+                <small>Briefs and nudges arrive the moment they are written.</small>
               </div>
             </div>
             <div className="settings-panel-actions">
@@ -4570,8 +4776,7 @@ function SettingsView({
               )}
             </div>
             <p className="settings-hint">
-              <strong>Still web-only:</strong> Android notifications arrive through the
-              phone itself, which is what makes a brief land on time with this laptop shut.
+              <strong>Web only for now.</strong> Android notifications come next.
             </p>
           </div>
         )}
@@ -4597,10 +4802,7 @@ function SettingsView({
           <div className="settings-panel">
             {!gmail.configured ? (
               <p className="settings-hint">
-                <strong>Not available yet:</strong> this server has no Google credentials.
-                Connecting Gmail needs an OAuth app in the Google Cloud console, and its{" "}
-                <code>gmail.readonly</code> scope needs Google&rsquo;s review before the
-                connection lasts longer than a week.
+                <strong>Not available yet.</strong> This server has no Google credentials.
               </p>
             ) : (
               <>
@@ -4632,8 +4834,7 @@ function SettingsView({
 
                 {!gmail.accounts.length && (
                   <p className="settings-hint">
-                    Connect a mailbox and your companion can tell you what people have
-                    actually asked you for — and reply, once you approve it.
+                    Connect a mailbox and your companion can triage it with you.
                   </p>
                 )}
 
@@ -4661,9 +4862,7 @@ function SettingsView({
                 )}
 
                 <p className="settings-hint">
-                  MyPro stores who wrote, the subject, and Gmail&rsquo;s own one-line
-                  preview — never the body of a message. Summaries are written on your
-                  laptop, so no email text reaches a model you do not run.
+                  Sender, subject and Gmail&rsquo;s preview only — never the message body.
                 </p>
               </>
             )}
@@ -4690,26 +4889,22 @@ function SettingsView({
           <div className="settings-panel">
             <ul className="settings-facts">
               <li>
-                <strong>Your rows are yours.</strong> Every table is default-deny with
-                row-level security, so a query can only ever return your own data.
+                <strong>Your rows are yours.</strong> Row-level security, default deny.
               </li>
               <li>
-                <strong>Health needs consent.</strong> The assistant cannot read health
-                records without a time-boxed grant, enforced in the database rather than in
-                app code.
+                <strong>Health needs consent.</strong> A time-boxed grant, enforced in the
+                database.
               </li>
               <li>
-                <strong>The model key never leaves your laptop.</strong> Chat runs on the
-                agent at home; the always-on server brokers but never sees it.
+                <strong>The model key stays on your laptop.</strong> Chat never runs on the
+                server.
               </li>
               <li>
-                <strong>PDFs stay on the device you added them on.</strong> Only the
-                extracted text is synced, so your files are not uploaded anywhere.
+                <strong>PDFs never leave your device.</strong> Only extracted text syncs.
               </li>
             </ul>
             <p className="settings-hint">
-              <strong>Planned:</strong> reviewing and revoking assistant health grants from
-              here, and a one-click export of everything MyPro holds.
+              <strong>Planned:</strong> health-grant review and a full data export.
             </p>
           </div>
         )}
@@ -4954,11 +5149,13 @@ function AppShell({
   onToggleColor,
   onSignOut,
   userEmail,
+  profile,
 }: {
   colorMode: boolean;
   onToggleColor: () => void;
   onSignOut: () => void;
   userEmail: string | null;
+  profile: ProfileState;
 }) {
   // Live notifications (Realtime) — toasts plus the sidebar bell.
   const notifications = useNotifications(!!userEmail);
@@ -4972,9 +5169,15 @@ function AppShell({
   const pageRef = useRef<HTMLDivElement>(null);
   const assistantRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLElement>(null);
-  const displayedRef = useRef<View>("today");
-  const pendingRef = useRef<View>("today");
+  // These must start where the hash actually put us. Seeded with "today" they
+  // disagreed with `displayedView` on any deep link, and `navigate` then
+  // short-circuited: opening #library and pressing Today moved the highlight
+  // but left the Library on screen.
+  const displayedRef = useRef<View>(displayedView);
+  const pendingRef = useRef<View>(displayedView);
   const exitRef = useRef<Animation | null>(null);
+  /** Fallback that commits a navigation if the exit animation never settles. */
+  const exitTimerRef = useRef<number | undefined>(undefined);
   const entranceRef = useRef<Animation[]>([]);
   const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null);
   const [indicatorAnimated, setIndicatorAnimated] = useState(false);
@@ -4985,11 +5188,11 @@ function AppShell({
   // configured; otherwise the seed, so the prototype still works offline.
   const {
     items: libraryItems,
-    setItems: setLibraryItems,
     loading: libraryLoading,
     error: libraryError,
     configured: libraryConfigured,
     createItem: createLibraryItem,
+    removeItem: removeLibraryItem,
     updateItem,
   } = useLibrary(initialLibraryItems);
   const readerSync = useReaderSync(libraryConfigured);
@@ -4998,7 +5201,18 @@ function AppShell({
   const [player, setPlayer] = useState<LibraryItem | null>(null);
   // Whether the podcast player shows full-screen or as the persistent mini bar.
   const [playerExpanded, setPlayerExpanded] = useState(true);
+  /**
+   * The library row the open player writes back to.
+   *
+   * It cannot be derived from the player's payload: saving the episode
+   * details renames the row to the episode title, and the next write would
+   * then look for a row under a name that no longer matches anything. Held
+   * in a ref rather than state so a rename does not change the player's
+   * React key and remount it mid-playback.
+   */
+  const playerKeyRef = useRef<string | null>(null);
   const openPodcast = useCallback((item: LibraryItem) => {
+    playerKeyRef.current = itemKey(item);
     setPlayer(item);
     setPlayerExpanded(true);
   }, []);
@@ -5067,26 +5281,52 @@ function AppShell({
 
     entranceRef.current.forEach((animation) => animation.cancel());
     entranceRef.current = [];
+
+    /**
+     * Put the latest requested page on screen. Runs exactly once per exit,
+     * whichever of the three ways below gets here first.
+     */
+    let settled = false;
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(exitTimerRef.current);
+      exitRef.current = null;
+      displayedRef.current = pendingRef.current;
+      setDisplayedView(pendingRef.current);
+      setEntranceToken((token) => token + 1);
+    };
+
     const root = activeRoot();
     if (!root) {
-      displayedRef.current = next;
-      setDisplayedView(next);
-      setEntranceToken((token) => token + 1);
+      commit();
       return;
     }
     const exit = hidePage(root);
     exitRef.current = exit;
-    exit.finished
-      .then(() => {
-        exitRef.current = null;
-        displayedRef.current = pendingRef.current;
-        setDisplayedView(pendingRef.current);
-        setEntranceToken((token) => token + 1);
-      })
-      .catch(() => {
-        exitRef.current = null;
-      });
+    /*
+     * The fade is an embellishment; the navigation is not.
+     *
+     * `exit.finished` is not a promise to rely on: it rejects when the
+     * animation is cancelled (the entrance effect cancels animations on
+     * every view change) and can simply never settle when its element is
+     * hidden mid-flight — which is what happened on the way out of the
+     * assistant. Either way `exitRef` stayed set, so `navigate` bailed at
+     * the guard above *forever after*: the sidebar highlight moved, the
+     * address bar changed, and the page underneath never did.
+     *
+     * So: commit when the animation finishes, when it is cancelled, or when
+     * its duration has simply elapsed — whichever comes first.
+     */
+    exitTimerRef.current = window.setTimeout(commit, EXIT_DURATION + 60);
+    exit.finished.then(commit).catch(commit);
   }, []);
+
+  // Keep the ref that `navigate` reasons about in step with what is actually
+  // rendered, so the two can never disagree about where we are.
+  useLayoutEffect(() => {
+    displayedRef.current = displayedView;
+  }, [displayedView]);
 
   /**
    * Tapping a push notification (Phase 6.2) when a tab is already open.
@@ -5175,8 +5415,24 @@ function AppShell({
       accessed: "Just now",
     }));
 
-  const savePodcastDetails = (updated: LibraryItem) =>
-    updateItem(updated.title, (item) => ({ ...item, ...updated }));
+  /**
+   * The player sends its *edited* episode title back with the rest, so this
+   * is keyed by the row the player was opened on rather than by the title in
+   * the payload — otherwise nothing matched and every note typed during an
+   * episode was dropped on the next render.
+   */
+  const savePodcastDetails = (updated: LibraryItem) => {
+    const key = playerKeyRef.current ?? itemKey(updated);
+    updateItem(key, (item) => ({ ...item, ...updated }));
+    // Saving the details renames the row; follow it so later writes still land.
+    if (!updated.id && updated.title) playerKeyRef.current = updated.title;
+  };
+
+  /** The library's podcasts, in the order the player steps through them. */
+  const podcastQueue = useMemo(
+    () => libraryItems.filter((item) => item.type === "Podcasts"),
+    [libraryItems],
+  );
 
   const updateArticleProgress = (title: string, progress: number) =>
     updateItem(title, (item) => ({ ...item, progress, accessed: "Just now" }));
@@ -5232,11 +5488,22 @@ function AppShell({
 
   useEffect(
     () => () => {
+      window.clearTimeout(exitTimerRef.current);
       exitRef.current?.cancel();
       entranceRef.current.forEach((animation) => animation.cancel());
     },
     [],
   );
+
+  // Escape closes the notification panel wherever it is opened from.
+  useEffect(() => {
+    if (!bellOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setBellOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bellOpen]);
 
   // Sliding sidebar highlight.
   useLayoutEffect(() => {
@@ -5261,23 +5528,16 @@ function AppShell({
     if (displayedView === "library")
       return (
         <LibraryView
-          colorMode={colorMode}
           items={libraryItems}
-          setItems={setLibraryItems}
           onOpenMedia={openMedia}
           onCreateItem={createLibraryItem}
+          onRemoveItem={removeLibraryItem}
           loading={libraryLoading}
           error={libraryError}
         />
       );
     if (displayedView === "knowledge")
-      return (
-        <KnowledgeView
-          items={libraryItems}
-          colorMode={colorMode}
-          onJumpToSource={jumpToSource}
-        />
-      );
+      return <KnowledgeView items={libraryItems} onJumpToSource={jumpToSource} />;
     if (displayedView === "health") return <HealthView />;
     if (displayedView === "schedules") return <SchedulesView />;
     if (displayedView === "settings")
@@ -5290,6 +5550,7 @@ function AppShell({
           onSignOut={onSignOut}
           userEmail={userEmail}
           notifications={notifications}
+          profile={profile}
         />
       );
     return null;
@@ -5423,37 +5684,55 @@ function AppShell({
             </button>
 
             {bellOpen && (
-              <div className="notification-panel">
-                <div className="notification-panel-head">
-                  <span className="section-kicker">NOTIFICATIONS</span>
-                  {notifications.unread > 0 && (
+              <>
+                {/* On a phone the bell itself is hidden (the sheet opens this
+                    panel instead), so without these the panel had no way out. */}
+                <div
+                  className="notification-panel-backdrop"
+                  onClick={() => setBellOpen(false)}
+                  aria-hidden="true"
+                />
+                <div className="notification-panel" role="dialog" aria-label="Notifications">
+                  <div className="notification-panel-head">
+                    <span className="section-kicker">NOTIFICATIONS</span>
+                    {notifications.unread > 0 && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => void notifications.markAllRead()}
+                      >
+                        Mark all read
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="text-button"
-                      onClick={() => void notifications.markAllRead()}
+                      className="notification-panel-close"
+                      onClick={() => setBellOpen(false)}
+                      aria-label="Close notifications"
                     >
-                      Mark all read
+                      <X size={15} />
                     </button>
+                  </div>
+                  {!notifications.items.length ? (
+                    <p className="notification-panel-empty">Nothing yet.</p>
+                  ) : (
+                    <ul className="notification-panel-list">
+                      {notifications.items.slice(0, 12).map((item) => (
+                        <li key={item.id} className={item.read_at ? "read" : "unread"}>
+                          <button
+                            type="button"
+                            onClick={() => void notifications.markRead(item.id)}
+                          >
+                            <strong>{item.title}</strong>
+                            {item.body && <small>{item.body}</small>}
+                            <span>{new Date(item.created_at).toLocaleString()}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
-                {!notifications.items.length ? (
-                  <p className="notification-panel-empty">
-                    Nothing yet. Scheduled briefs and your companion’s nudges land here.
-                  </p>
-                ) : (
-                  <ul className="notification-panel-list">
-                    {notifications.items.slice(0, 12).map((item) => (
-                      <li key={item.id} className={item.read_at ? "read" : "unread"}>
-                        <button type="button" onClick={() => void notifications.markRead(item.id)}>
-                          <strong>{item.title}</strong>
-                          {item.body && <small>{item.body}</small>}
-                          <span>{new Date(item.created_at).toLocaleString()}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              </>
             )}
           </div>
         )}
@@ -5487,8 +5766,21 @@ function AppShell({
         onSignOut={onSignOut}
       />
 
+      {/*
+        `key` is the point of these three.
+
+        Each of these components seeds its state from the item it is given —
+        the reader's page, bookmarks and annotations; the player's episode,
+        link and notes. Without a key React reuses the instance when the item
+        changes, so opening a second podcast left the first one's metadata on
+        screen and its video still playing, and opening a second book carried
+        the first one's annotations across. A key per item makes switching a
+        remount: fresh state, and the old YouTube player torn down by its own
+        effect cleanup, which is what stops the previous episode.
+      */}
       {reader && (
         <MyProDarkReader
+          key={itemKey(reader)}
           book={reader}
           isOpen
           colorMode={colorMode}
@@ -5498,18 +5790,27 @@ function AppShell({
       )}
       {player && (
         <MyProPodcastPlayer
+          key={itemKey(player)}
           podcast={player}
           isOpen
           colorMode={colorMode}
           expanded={playerExpanded}
           onExpandedChange={setPlayerExpanded}
           onClose={() => setPlayer(null)}
-          onUpdateProgress={updatePodcastProgress}
+          /* Bound to the row this player was opened on: the player may have
+             been used to rename the episode, so its own title no longer
+             matches what the library holds. */
+          onUpdateProgress={(_title, seconds, duration) =>
+            updatePodcastProgress(playerKeyRef.current ?? itemKey(player), seconds, duration)
+          }
           onSavePodcastDetails={savePodcastDetails}
+          queue={podcastQueue}
+          onSelectEpisode={openPodcast}
         />
       )}
       {articleItem && (
         <ArticleReaderModal
+          key={itemKey(articleItem)}
           article={articleItem}
           isOpen
           colorMode={colorMode}
@@ -5570,6 +5871,7 @@ export default function App() {
   useActivityHeartbeat(authenticated && configured);
 
   // Color Mode is stored on the profile, so it follows you between devices.
+  // The one instance is handed to Settings too; it used to load `/me` again.
   const rootProfile = useProfile(authenticated && configured);
   useEffect(() => {
     if (!rootProfile.loaded) return;
@@ -5600,6 +5902,7 @@ export default function App() {
       onToggleColor={toggleColorMode}
       onSignOut={handleSignOut}
       userEmail={session?.user?.email ?? null}
+      profile={rootProfile}
     />
   ) : (
     <Welcome

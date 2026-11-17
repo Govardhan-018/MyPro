@@ -69,6 +69,32 @@ export function MobileNavSheet({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
+  /**
+   * Publish the collapsed bar's height as `--mobile-nav-height`.
+   *
+   * Everything that has to sit clear of this bar — the podcast mini-player,
+   * the scroll padding under a page — used to carry its own hard-coded copy
+   * of that number, so growing the drag handle by eight pixels silently put
+   * the mini-player on top of the nav. Measured once and shared instead.
+   * Only the collapsed height is published; the expanded sheet is a layer
+   * over the page, not something to reserve room for.
+   */
+  useEffect(() => {
+    const node = sheetRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const publish = () => {
+      if (open) return;
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0) {
+        document.documentElement.style.setProperty("--mobile-nav-height", `${height}px`);
+      }
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [open]);
+
   const onPointerDown = (e: React.PointerEvent) => {
     startY.current = e.clientY;
     setDrag(0);
@@ -93,11 +119,23 @@ export function MobileNavSheet({
     close();
   };
 
-  // While dragging the sheet tracks the finger; otherwise CSS animates it.
+  /**
+   * While dragging the sheet tracks the finger; otherwise CSS animates it.
+   *
+   * The closed branch used to start at `OPEN_THRESHOLD * 2 - drag`, so the
+   * instant a finger landed on the grabber the whole bar jumped 92px *down*
+   * off the bottom of the screen, and the first 92px of an upward drag only
+   * undid that. Up is up in both states now; closed it lifts a little, which
+   * is the hint that there is more above.
+   */
   const style =
     drag === null
       ? undefined
-      : { transform: `translateY(${open ? -drag : Math.max(0, OPEN_THRESHOLD * 2 - drag)}px)` };
+      : {
+          transform: `translateY(${
+            open ? -drag : -Math.min(drag, OPEN_THRESHOLD) * 0.5
+          }px)`,
+        };
 
   return (
     <>

@@ -72,7 +72,10 @@ export function positionOf(ev: CalEvent): { top: number; height: number } {
   // An event ending before it starts (or crossing midnight) still has to be
   // drawable: clamp to the end of the day rather than render a negative box.
   const span = end > start ? end - start : Math.max(15, 24 * 60 - start);
-  return { top, height: Math.max(26, Math.min(span, GRID_HEIGHT - top) * PX_PER_MIN) };
+  // `span` is minutes and `GRID_HEIGHT - top` is pixels: comparing them before
+  // the conversion clamped a late-evening event against the wrong unit, so it
+  // still spilled past the bottom of the grid.
+  return { top, height: Math.max(26, Math.min(span * PX_PER_MIN, GRID_HEIGHT - top)) };
 }
 
 export function nowOffset(): number {

@@ -1632,8 +1632,10 @@
   position: fixed;
   left: 10px;
   right: 10px;
-  /* Sit just above the floating nav bar, never over it. */
-  bottom: calc(102px + env(safe-area-inset-bottom));
+  /* Sit just above the floating nav bar, never over it. The nav publishes
+     its own height (MobileNavSheet) so this cannot drift out of step with
+     it again — the fallback is only for the first paint. */
+  bottom: calc(var(--mobile-nav-height, 102px) + 10px + env(safe-area-inset-bottom));
   top: auto;
   width: auto;
   max-width: none;
@@ -1749,7 +1751,9 @@
 
 /* Keep page content clear of the mini bar (which sits just above the nav). */
 .mini-player-active .view-scroll {
-  padding-bottom: calc(182px + env(safe-area-inset-bottom)) !important;
+  padding-bottom: calc(
+    var(--mobile-nav-height, 102px) + 90px + env(safe-area-inset-bottom)
+  ) !important;
 }
 
 /* ================= Simplified secondary action + notes ================= */
@@ -3852,7 +3856,7 @@ button.learning-thumbnail {
   left: 50%;
   transform: translate(-50%, -50%);
   width: min(380px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow-y: auto;
   padding: 18px;
   border-radius: 20px;
@@ -4204,7 +4208,7 @@ button.learning-thumbnail {
     left: 0;
     transform: none;
     width: 100%;
-    max-height: 82vh;
+    max-height: 82dvh;
     border-radius: 20px 20px 0 0;
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
   }
@@ -4635,7 +4639,7 @@ button.learning-thumbnail {
     top: auto;
     width: 100%;
     max-width: 100%;
-    max-height: 82vh;
+    max-height: 82dvh;
     overflow-y: auto;
     border-radius: 20px 20px 0 0;
     z-index: 130;
@@ -5431,11 +5435,11 @@ button.learning-thumbnail {
   text-align: right;
 }
 
-/* In the scrolling column the zoom control does nothing: hide it rather
-   than leave a dead button in the dock. */
-.mypro-dark-reader.mode-continuous .dock-right {
-  display: none;
-}
+/* The zoom control was hidden here because in the scrolling column it did
+   nothing — it scaled the page wrapper, which only has an effect in paged
+   mode. It now scales the type instead, so it works in both and belongs in
+   the dock again. (It stays hidden on phones, where the dock has no room
+   for it and pinching is the gesture anyway.) */
 
 .mypro-dark-reader .canvas-nav-arrow {
   background: var(--reader-glass);
@@ -5624,4 +5628,345 @@ button.learning-thumbnail {
 .mypro-dark-reader .reader-page-sheet.sepia .sheet-block-caption,
 .mypro-dark-reader .reader-page-sheet.original .sheet-block-caption {
   color: rgba(60, 46, 30, 0.55);
+}
+
+/* ---- Thumbnails pager (the panel used to stop at page 24) ---- */
+.thumbnails-pager {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.thumbnails-pager span {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.thumbnails-pager button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11.5px;
+}
+.thumbnails-pager button:disabled {
+  opacity: 0.4;
+}
+
+/* ---- Article with no saved text yet ---- */
+.article-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0;
+  padding: 26px 18px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+}
+.article-empty-state strong {
+  color: #ffffff;
+  font-size: 14.5px;
+}
+.article-empty-state span {
+  max-width: 44ch;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.article-empty-state .primary-button {
+  margin-top: 6px;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .thumbnails-pager button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 760px) {
+  /* 28px squares in the corner of a card were the easiest thing on the
+     page to miss. Defined here, not in index.css, because this sheet is
+     imported second and would otherwise win. */
+  .knowledge-actions button {
+    width: 44px;
+    height: 44px;
+  }
+  .knowledge-actions {
+    margin: -8px -6px -8px 0;
+  }
+  .knowledge-footer .knowledge-source {
+    min-height: 44px;
+    padding: 4px 0;
+    text-align: left;
+  }
+}
+
+/* ===================================================================
+   Reader controls on a phone.
+
+   The responsive sizes further up this file (around the 767px block)
+   are cancelled by the `.mypro-dark-reader .toolbar-*` rules that come
+   after them at the same specificity — measured in the browser, the
+   toolbar was still 34px tall at 375px. These sit at the end of the
+   sheet so they are the ones that land.
+   =================================================================== */
+@media (max-width: 767px) {
+  .mypro-dark-reader .reader-back-button,
+  .mypro-dark-reader .toolbar-pill-button,
+  .mypro-dark-reader .toolbar-icon-button {
+    height: 44px;
+    min-width: 44px;
+  }
+  .mypro-dark-reader .reader-load-earlier {
+    min-height: 44px;
+  }
+
+  /* Paging is the thing you touch most in a reader, and it was a 32px
+     square either side of the page box. */
+  .mypro-dark-reader .dock-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .mypro-dark-reader .page-indicator-pill {
+    min-height: 44px;
+  }
+  .mypro-dark-reader .page-indicator-pill input {
+    min-height: 36px;
+    font-size: 16px; /* under 16px iOS zooms the page on focus */
+  }
+
+  /* The scrubber's hit area was the 6px track itself: effectively
+     undraggable with a thumb. The rail keeps its 6px look; the input
+     above it is given a finger's height and centred on it. */
+  .mypro-dark-reader .scrubber-track-wrap {
+    overflow: visible;
+  }
+  .mypro-dark-reader .reader-scrubber-slider {
+    inset: auto 0;
+    height: 44px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  /* Same for the podcast timeline. */
+  .mypro-podcast-modal .timeline-slider {
+    height: 44px;
+    top: 50%;
+    inset-block: auto;
+    transform: translateY(-50%);
+  }
+}
+
+/* Inputs below 16px make iOS Safari zoom the whole page when they take
+   focus, which then leaves the layout offset. */
+@media (max-width: 767px) {
+  .mypro-dark-reader input,
+  .mypro-dark-reader textarea,
+  .mypro-podcast-modal input,
+  .mypro-podcast-modal textarea,
+  .article-reader-modal input,
+  .article-reader-modal textarea {
+    font-size: 16px;
+  }
+}
+
+/* ===================================================================
+   Reading-settings sheet on a phone.
+   The sheet itself sits correctly; its controls were 31–32px pills and
+   a 16px slider, which is under what a thumb can hit. The shapes and
+   colours are unchanged — only the boxes grow.
+   =================================================================== */
+@media (max-width: 767px) {
+  .mypro-dark-reader .reading-settings-menu .reader-segmented button,
+  .reading-settings-menu .reader-segmented button {
+    min-height: 44px;
+  }
+  .reading-settings-menu .theme-option {
+    min-height: 76px;
+  }
+  .reading-settings-menu .font-size-row button {
+    width: 44px;
+    height: 44px;
+  }
+  /* The rail keeps its slim look; the input above it gets the height. */
+  .reading-settings-menu .font-size-row input[type="range"] {
+    height: 44px;
+  }
+  .reading-settings-menu .reader-toggle-row {
+    min-height: 52px;
+  }
+}
+
+/* ===================================================================
+   Podcast player controls on a phone.
+   Measured at 375px: the episode-step buttons came out 18px square, the
+   speed and mode pills 36px, the header icons 38px and the mini-bar's
+   play/close 38/34px. All under a thumb.
+   =================================================================== */
+@media (max-width: 767px) {
+  .mypro-podcast-modal .podcast-modal-header .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+  .mypro-podcast-modal .control-pill-btn {
+    min-width: 54px;
+    min-height: 44px;
+  }
+  .mypro-podcast-modal .control-icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .mypro-podcast-modal .go-youtube-btn,
+  .mypro-podcast-modal .add-note-btn {
+    min-height: 44px;
+  }
+  .mypro-podcast-modal .podcast-note-actions button {
+    width: 40px;
+    height: 40px;
+  }
+  .podcast-mini-bar .mini-play,
+  .podcast-mini-bar .mini-close {
+    width: 44px;
+    height: 44px;
+    flex: none;
+  }
+}
+
+/* The episode-step buttons are icon-only and were inheriting a layout meant
+   for the 15-second skip buttons, which carry a number under the glyph. */
+.episode-step-btn {
+  display: inline-flex;
+  min-width: 38px;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+}
+.episode-step-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+/* ===================================================================
+   The reading canvas must not centre its column.
+
+   `.reader-main-canvas` is a flex box with `align-items: center`, which
+   is right for a single page but wrong for the scrolling column: a
+   column taller than the box is centred, so its top overflows *above*
+   the scroll origin and cannot be scrolled to at all. Opening a book
+   therefore landed in the middle of a paragraph with the first pages
+   unreachable, and the text that was visible ran up under the toolbar.
+
+   `margin: auto` on the child does the centring instead — it only
+   consumes space that is actually spare, so tall content starts at the
+   top where it belongs.
+   =================================================================== */
+.mypro-dark-reader .reader-main-canvas {
+  align-items: flex-start;
+}
+.mypro-dark-reader.mode-paginated .reader-page-wrapper {
+  margin-block: auto;
+}
+
+/* Room for the floating toolbar and dock, so a line of text is never
+   half-hidden behind the glass at either end. */
+.mypro-dark-reader .reader-main-canvas {
+  scroll-padding-top: 16px;
+  scroll-padding-bottom: 96px;
+}
+
+/* Free line-gap control, under the three presets. */
+.line-gap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.line-gap-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #b69af5;
+}
+.line-gap-value {
+  min-width: 42px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: rgba(255, 255, 255, 0.6);
+}
+@media (max-width: 767px) {
+  .line-gap-row {
+    min-height: 44px;
+  }
+  .line-gap-row input[type="range"] {
+    height: 44px;
+  }
+}
+
+/* ===================================================================
+   Podcast transport: a row that cannot squash the play button.
+   =================================================================== */
+.mypro-podcast-modal .player-controls-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+/* Nothing in the transport row may shrink — the play button used to be
+   the only flexible item, so it absorbed every overflow. */
+.mypro-podcast-modal .player-controls-row > button {
+  flex: 0 0 auto;
+}
+.mypro-podcast-modal .master-play-btn {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+}
+.mypro-podcast-modal .master-play-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.player-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 767px) {
+  .mypro-podcast-modal .player-controls-row {
+    gap: 10px;
+  }
+  .mypro-podcast-modal .episode-step-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+/* Very narrow phones: the transport still has to fit without clipping. */
+@media (max-width: 360px) {
+  .mypro-podcast-modal .player-controls-row {
+    gap: 6px;
+  }
+  .mypro-podcast-modal .master-play-btn {
+    width: 58px;
+    height: 58px;
+    flex: 0 0 58px;
+  }
 }

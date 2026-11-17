@@ -155,13 +155,15 @@ export class ReaderService {
     const annotations = many(
       await db
         .from('annotations')
-        .select('id, kind, page, chapter, title, body, anchor_text, color, created_at, library_item_id, library_items(title)')
+        // `type` so the client can label a podcast note's `page` as a
+        // timestamp rather than a page number.
+        .select('id, kind, page, chapter, title, body, anchor_text, color, created_at, library_item_id, library_items(title, type)')
         .order('created_at', { ascending: false }),
     );
     const bookmarks = many(
       await db
         .from('bookmarks')
-        .select('id, page, title, created_at, library_item_id, library_items(title)')
+        .select('id, page, title, created_at, library_item_id, library_items(title, type)')
         .order('created_at', { ascending: false }),
     );
     return { annotations, bookmarks };

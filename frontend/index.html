@@ -3,7 +3,18 @@
   <head>
     <!-- figma:head-start -->
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover lets the app paint under the notch and the home
+      indicator; the safe-area insets in the CSS keep content clear of both.
+      interactive-widget=resizes-content makes the on-screen keyboard shrink
+      the viewport, so `dvh` sizing and bottom-anchored sheets stay above it
+      instead of being covered.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#000000" />
     <title><!-- figma:title --></title>
     <!-- figma:head-end -->
   </head>

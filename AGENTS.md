@@ -36,6 +36,10 @@ verified against the project's JWKS endpoint.
   count as absent for optional vars).
 - The agent, with a public address: `start-agent.bat` from the repo root.
 - Type checks: `npx tsc --noEmit` in each of the three folders.
+- Tests (Vitest): `pnpm --dir shared test` and `pnpm --dir frontend test`;
+  `npm test` inside `backend-render/` and `backend-local/`. `test:watch` in
+  each for the watch loop. Backend tests live in `test/` (out of the Nest
+  build); shared/frontend tests sit beside their source.
 
 ## Frontend structure
 

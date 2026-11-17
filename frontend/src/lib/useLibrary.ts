@@ -1,8 +1,19 @@
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { LibraryItem } from '../types/library';
 import { api, ApiError } from './api';
 import { isApiConfigured } from './env';
 import { itemToCreateBody, itemToPatchBody, rowToItem } from './libraryMap';
+
+/**
+ * How long to let progress settle before writing it back.
+ *
+ * The reader and the podcast player auto-save on every change, and "every
+ * change" means every page the scroll crosses and every half-second the
+ * player ticks — which turned a ten-minute listen into roughly a thousand
+ * PATCHes. Only the last value of a burst matters, so each item keeps one
+ * trailing timer.
+ */
+const WRITE_BACK_MS = 1200;
 
 export interface LibraryState {
   items: LibraryItem[];
@@ -54,27 +65,69 @@ export function useLibrary(seed: LibraryItem[]): LibraryState {
     };
   }, [configured]);
 
+  /** One trailing timer per item id, plus the latest body to send for it. */
+  const pending = useRef<Map<string, { timer: number; item: LibraryItem }>>(new Map());
+
   const persist = useCallback(
     (item: LibraryItem) => {
       if (!configured || !item.id) return;
-      api.library.update(item.id, itemToPatchBody(item)).catch(() => {
-        /* best-effort write-back; the UI already reflects the change */
-      });
+      const id = item.id;
+      const queued = pending.current.get(id);
+      if (queued) window.clearTimeout(queued.timer);
+      const timer = window.setTimeout(() => {
+        const latest = pending.current.get(id);
+        pending.current.delete(id);
+        if (!latest) return;
+        api.library.update(id, itemToPatchBody(latest.item)).catch(() => {
+          /* best-effort write-back; the UI already reflects the change */
+        });
+      }, WRITE_BACK_MS);
+      pending.current.set(id, { timer, item });
     },
     [configured],
   );
 
+  /** Send whatever is still queued (tab closing, hook unmounting). */
+  const flushPending = useCallback(() => {
+    for (const [id, queued] of pending.current) {
+      window.clearTimeout(queued.timer);
+      api.library.update(id, itemToPatchBody(queued.item)).catch(() => {});
+    }
+    pending.current.clear();
+  }, []);
+
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flushPending();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      flushPending();
+    };
+  }, [flushPending]);
+
+  /**
+   * Update one item, found by its id or — for the unsaved/prototype case —
+   * its title.
+   *
+   * Title alone was the whole key, which quietly lost writes whenever the
+   * caller held a newer title than the stored row: the podcast player sends
+   * its edited episode title back with the notes, so `updateItem('Designing
+   * for trust and calm', …)` matched nothing while the row was still called
+   * 'Design Better', and every note typed during an episode vanished.
+   */
   const updateItem = useCallback(
-    (title: string, patch: (item: LibraryItem) => LibraryItem) => {
-      setItems((current) =>
-        current.map((item) => {
-          if (item.title !== title) return item;
-          const updated = patch(item);
-          // Defer the network write out of the state-updater pass.
-          queueMicrotask(() => persist(updated));
-          return updated;
-        }),
-      );
+    (key: string, patch: (item: LibraryItem) => LibraryItem) => {
+      setItems((current) => {
+        const index = current.findIndex((item) => item.id === key);
+        const target = index === -1 ? current.findIndex((item) => item.title === key) : index;
+        if (target === -1) return current;
+        const updated = patch(current[target]);
+        // Defer the network write out of the state-updater pass.
+        queueMicrotask(() => persist(updated));
+        return current.map((item, i) => (i === target ? updated : item));
+      });
     },
     [persist],
   );

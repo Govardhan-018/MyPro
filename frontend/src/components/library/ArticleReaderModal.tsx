@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ArrowLeft,
   Bookmark,
@@ -28,7 +28,8 @@ export function ArticleReaderModal({
   onUpdateProgress,
   colorMode = false,
 }: ArticleReaderModalProps) {
-  const [progress, setProgress] = useState<number>(article.progress || 18);
+  // `|| 18` meant opening an unread article immediately saved it as 18% read.
+  const [progress, setProgress] = useState<number>(article.progress || 0);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [fontSize, setFontSize] = useState<number>(17);
   const [toast, setToast] = useState("");
@@ -37,14 +38,26 @@ export function ArticleReaderModal({
     if (isOpen) {
       onUpdateProgress(article.title, progress);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress, isOpen]);
+
+  const toastTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
   if (!isOpen) return null;
 
   const triggerToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 2000);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2000);
   };
+
+  /** The saved text of this article, if there is any. */
+  const paragraphs = (article.articleContent ?? "")
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const sourceUrl = article.pdfUrl;
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
@@ -106,41 +119,39 @@ export function ArticleReaderModal({
               <span className="resume-stat">Resume at {progress}%</span>
             </div>
 
-            <h1>Designing Calm Systems</h1>
-            <p className="article-subheading">
-              How thoughtful interfaces protect cognitive bandwidth and respect human focus.
-            </p>
+            {/* This was a fixed essay titled "Designing Calm Systems", shown
+                for whichever article you opened. It is the item's own now. */}
+            <h1>{article.title}</h1>
+            {article.creator && <p className="article-subheading">{article.creator}</p>}
 
-            <div className="article-hero-image">
-              <img src={article.image} alt={article.title} />
-              <span className="caption">
-                Subtle systems communicate what changed without demanding immediate reaction.
-              </span>
-            </div>
+            {article.image && (
+              <div className="article-hero-image">
+                <img src={article.image} alt="" />
+              </div>
+            )}
 
-            <p>
-              The primary challenge of modern computing is no longer information retrieval; it is cognitive preservation. Our digital environments bombard us with high-urgency notifications for low-consequence events.
-            </p>
-
-            <blockquote>
-              “A calm system informs without alarming, organizes without cluttering, and recedes into the background until its presence is requested.”
-            </blockquote>
-
-            <h2>1. The Periphery of Attention</h2>
-            <p>
-              Mark Weiser and John Seely Brown observed that human beings are capable of processing vast amounts of information simultaneously through the periphery of attention. When something changes in the room—a shift in daylight, a change in ambient hum—we register it without losing our current train of thought.
-            </p>
-            <p>
-              Software should mirror this natural attunement. Status indicators, progress bars, and calendar transitions ought to feel fluid, non-disruptive, and respectful of the human mind at work.
-            </p>
-
-            <h2>2. Asynchronous Respect</h2>
-            <p>
-              When a personal assistant organizes your schedule or summarizes your reading log, it should preserve user autonomy. Automated suggestions should be proposed calmly rather than imposed abruptly.
-            </p>
-            <p>
-              By offering clear options—such as tracking a physical book alongside a digital PDF—the tool adapts to the user's life, rather than compelling the user to adapt to the tool.
-            </p>
+            {paragraphs.length > 0 ? (
+              paragraphs.map((text, index) => <p key={index}>{text}</p>)
+            ) : (
+              <div className="article-empty-state">
+                <FileText size={20} />
+                <strong>No saved text for this article yet</strong>
+                <span>
+                  MyPro keeps the article&rsquo;s own text once it has it. Until then you can
+                  read it at the source and track how far you got here.
+                </span>
+                {sourceUrl && (
+                  <a
+                    className="primary-button"
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open the original
+                  </a>
+                )}
+              </div>
+            )}
           </article>
         </div>
 

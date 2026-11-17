@@ -10,7 +10,10 @@ export interface KnowledgeEntry {
   text: string;
   heading?: string;
   bookTitle: string;
+  /** A page number for a book, or a position in seconds for a podcast. */
   page: number;
+  /** What the entry came from — a podcast's `page` is a timestamp. */
+  sourceType?: 'book' | 'podcast' | 'article' | 'note';
   date: string;
   tone: string;
   tags: string[];
@@ -38,11 +41,21 @@ function numOr0(v: unknown): number {
 }
 
 /** Supabase embeds library_items as an object (to-one) or a 1-element array. */
-function bookTitle(row: Record<string, unknown>): string {
+function sourceItem(row: Record<string, unknown>): Record<string, unknown> | undefined {
   const ref = row.library_items;
-  if (!ref) return '';
-  const obj = Array.isArray(ref) ? ref[0] : ref;
-  return str((obj as Record<string, unknown> | undefined)?.title) ?? '';
+  if (!ref) return undefined;
+  return (Array.isArray(ref) ? ref[0] : ref) as Record<string, unknown> | undefined;
+}
+
+function bookTitle(row: Record<string, unknown>): string {
+  return str(sourceItem(row)?.title) ?? '';
+}
+
+function sourceType(row: Record<string, unknown>): KnowledgeEntry['sourceType'] {
+  const raw = str(sourceItem(row)?.type);
+  return raw === 'book' || raw === 'podcast' || raw === 'article' || raw === 'note'
+    ? raw
+    : undefined;
 }
 
 function annotationToEntry(a: Record<string, unknown>): KnowledgeEntry {
@@ -54,6 +67,7 @@ function annotationToEntry(a: Record<string, unknown>): KnowledgeEntry {
     heading: str(a.title),
     bookTitle: bookTitle(a),
     page: numOr0(a.page),
+    sourceType: sourceType(a),
     date: str(a.created_at) ?? '',
     tone: COLOR_TONE[str(a.color) ?? ''] ?? 'lavender',
     tags: [kind],
@@ -68,6 +82,7 @@ function bookmarkToEntry(b: Record<string, unknown>): KnowledgeEntry {
     text: str(b.title) || `Page ${page}`,
     bookTitle: bookTitle(b),
     page,
+    sourceType: sourceType(b),
     date: str(b.created_at) ?? '',
     tone: 'lavender',
     tags: ['bookmark'],
