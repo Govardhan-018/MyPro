@@ -75,6 +75,7 @@ import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
+import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
 import { MobileNavSheet } from "./components/MobileNavSheet";
 import { useCollections } from "./lib/useCollections";
@@ -137,6 +138,7 @@ type View =
   | "library"
   | "knowledge"
   | "health"
+  | "commitments"
   | "schedules"
   | "assistant"
   | "settings";
@@ -147,6 +149,7 @@ const VIEWS: View[] = [
   "library",
   "knowledge",
   "health",
+  "commitments",
   "schedules",
   "assistant",
 ];
@@ -178,6 +181,7 @@ const NOTIFICATION_VIEWS: readonly View[] = [
   "library",
   "knowledge",
   "health",
+  "commitments",
   "schedules",
   "assistant",
   "settings",
@@ -239,6 +243,7 @@ const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "library", label: "My Library", icon: Library },
   { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
+  { id: "commitments", label: "Commitments", icon: ClipboardList },
   { id: "schedules", label: "Schedules", icon: AlarmClock },
   { id: "assistant", label: "AI Assistant", icon: Sparkles },
 ];
@@ -5539,6 +5544,7 @@ function AppShell({
     if (displayedView === "knowledge")
       return <KnowledgeView items={libraryItems} onJumpToSource={jumpToSource} />;
     if (displayedView === "health") return <HealthView />;
+    if (displayedView === "commitments") return <CommitmentsView />;
     if (displayedView === "schedules") return <SchedulesView />;
     if (displayedView === "settings")
       return (

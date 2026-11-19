@@ -8,6 +8,7 @@ import type {
   GmailAccountRow,
   AssistantMessageRow,
   AssistantSettingsRow,
+  CommitmentRow,
   LibraryItemRow,
   LibraryType,
   NodeStatus,
@@ -263,6 +264,16 @@ export function createApi(
       create: (body: Record<string, unknown>) => post('/tasks', body),
       update: (id: string, body: Record<string, unknown>) => patch(`/tasks/${id}`, body),
       remove: (id: string) => del(`/tasks/${id}`),
+    },
+
+    /** Open loops the companion tracks (Phase 16.1). Served by render, so the
+     *  UI reads them whether or not the laptop is awake. */
+    commitments: {
+      list: (state?: string) => get<CommitmentRow[]>('/commitments', { state }),
+      create: (body: Record<string, unknown>) => post<CommitmentRow>('/commitments', body),
+      update: (id: string, body: Record<string, unknown>) =>
+        patch<CommitmentRow>(`/commitments/${id}`, body),
+      remove: (id: string) => del(`/commitments/${id}`),
     },
 
     health: {

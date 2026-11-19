@@ -87,7 +87,7 @@ never a second implementation.
 | 13 | The phone as main surface | web/app | 🟡 only 13.2 (offline cache) left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
-| 16 | A companion that initiates | local | ⬜ |
+| 16 | A companion that initiates | local | 🟡 16.1 commitments built; check-ins/Pulse left |
 | 17 | The seam | all | ⬜ |
 | 18 | Make it last | all | ⬜ |
 ---
@@ -507,8 +507,23 @@ data.**
 **Goal: it says something useful you did not ask for, and you are glad it
 did.** This is `COMPANION_VISION.md`, ordered by what changes the feel.
 
-- **16.1 Commitments and threads** — "finish the project by Friday" becomes a
-  tracked open loop with derived check-ins. The biggest single jump.
+- 🟡 **16.1 Commitments and threads** — "finish the project by Friday" becomes
+  a tracked open loop with derived check-ins. The biggest single jump.
+  **Built (Nov 2026):** the `commitments` table (`0009_commitments.sql` — a
+  state machine `open|at_risk|done|slipped|abandoned`, a `kind`, a believed
+  `due_at`/`confidence`, `source_message_id`, and `next_checkin_at`; default-
+  deny owner RLS; **apply by hand**). Render owns the always-on CRUD
+  (`/commitments`, mirroring tasks) so the web/app read them with the laptop
+  asleep; the agent has three skills (`list_commitments`, `create_commitment`,
+  `update_commitment`) so it records a loop the moment it hears one, and the web
+  has a **Commitments** section (open loops, mark done / at-risk / reopen /
+  delete, inline add). Shared client: `api.commitments.*`, `CommitmentRow`.
+  **Still to do for 16.1:** *derived check-ins* — nothing yet fires on
+  `next_checkin_at`; it is set but not acted on. That wants the laptop drain
+  loop to scan live commitments and raise the "you said Friday, it's Wednesday
+  and nothing's blocked" nudge — which is really the seam between here and
+  16.3's Pulse. Also unbuilt: `commitment_evidence` (links to the calendar /
+  email / annotation that prove progress) and `attention_threads`.
 - **16.2 Memory layers** — episodic summaries, semantic facts with decay, a
   weekly narrative refresh.
 - **16.3 The Pulse** — signals scored urgency × value × novelty, a daily
@@ -587,4 +602,11 @@ neighbours; this is what makes it one tool.
 - **Database size is the only thing that grows forever.** Phase 18.1. Email
   metadata and `email_insights` now grow too, though bodies are never stored.
 - **Migrations must be applied by hand** whenever they are added — a commit
-  does not run them. `0005`–`0008` are the current set.
+  does not run them. `0005`–`0009` are the current set; `0009_commitments.sql`
+  (Phase 16.1) is the newest and must be run before the Commitments section or
+  the agent's commitment skills work.
+- **Local dev agent connection.** The web app discovers the laptop through
+  `node_status`, which is empty with no Cloudflare tunnel, so in `vite dev` a
+  blank `VITE_AGENT_URL` now auto-targets `http://localhost:8787/api/v1`
+  (`frontend/src/lib/client.ts`, DEV-only). Production builds are unaffected
+  and still discover through render.

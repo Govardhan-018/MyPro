@@ -9,6 +9,7 @@ import { ReaderModule } from './library/reader.module';
 import { PdfTextModule } from './library/pdf-text.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { TasksModule } from './tasks/tasks.module';
+import { CommitmentsModule } from './commitments/commitments.module';
 import { HealthRecordsModule } from './health/health-records.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { GmailModule } from './gmail/gmail.module';
@@ -31,6 +32,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     PdfTextModule,
     CalendarModule,
     TasksModule,
+    CommitmentsModule,
     HealthRecordsModule,
     NotificationsModule,
     GmailModule,

@@ -3,103 +3,93 @@
 What the last session changed. `docs/PHASES.md` is the durable plan; this file
 is volatile. Read `AGENTS.md` too.
 
-## This session: Phase 12.4 — the repo's first tests
+## This session: the local agent connection, and Phase 16.1 (commitments)
 
-The repo had **zero tests** and 21 skills, one of which now sends real email
-to real people (7.6). This session added **Vitest** and the pure-logic unit
-tests Phase 12.4 asked for: **41 tests across all four packages, all green.**
-Phase 12 is now partly done (12.3 + 12.4); **12.1 (skill tests) and 12.2
-(routing evals) are what's left.**
+Two things. First, the web app could not reach `backend-local` when run
+locally. Second, the first slice of Phase 16 — commitments, the open loops the
+companion tracks — is now built end to end across all four corners.
 
-### The test runner — Vitest, one tool across four packages
+### Fix: the frontend could not connect to the local agent
 
-| Package | Run | Env | Where tests live |
-|---|---|---|---|
-| `shared/` | `pnpm --dir shared test` | node | `src/*.test.ts` (beside source) |
-| `frontend/` | `pnpm --dir frontend test` | node | `src/**/*.test.ts` |
-| `backend-render/` | `npm test` (in the dir) | node | `test/*.test.ts` |
-| `backend-local/` | `npm test` (in the dir) | node | `test/*.test.ts` |
+The web app discovers the laptop's URL from `node_status.base_url`, which the
+agent heartbeats from `PUBLIC_BASE_URL`. With no Cloudflare tunnel (plain local
+dev) that is blank, so discovery returned nothing and `resolveAgentBase` threw
+`AgentOfflineError` — the assistant looked permanently offline.
 
-`test:watch` in each gives the watch loop — the "know within a minute" the
-Phase 12 goal is about.
+- `frontend/src/lib/client.ts` now defaults `agentUrl` to
+  `http://localhost:8787/api/v1` when `VITE_AGENT_URL` is blank **and**
+  `import.meta.env.DEV` is true. Production builds (DEV=false) are untouched and
+  still discover through render. `frontend/.env` stays blank, with its comment
+  updated to explain the dev behaviour.
+- Verified: `backend-local` boots, a CORS preflight from `http://localhost:8443`
+  returns `204` with `Access-Control-Allow-Origin: http://localhost:8443`, and
+  an unauthenticated GET returns `401` (reachable, needs a token). The
+  logged-in browser round trip is the one thing a sandbox cannot do — that is
+  yours to confirm.
 
-- **The backends are separate npm projects**, not workspace members, so vitest
-  was installed into each with `npm`, their configs are `vitest.config.mts`
-  (ESM, or a `.ts` config warns under their CommonJS setup), and their tests
-  live in `test/` — **outside `src/`**, so they stay out of `nest build` and
-  `tsc --noEmit`, which include `src` only.
-- `shared` and `frontend` got vitest via `pnpm add` (workspace); their tests
-  sit beside the source. **Vitest 5.1.0**, which pairs with the frontend's
-  Vite 8. `jsdom` was installed in frontend but is unused — see below.
+### Phase 16.1 — commitments (open loops)
 
-### What's covered (12.4)
+A commitment is a thing the user said they'd do, with a believed deadline and a
+state the companion follows up on — distinct from a task (a checkbox).
 
-- **`computeNextRun`** — `once` / `daily` / `weekly` / `monthly` (including the
-  day-31 → last-day clamp) / `cron`, plus timezone resolution (08:30 in
-  Asia/Kolkata → 03:00Z). Tested in **both** backends: the two copies are
-  byte-identical (`backend-local`'s differs only by a header comment and the
-  extra `expandOccurrences`), so the laptop suite mirrors render's exactly.
-  **This is the test that catches a change that landed in only one half.**
-- **`expandOccurrences`** (render) — daily window expansion, empty when the
-  only occurrence is past the window, and the runaway-cron `cap` (a
-  `* * * * *` over ten days returns exactly 64, not ~14k).
-- **`groupParagraphs` / `groupBlocks` / `ocrParagraphs`** (shared) — paragraph
-  breaks on wide gaps, heading/subheading/caption classification by size
-  relative to the page body, hyphen stitching, page-number furniture drop, and
-  OCR blank-line splitting with single-char noise dropped.
-- **`dateKeyOf`** (frontend) — the local-vs-UTC day bug it was written to fix.
-  Its config pins `TZ=America/New_York` (`frontend/vitest.config.ts`) so the
-  timed case is deterministic; `02:00Z` on the 17th correctly keys to the 16th.
+- **Migration `supabase/migrations/0009_commitments.sql`** — the `commitments`
+  table: `kind` (promise|goal|decision|intention), `due_at`, `confidence`,
+  `state` (open|at_risk|done|slipped|abandoned), `source_message_id`,
+  `next_checkin_at`, resolved_at, with default-deny owner RLS and a
+  `set_updated_at` trigger. **Apply it by hand in the Supabase SQL editor** —
+  nothing works until you do. (A commit does not run migrations.)
+- **backend-render** `src/commitments/commitments.module.ts` — CRUD
+  (`GET/POST/PATCH/DELETE /commitments`), mirroring tasks, registered in
+  `app.module.ts`. This is the always-on read/write path so the web/app see
+  commitments with the laptop asleep. Reaching a terminal state stamps
+  `resolved_at`; reopening clears it.
+- **backend-local** three skills in `src/skills/definitions.ts`:
+  `list_commitments` (read), `create_commitment` (write), `update_commitment`
+  (write). The agent records a loop the moment it hears "I need to finish this
+  by Friday", and can mark it done / at-risk / slipped.
+- **shared** `api.commitments.*` and the `CommitmentRow` / `CommitmentKind` /
+  `CommitmentState` types.
+- **frontend** a new **Commitments** section: `lib/useCommitments.ts` +
+  `components/commitments/CommitmentsView.tsx`, wired into `App.tsx` (View type,
+  VIEWS, NOTIFICATION_VIEWS, navItems, the render switch). Open loops sorted
+  live-first; inline add; mark done / flag at-risk / reopen / delete. Reuses the
+  existing shell classes, no new CSS.
+- **Tests** `backend-local/test/commitment-skills.test.ts` — the three skills
+  are registered with the right side-effect tier and their schemas accept valid
+  input and reject bad (empty title, unknown kind/state, missing id).
 
-### Two decisions worth knowing
+**What 16.1 still needs (deliberately deferred):** nothing fires on
+`next_checkin_at` yet — it is stored but not acted on. The derived check-in
+("you said Friday, it's Wednesday, nothing's blocked — want tomorrow 9–11?") is
+the moment that makes this feel like a companion, and it wants the laptop drain
+loop (`backend-local/src/scheduler/`) to scan live commitments on its tick.
+That is the seam into Phase 16.3's Pulse. Also unbuilt: `commitment_evidence`
+(links to the calendar/email/annotation that show progress) and
+`attention_threads`.
 
-- **Frontend tests run in the `node` environment, not `jsdom`.** jsdom 31 drags
-  in `undici@8`, which crashes the worker at startup on this Node
-  (`decompress.js` → `.bind` of undefined). `dateKeyOf` is pure date maths and
-  its import graph (`./client`) touches `localStorage` only inside try/catch
-  closures, never at load, so `node` works and avoids the whole problem. If a
-  future frontend test genuinely needs the DOM, that undici issue has to be
-  solved first (pin undici, or a newer jsdom).
-- **TZ is pinned via `process.env.TZ` + `pool: 'forks'`** so each worker is a
-  fresh process that reads the zone at startup — the reliable way to make a
-  date test deterministic across machines.
+### Before any of this works for real
 
-### Still pending by hand (unchanged from before)
+1. **Apply `0009_commitments.sql`** in the Supabase dashboard.
+2. **Deploy backend-render** (push to `main` → Render auto-deploys), or run it
+   locally and point `VITE_API_URL` at it — the production Render does not have
+   the `/commitments` module until it is deployed. The agent skills write to
+   Supabase directly, so once the migration is applied they work against the
+   locally-running laptop immediately.
+3. Log in on the web and try it: tell the assistant "remind me I promised to
+   finish the report by Friday", then open Commitments.
 
-Migrations are not applied by committing them. In the Supabase dashboard:
-`0005`, `0006`, `0007`, and `0008_pending_action_result.sql` (without the last,
-**approving an outward action throws** — the approve route writes that column).
+## Verified this session
 
-## What's next (in order)
+- All four packages pass `npx tsc --noEmit`.
+- Unit tests green: shared 14, backend-render 17, backend-local 14 (recurrence
+  + the new commitment-skill suite), frontend 4 — **49 total**.
+- The web dev server builds and loads with the new view wired in, no console
+  errors (so the new imports resolve). Behind the login guard, so the
+  Commitments UI itself was not exercised signed-in.
+- The local agent connection (CORS + reachability), as above.
 
-1. **Phase 12.1 — skill tests.** `run(args, ctx)` takes an injected db, so each
-   of the 21 skills is directly testable: assert the row written, the receipt,
-   and the side-effect tier (`read` / `write` / `outward`). The harness is now
-   in place — this is the same Vitest setup pointed at the skills.
-2. **Phase 12.2 — routing evals.** A fixture of utterance → expected skill +
-   args, scored against the real model, so a 21-skill prompt does not degrade
-   when the 22nd is added. (Needs the laptop's model key; runs on the laptop.)
-3. **Phase 13.2 — an offline cache on the phone.** Its screens are done; the
-   library list, calendar, brief and chat are still network-only.
-4. **Phase 18.2 — the theme tokens.** `--graphite`/`--medium`/`--soft`/
-   `--accent`/`--deep`/`--secondary` are all `#ffffff`, used ~97 times; four
-   invisible-element bugs so far. Replace with a graded monochrome scale.
-5. **Phase 16** — commitments and the Pulse, the phase that changes how it
-   feels.
-
-Also open, and mostly **yours** (no code can do them): the Android WebView
-cutover decision (`docs/ANDROID_UPGRADE.md` §3 step 0 — a two-minute phone
-test), the Google OAuth app for Gmail, an EAS project id for push, and proving
-a brief actually fires on a real phone.
-
-## Not verified
-
-The tests themselves pass locally (`41 passed`). Not run this session:
-`tsc --noEmit` and the frontend build — the test dirs are excluded from both,
-so neither should be affected, but neither was re-run. Nothing signed-in was
-exercised (a sandbox cannot): no notification armed on a real phone, no mailbox
-connected, no push to a closed browser, no brief from the moved drain loop, no
-scanned PDF through OCR, and the Android screens have still never been run.
+Not verified (a sandbox cannot): anything signed-in, the commitment round trip
+through a real browser, and the migration (not applied here).
 
 ## Still true from earlier sessions
 
@@ -108,13 +98,12 @@ scanned PDF through OCR, and the Android screens have still never been run.
   `kssucdvrfzbdkyzovmjo`.
 - Auth is **brokered by Render**; clients hold no Supabase credentials except
   the publishable key served at runtime by `GET /me/realtime`.
-- Both auth guards derive JWKS from `SUPABASE_URL`; `SUPABASE_JWKS_URL` is
-  unused.
+- Tests run on **Vitest**: `pnpm --dir shared test`, `pnpm --dir frontend test`,
+  and `npm test` in each backend. Backend tests live in `test/`.
 - `performSupabaseUpload` in `utils/pdfStorage.ts` is **still a fake progress
   simulator** — only extracted JSON really syncs, never the raw PDF.
 - pdfjs runs without CMaps, so CJK PDFs may extract poorly.
-- Images are Git LFS, except `frontend/public/*.png`, exempted because Vercel
-  does not fetch LFS objects and served the logo as a 130-byte pointer.
+- Images are Git LFS, except `frontend/public/*.png`.
 - A test item "API Test Book" sits in the real library; Library has no delete UI.
 - Commit only when asked, and use the co-author line your session's own
   attribution specifies.

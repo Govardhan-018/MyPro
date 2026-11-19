@@ -57,6 +57,28 @@ export interface ScheduleRow {
   assistant_schedule_days?: { day_of_week: number }[];
 }
 
+export type CommitmentKind = 'promise' | 'goal' | 'decision' | 'intention';
+export type CommitmentState = 'open' | 'at_risk' | 'done' | 'slipped' | 'abandoned';
+
+/**
+ * An open loop (Phase 16.1) — a thing the user said they'd do, with a believed
+ * deadline and a state the companion follows up on. Distinct from a task.
+ */
+export interface CommitmentRow {
+  id: string;
+  title: string;
+  detail: string | null;
+  kind: CommitmentKind;
+  due_at: string | null;
+  confidence: number;
+  state: CommitmentState;
+  source_message_id: string | null;
+  next_checkin_at: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
 export interface AssistantMessageRow {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
