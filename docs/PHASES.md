@@ -87,7 +87,7 @@ never a second implementation.
 | 13 | The phone as main surface | web/app | 🟡 only 13.2 (offline cache) left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
-| 16 | A companion that initiates | local | 🟡 16.1 commitments + check-ins, 16.2 memory, 16.3 Pulse (partial) |
+| 16 | A companion that initiates | local | ✅ built (16.1–16.4); live behaviour unproven |
 | 17 | The seam | all | ⬜ |
 | 18 | Make it last | all | ⬜ |
 ---
@@ -503,55 +503,43 @@ data.**
 - **15.3** Calendar, tasks, email and commitments answered together rather
   than screen by screen
 
-### ⬜ Phase 16 — A companion that initiates
+### ✅ Phase 16 — A companion that initiates *(built; live behaviour unproven)*
 **Goal: it says something useful you did not ask for, and you are glad it
-did.** This is `COMPANION_VISION.md`, ordered by what changes the feel.
+did.** This is `COMPANION_VISION.md`. All four parts are now implemented and
+unit-tested; what has not happened is a real run on the live stack (needs
+migrations `0009`–`0011` applied and the agent rebuilt — see §6).
 
-- 🟡 **16.1 Commitments and threads** — "finish the project by Friday" becomes
-  a tracked open loop with derived check-ins. The biggest single jump.
-  **Built (Nov 2026):** the `commitments` table (`0009_commitments.sql` — a
-  state machine `open|at_risk|done|slipped|abandoned`, a `kind`, a believed
-  `due_at`/`confidence`, `source_message_id`, and `next_checkin_at`; default-
-  deny owner RLS; **apply by hand**). Render owns the always-on CRUD
-  (`/commitments`, mirroring tasks) so the web/app read them with the laptop
-  asleep; the agent has three skills (`list_commitments`, `create_commitment`,
-  `update_commitment`) so it records a loop the moment it hears one, and the web
-  has a **Commitments** section (open loops, mark done / at-risk / reopen /
-  delete, inline add). Shared client: `api.commitments.*`, `CommitmentRow`.
-  **Still to do for 16.1:** *derived check-ins* — nothing yet fires on
-  `next_checkin_at`; it is set but not acted on. That wants the laptop drain
-  loop to scan live commitments and raise the "you said Friday, it's Wednesday
-  and nothing's blocked" nudge — which is really the seam between here and
-  16.3's Pulse. Also unbuilt: `commitment_evidence` (links to the calendar /
-  email / annotation that prove progress) and `attention_threads`.
-- 🟡 **16.2 Memory layers** — episodic summaries, semantic facts with decay, a
-  weekly narrative refresh. **Built (Nov 2026):** semantic facts
-  (`assistant_memory`, which already had `confidence`/`last_used_at`) are now
-  injected into *every* prompt, and the agent has `remember` / `forget` skills
-  to learn and drop facts as you talk. The **weekly narrative** is
-  `0010_narrative_memory.sql` + `SchedulerService.narrativeRefresh` (hourly
-  cron, regenerates a ~250-word third-person sketch when the latest snapshot is
-  >7 days old) injected via `AssistantService.memoryContext`. **Still to do:**
-  episodic summaries of past conversations, and confidence *decay* (facts that
-  stop being used should fade out of the prompt).
-- 🟡 **16.3 The Pulse** — signals scored urgency × value × novelty, a daily
-  budget, cooldowns, and a recorded *suppressed* log. Initiative without
-  nagging. **Built (Nov 2026):** the first proactive signal — derived
-  **check-ins on commitments**. `SchedulerService.commitmentCheckins` (30-min
-  cron) acts on `commitments.next_checkin_at` — now **auto-armed** when a
-  commitment is created/updated with a deadline (≈ halfway to it, min 30 min
-  out, in both the render CRUD and the agent's `create_commitment`), so the
-  scheduler always has something to fire. It writes a contextual nudge (LLM,
-  degrading to a plain one) as a chat message + `kind:'checkin'` notification,
-  then advances `next_checkin_at` (cooldown: ~halfway to the deadline, min 6h;
-  daily if overdue) and flags an overdue open loop `at_risk`. Restraint is a
-  **daily budget of 3** per user and the per-commitment cooldown; only runs for
-  `proactive_enabled` personas. **Still to do:** the full scoring model across
-  *many* signal types (overdue tasks, unanswered email, reading streaks,
-  silences), and the recorded *suppressed* log ("what did you decide not to
-  tell me today?").
-- **16.4 Rhythm and register** — morning, evening, the Sunday letter; tone
-  derived rather than configured; catch-up collapse when the laptop wakes.
+- ✅ **16.1 Commitments and threads.** `commitments` (`0009`) — a state machine
+  `open|at_risk|done|slipped|abandoned` with `kind`, `due_at`/`confidence`,
+  `next_checkin_at`. Render owns the always-on CRUD (`/commitments`); the agent
+  has `list`/`create`/`update_commitment`; the web has a **Commitments**
+  section. `next_checkin_at` is auto-armed (≈ halfway to the deadline) on
+  create/update so the Pulse has something to fire. **Attention threads**
+  (`attention_threads`, `0011`) carry the handful of live concerns; the agent
+  opens/closes them (`open_thread`/`close_thread`) and active ones are injected
+  into every prompt so it can say "about the Friday project —". *(Not built:
+  `commitment_evidence` links.)*
+- ✅ **16.2 Memory layers.** Semantic facts (`assistant_memory`) injected every
+  prompt with **decay** (`memory/decay.ts` — facts unused past a half-life fade
+  below a floor and drop out; using one resets its clock), `remember`/`forget`
+  skills, the weekly **narrative** (`0010` + `narrativeRefresh`), and
+  **episodic** summaries (`memory_episodes`, `0011` + `episodeRefresh`, 6-hourly,
+  one sentence per stretch of conversation). All assembled in
+  `AssistantService.memoryContext`.
+- ✅ **16.3 The Pulse.** `PulseService` (`pulse/`, 30-min cron) gathers candidate
+  signals — commitment check-ins, overdue/soon tasks, action-needed email,
+  silence, plus the rhythm signals below — scores each **urgency × value ×
+  novelty** (`pulse/scoring.ts`), and sends only those that clear a minimum
+  score, a per-signal **cooldown**, and a **daily budget of 3**. Every
+  candidate, sent or suppressed and why, is written to `interventions` (`0011`)
+  — the suppressed log that answers "what did you decide not to tell me today?".
+  Novelty decays from when each signal last fired, so repetition self-limits.
+- ✅ **16.4 Rhythm and register.** **Register** (`assistant/register.ts`) is
+  derived from the situation (health → serious, at-risk → concerned, deadline →
+  focus, a win → celebratory, else casual) and injected as one prompt line.
+  **Rhythm** is two Pulse signals in the user's local time: an **evening**
+  close-out (19:00–22:00) and the **Sunday letter** (Sun 17:00–21:00). *(Catch-up
+  collapse on wake is not special-cased beyond the drain loop's staleness rule.)*
 
 ### ⬜ Phase 17 — The seam
 **Goal: the corners stop being tabs.** Until here they are excellent
@@ -623,11 +611,11 @@ neighbours; this is what makes it one tool.
 - **Database size is the only thing that grows forever.** Phase 18.1. Email
   metadata and `email_insights` now grow too, though bodies are never stored.
 - **Migrations must be applied by hand** whenever they are added — a commit
-  does not run them. `0005`–`0010` are the current set. `0009_commitments.sql`
-  (Phase 16.1) is needed before the Commitments section / commitment skills,
-  and `0010_narrative_memory.sql` (Phase 16.2) before the weekly narrative
-  (the `remember`/`forget` facts use `assistant_memory` from 0001, so those
-  work without 0010).
+  does not run them. `0005`–`0011` are the current set. Phase 16 needs three:
+  `0009_commitments.sql` (commitments), `0010_narrative_memory.sql` (the weekly
+  narrative), and `0011_companion.sql` (episodic memory, the Pulse's
+  `interventions` ledger, and attention threads). The `remember`/`forget` facts
+  use `assistant_memory` from 0001, so those work even before the rest land.
 - **Local dev agent connection.** The web app discovers the laptop through
   `node_status`, which is empty with no Cloudflare tunnel, so in `vite dev` a
   blank `VITE_AGENT_URL` now auto-targets `http://localhost:8787/api/v1`

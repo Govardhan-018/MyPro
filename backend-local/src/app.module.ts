@@ -8,6 +8,7 @@ import { PresenceModule } from './presence/presence.module';
 import { LocalNotificationsModule } from './notifications/notifications.module';
 import { LocalGmailModule } from './gmail/gmail.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { PulseModule } from './pulse/pulse.service';
 
 /**
  * backend-local — the personal agent on your laptop.
@@ -28,6 +29,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     LocalNotificationsModule,
     LocalGmailModule,
     SchedulerModule,
+    PulseModule,
   ],
 })
 export class AppModule {}

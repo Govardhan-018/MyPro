@@ -6,7 +6,17 @@ import type { AuthUser } from '../common/auth.guard';
 import { SkillsService } from '../skills/skills.service';
 import type { InvocationReceipt } from '../skills/types';
 import { LlmService, type LlmMessage } from '../llm/llm.service';
+import { liveFacts, type MemoryFact } from '../memory/decay';
+import { deriveRegister, registerHint, type Register } from './register';
 import { env } from '../config/env';
+
+interface CompanionMemory {
+  facts: { key: string; value: string }[];
+  narrative?: string;
+  episodes: string[];
+  threads: { title: string; summary: string | null }[];
+  register: Register;
+}
 
 /** How many tool rounds the model may take before it must answer. */
 const MAX_TOOL_STEPS = 6;
@@ -294,33 +304,90 @@ export class AssistantService {
   }
 
   /**
-   * What the companion carries between conversations (Phase 16 — memory).
-   * Durable facts (`assistant_memory`, highest-confidence first) and the latest
-   * weekly narrative snapshot, injected into every prompt so the assistant
-   * starts from "knows you" rather than from zero.
+   * Everything the companion carries between conversations (Phase 16).
+   * Semantic facts (decayed so stale ones fade), the weekly narrative, recent
+   * episodic summaries, the active attention threads, and the register derived
+   * from the current situation — all injected into every prompt so the
+   * assistant starts from "knows you" rather than from zero.
    */
-  async memoryContext(
-    user: AuthUser,
-  ): Promise<{ facts: { key: string; value: string }[]; narrative?: string }> {
+  async memoryContext(user: AuthUser): Promise<CompanionMemory> {
     const db = this.supabase.forUser(user.token);
-    const [factsRes, narrativeRes] = await Promise.all([
-      db
-        .from('assistant_memory')
-        .select('key, value')
-        .order('confidence', { ascending: false, nullsFirst: false })
-        .order('last_used_at', { ascending: false, nullsFirst: false })
-        .limit(25),
+    const now = Date.now();
+    const [factsRes, narrativeRes, episodesRes, threadsRes, commitmentsRes] = await Promise.all([
+      db.from('assistant_memory').select('key, value, confidence, last_used_at').limit(60),
       db
         .from('narrative_snapshots')
         .select('content')
         .order('generated_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
+      db
+        .from('memory_episodes')
+        .select('summary')
+        .order('created_at', { ascending: false })
+        .limit(3),
+      db
+        .from('attention_threads')
+        .select('title, summary')
+        .eq('state', 'active')
+        .order('last_touched_at', { ascending: false })
+        .limit(5),
+      db
+        .from('commitments')
+        .select('state, due_at, resolved_at')
+        .in('state', ['open', 'at_risk', 'done'])
+        .limit(50),
     ]);
+
+    const facts = liveFacts((factsRes.data ?? []) as MemoryFact[], now);
+    // Using a fact resets its decay clock, so a fact that keeps coming up stays
+    // strong while one that never surfaces fades. Fire-and-forget.
+    if (facts.length) {
+      void db
+        .from('assistant_memory')
+        .update({ last_used_at: new Date(now).toISOString() })
+        .in(
+          'key',
+          facts.map((f) => f.key),
+        );
+    }
+
     return {
-      facts: (factsRes.data ?? []) as { key: string; value: string }[],
+      facts: facts.map((f) => ({ key: f.key, value: f.value })),
       narrative: (narrativeRes.data as { content?: string } | null)?.content,
+      episodes: ((episodesRes.data ?? []) as { summary: string }[]).map((e) => e.summary),
+      threads: (threadsRes.data ?? []) as { title: string; summary: string | null }[],
+      register: this.registerFor(
+        (commitmentsRes.data ?? []) as {
+          state: string;
+          due_at: string | null;
+          resolved_at: string | null;
+        }[],
+        now,
+      ),
     };
+  }
+
+  /** Derive the register from the live commitments (health would pull harder,
+   *  but it stays invisible here without a grant). */
+  private registerFor(
+    commitments: { state: string; due_at: string | null; resolved_at: string | null }[],
+    now: number,
+  ): Register {
+    const dueSoon = (c: { due_at: string | null }) =>
+      c.due_at != null && new Date(c.due_at).getTime() - now < 24 * 3600_000;
+    const overdue = (c: { due_at: string | null }) =>
+      c.due_at != null && new Date(c.due_at).getTime() < now;
+    return deriveRegister({
+      atRisk: commitments.some((c) => c.state === 'at_risk' || (c.state === 'open' && overdue(c))),
+      deadlineSoon: commitments.some((c) => c.state === 'open' && dueSoon(c)),
+      justCompleted: commitments.some(
+        (c) =>
+          c.state === 'done' &&
+          c.resolved_at != null &&
+          now - new Date(c.resolved_at).getTime() < 24 * 3600_000,
+      ),
+    });
   }
 
   /** "Clear chat": wipe the messages, or archive the thread and start fresh. */
@@ -377,7 +444,7 @@ export class AssistantService {
   systemPrompt(
     persona: { name?: string; tone?: string; style_notes?: string | null },
     context?: { timezone: string; now: Date },
-    memory?: { facts: { key: string; value: string }[]; narrative?: string },
+    memory?: Partial<CompanionMemory>,
   ): string {
     const when = context
       ? `Right now it is ${context.now.toLocaleString('en-GB', {
@@ -396,13 +463,25 @@ export class AssistantService {
       ? 'THINGS YOU KNOW ABOUT THEM (use naturally; do not list them back)\n' +
         memory.facts.map((f) => `- ${f.key}: ${f.value}`).join('\n')
       : '';
+    const episodes = memory?.episodes?.length
+      ? 'RECENTLY (episodic memory — what has been going on)\n' +
+        memory.episodes.map((e) => `- ${e}`).join('\n')
+      : '';
+    const threads = memory?.threads?.length
+      ? 'LIVE THREADS (their current concerns — you may refer to these by name)\n' +
+        memory.threads.map((t) => `- ${t.title}${t.summary ? `: ${t.summary}` : ''}`).join('\n')
+      : '';
+    const register = memory?.register ? registerHint(memory.register) : '';
 
     return [
       `You are ${persona.name ?? 'MyPro'}, a personal assistant and close friend to one person.`,
       `Tone: ${persona.tone ?? 'warm, casual, like a close friend'}.`,
       persona.style_notes ? `Charter: ${persona.style_notes}` : '',
       when,
+      register ? `\n${register}` : '',
       narrative ? `\n${narrative}` : '',
+      episodes ? `\n${episodes}` : '',
+      threads ? `\n${threads}` : '',
       facts ? `\n${facts}` : '',
       '',
       'HOW YOU WRITE',

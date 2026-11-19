@@ -365,57 +365,8 @@ export class SchedulerService implements OnModuleInit {
     };
   }
 
-  /** Nudge if the user has gone quiet past their own threshold. */
-  @Cron(CronExpression.EVERY_30_MINUTES)
-  async inactivityCheck(): Promise<void> {
-    if (!env().SCHEDULER_ENABLED) return;
-
-    const db = this.supabase.admin;
-    const { data } = await db
-      .from('assistant_persona')
-      .select('user_id, inactivity_hours, proactive_enabled')
-      .eq('proactive_enabled', true);
-
-    for (const p of (data ?? []) as {
-      user_id: string;
-      inactivity_hours: number | null;
-      proactive_enabled: boolean;
-    }[]) {
-      const { data: activity } = await db
-        .from('user_activity')
-        .select('last_active_at, inactive_notified_at')
-        .eq('user_id', p.user_id)
-        .maybeSingle();
-
-      const row = activity as {
-        last_active_at: string | null;
-        inactive_notified_at: string | null;
-      } | null;
-      if (!row?.last_active_at) continue;
-
-      const quietMs = Date.now() - new Date(row.last_active_at).getTime();
-      if (quietMs < (p.inactivity_hours ?? 10) * 3600_000) continue;
-
-      // Only nudge once per quiet stretch.
-      if (
-        row.inactive_notified_at &&
-        new Date(row.inactive_notified_at).getTime() > new Date(row.last_active_at).getTime()
-      ) {
-        continue;
-      }
-
-      await this.push.send(p.user_id, {
-        title: 'MyPro',
-        body: 'Hey — it has been a while. How are you doing?',
-        kind: 'nudge',
-        deeplink: '/assistant',
-      });
-      await db
-        .from('user_activity')
-        .update({ inactive_notified_at: new Date().toISOString() })
-        .eq('user_id', p.user_id);
-    }
-  }
+  // Inactivity nudging moved into the Pulse (the 'silence' signal), so it is
+  // scored and budgeted with everything else rather than firing on its own.
 
   // ---- helpers ----------------------------------------------------------
 
@@ -433,11 +384,10 @@ export class SchedulerService implements OnModuleInit {
     return Boolean((data as { allow_auto_send_email?: boolean } | null)?.allow_auto_send_email);
   }
 
-  // ---- Phase 16: memory refresh + proactive check-ins -------------------
+  // ---- Phase 16: memory refresh (narrative + episodic) ------------------
 
   private static readonly NARRATIVE_MAX_AGE_MS = 7 * 24 * 3600_000;
-  private static readonly DAILY_CHECKIN_BUDGET = 3;
-  private static readonly CHECKIN_MIN_INTERVAL_MS = 6 * 3600_000;
+  private static readonly EPISODE_MIN_MESSAGES = 16;
 
   /**
    * The weekly narrative (COMPANION_VISION §1). When a user's latest snapshot
@@ -535,175 +485,83 @@ export class SchedulerService implements OnModuleInit {
   }
 
   /**
-   * Derived check-ins (COMPANION_VISION §2/§3). When a commitment's
-   * `next_checkin_at` falls due, say something useful about it — but with
-   * restraint: a per-user daily budget and a per-commitment cooldown (the next
-   * check-in is pushed forward after each nudge). Only for users who left
-   * proactivity on. This is the first time the companion speaks unprompted.
+   * Episodic memory (COMPANION_VISION §1). When a conversation has moved on
+   * enough since the last episode, summarise the new stretch into one line and
+   * store it, so the companion can recall "a while back you were deep in the
+   * auth refactor" long after the raw messages scroll out of the context
+   * window. `assistant.service` injects the most recent episodes.
    */
-  @Cron(CronExpression.EVERY_30_MINUTES)
-  async commitmentCheckins(): Promise<void> {
+  @Cron(CronExpression.EVERY_6_HOURS)
+  async episodeRefresh(): Promise<void> {
     if (!env().SCHEDULER_ENABLED) return;
     const db = this.supabase.admin;
-    const { data: personas } = await db
-      .from('assistant_persona')
-      .select('user_id, name, tone, style_notes')
-      .eq('proactive_enabled', true);
-
-    for (const p of (personas ?? []) as Persona[]) {
-      await this.checkinsForUser(p);
+    const { data: personas } = await db.from('assistant_persona').select('user_id');
+    for (const p of (personas ?? []) as { user_id: string }[]) {
+      try {
+        await this.refreshEpisode(p.user_id);
+      } catch (err) {
+        this.logger.warn(
+          `episode refresh failed for ${p.user_id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
-  private async checkinsForUser(p: Persona): Promise<void> {
+  private async refreshEpisode(userId: string): Promise<void> {
     const db = this.supabase.admin;
-
-    // Daily budget: proactive check-ins already sent to this user today (UTC).
-    const dayStart = new Date();
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const { count } = await db
-      .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', p.user_id)
-      .eq('kind', 'checkin')
-      .gte('created_at', dayStart.toISOString());
-    let budget = SchedulerService.DAILY_CHECKIN_BUDGET - (count ?? 0);
-    if (budget <= 0) return;
-
-    const { data: due } = await db
-      .from('commitments')
-      .select('id, title, detail, due_at, state')
-      .eq('user_id', p.user_id)
-      .in('state', ['open', 'at_risk'])
-      .not('next_checkin_at', 'is', null)
-      .lte('next_checkin_at', new Date().toISOString())
-      .order('next_checkin_at')
-      .limit(budget);
-
-    for (const c of (due ?? []) as CommitmentDue[]) {
-      if (budget <= 0) break;
-      await this.checkinOne(p, c);
-      budget--;
-    }
-  }
-
-  private async checkinOne(p: Persona, c: CommitmentDue): Promise<void> {
-    const db = this.supabase.admin;
-    const now = Date.now();
-    const overdue = c.due_at ? new Date(c.due_at).getTime() < now : false;
-
-    const [eventsRes, factsRes] = await Promise.all([
-      db
-        .from('calendar_events')
-        .select('title, starts_at')
-        .eq('user_id', p.user_id)
-        .gte('starts_at', new Date(now).toISOString())
-        .lte('starts_at', new Date(now + 3 * 864e5).toISOString())
-        .order('starts_at')
-        .limit(10),
-      db
-        .from('assistant_memory')
-        .select('key, value')
-        .eq('user_id', p.user_id)
-        .order('confidence', { ascending: false, nullsFirst: false })
-        .limit(15),
-    ]);
-
-    const nudge = await this.composeCheckin(
-      p,
-      c,
-      (eventsRes.data ?? []) as Record<string, unknown>[],
-      (factsRes.data ?? []) as Record<string, unknown>[],
-      overdue,
-    );
-
-    // Deliver as a chat message (kind 'checkin' so the daily budget can count it).
-    const { data: convo } = await db
-      .from('assistant_conversations')
-      .select('id')
-      .eq('user_id', p.user_id)
-      .eq('is_primary', true)
-      .is('archived_at', null)
+    const { data: last } = await db
+      .from('memory_episodes')
+      .select('period_end')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
-    if (convo) {
-      await db.from('assistant_messages').insert({
-        user_id: p.user_id,
-        conversation_id: (convo as { id: string }).id,
-        role: 'assistant',
-        content: nudge,
-      });
-    }
-    await this.push.send(p.user_id, {
-      title: 'MyPro',
-      body: nudge,
-      kind: 'checkin',
-      deeplink: '/assistant',
-    });
+    const since = (last as { period_end: string | null } | null)?.period_end ?? null;
 
-    // Cooldown: aim for roughly halfway to the deadline, but never sooner than
-    // the minimum interval; with no future deadline, nudge at most daily. An
-    // overdue, still-open loop is flagged at_risk so the UI and prompt see it.
-    const patch: Record<string, unknown> = {};
-    if (overdue && c.state === 'open') patch.state = 'at_risk';
-    let nextMs: number;
-    if (c.due_at && new Date(c.due_at).getTime() > now) {
-      const halfway = now + (new Date(c.due_at).getTime() - now) / 2;
-      nextMs = Math.max(halfway, now + SchedulerService.CHECKIN_MIN_INTERVAL_MS);
-    } else {
-      nextMs = now + 24 * 3600_000;
-    }
-    patch.next_checkin_at = new Date(nextMs).toISOString();
-    await db.from('commitments').update(patch).eq('id', c.id);
+    let q = db
+      .from('assistant_messages')
+      .select('role, content, created_at')
+      .eq('user_id', userId)
+      .in('role', ['user', 'assistant'])
+      .order('created_at', { ascending: true })
+      .limit(80);
+    if (since) q = q.gt('created_at', since);
+    const rows = ((await q).data ?? []) as {
+      role: string;
+      content: string | null;
+      created_at: string;
+    }[];
+    const withText = rows.filter((r) => r.content);
+    if (withText.length < SchedulerService.EPISODE_MIN_MESSAGES) return;
 
-    await this.audit.record({
-      userId: p.user_id,
-      actor: 'system',
-      action: 'commitment.checkin',
-      targetType: 'commitment',
-      targetId: c.id,
-      detail: { overdue },
-    });
-  }
-
-  private async composeCheckin(
-    p: Persona,
-    c: CommitmentDue,
-    events: Record<string, unknown>[],
-    facts: Record<string, unknown>[],
-    overdue: boolean,
-  ): Promise<string> {
     try {
       const res = await this.llm.generate({
         system:
-          `You are ${p.name ?? 'MyPro'}, a close-friend assistant.` +
-          (p.tone ? ` Tone: ${p.tone}.` : '') +
-          (p.style_notes ? ` ${p.style_notes}` : '') +
-          ' Write ONE short proactive check-in (1-3 sentences, no greeting, no ' +
-          'lists) about a commitment the person made. Be specific and useful: ' +
-          'note the deadline, whether any time is blocked for it, and offer one ' +
-          'concrete next move. If it is overdue, be gentle but honest. Only use ' +
-          'the facts given.',
+          'Summarise this stretch of conversation into ONE sentence of episodic ' +
+          'memory, third person, past tense — what the person was doing, deciding ' +
+          'or working through. No preamble, no advice, just the sentence.',
         messages: [
           {
             role: 'user',
-            text:
-              `COMMITMENT: ${JSON.stringify({ title: c.title, detail: c.detail, due_at: c.due_at, overdue })}\n` +
-              `UPCOMING EVENTS: ${JSON.stringify(events)}\n` +
-              `WHAT YOU KNOW ABOUT THEM: ${JSON.stringify(facts)}`,
+            text: withText.map((m) => `${m.role}: ${m.content}`).join('\n'),
           },
         ],
       });
-      const text = res.text.trim();
-      if (text) return text;
+      const summary = res.text.trim();
+      if (!summary) return;
+      await db.from('memory_episodes').insert({
+        user_id: userId,
+        summary,
+        message_count: withText.length,
+        period_start: withText[0].created_at,
+        period_end: withText[withText.length - 1].created_at,
+      });
+      this.logger.log(`episode recorded for ${userId} (${withText.length} msgs)`);
     } catch (err) {
       this.logger.warn(
-        `check-in generation failed (${err instanceof Error ? err.message : String(err)}) — plain nudge`,
+        `episode generation failed for ${userId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const due = c.due_at ? ` (due ${new Date(c.due_at).toLocaleDateString('en-GB')})` : '';
-    return overdue
-      ? `About "${c.title}"${due} — it's past due. Want to reschedule it or close it out?`
-      : `Checking in on "${c.title}"${due}. How's it going — want me to block some time for it?`;
   }
 }
 
@@ -712,12 +570,4 @@ interface Persona {
   name?: string | null;
   tone?: string | null;
   style_notes?: string | null;
-}
-
-interface CommitmentDue {
-  id: string;
-  title: string;
-  detail: string | null;
-  due_at: string | null;
-  state: string;
 }

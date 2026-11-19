@@ -3,99 +3,95 @@
 What the last session changed. `docs/PHASES.md` is the durable plan; this file
 is volatile. Read `AGENTS.md` too.
 
-## This session: connection verified, then the assistant upgraded toward a companion
+## This session: Phase 16 completed — the assistant is now a companion (code)
 
-Three threads: (1) verified the full web ↔ laptop-agent chain end to end and
-fixed the two bugs that broke it; (2) built Phase 16.2 **memory** so the agent
-knows you across sessions; (3) built the first slice of Phase 16.3 **proactive
-check-ins** so it speaks unprompted. Everything typechecks; backend-local has
-19 unit tests (recurrence + commitment + memory skills), all green.
+All four parts of Phase 16 are implemented and unit-tested. The agent now
+carries memory across sessions, decides on its own when to speak (with
+restraint), and adapts its register. **74 unit tests green, all four packages
+typecheck.** What has *not* happened is a live run — it needs migrations
+applied and the agent rebuilt (see "Before it runs live").
 
-### Connection chain — verified working
+Earlier this session (already committed): the web ↔ agent connection fix
+(`start-agent.bat` tunnel-URL capture via cloudflared's metrics API; CORS; the
+dev `VITE_AGENT_URL` fallback) and the first cut of 16.1/16.2/16.3.
 
-A message sent from the live web app reached backend-local and got a reply
-(`"Hello"` → `"Hey! What's up?"`). Two real bugs fixed along the way:
+### 16.1 — commitments + attention threads
+- `commitments` (`0009`): CRUD on render (`/commitments`), agent skills, a web
+  Commitments section; `next_checkin_at` auto-armed on a deadline.
+- `attention_threads` (`0011`): `open_thread` / `close_thread` skills; active
+  threads injected into every prompt.
 
-- **`start-agent.bat` never captured the tunnel URL.** Its old `timeout`-based
-  log-scrape silently produced a blank `Public URL`, so the agent booted with
-  an empty `PUBLIC_BASE_URL` and heartbeat `node_status.base_url = null` —
-  nobody could discover the laptop. Rewrote it to read the hostname from
-  cloudflared's **metrics API** (`--metrics 127.0.0.1:20789` →
-  `/quicktunnel`), use `ping` as the sleep (`timeout` errors on redirected
-  stdin), always rebuild (no stale `dist`), and refuse to start if the port is
-  busy. **`start-agent.bat` is committable and should be kept.**
-- **Agent CORS didn't allow the production origin.** `backend-local/.env`
-  `CORS_ORIGINS` listed only localhost, so the live app's request was
-  browser-blocked. Added `https://mypro-by-gova.vercel.app`. (`.env` is
-  gitignored — this is machine config, not a repo change.)
-- Earlier dev fix still in place: blank `VITE_AGENT_URL` auto-targets
-  `http://localhost:8787/api/v1` in `vite dev` (`frontend/src/lib/client.ts`).
+### 16.2 — memory layers (full)
+- Facts (`assistant_memory`) injected every prompt, now with **decay**
+  (`src/memory/decay.ts`): a fact unused past a ~45-day half-life fades below a
+  floor and drops out; `remember` resets its clock. `remember`/`forget` skills.
+- **Narrative** (`0010` + `SchedulerService.narrativeRefresh`, hourly): a
+  ~250-word third-person sketch regenerated weekly.
+- **Episodic** (`memory_episodes`, `0011` + `SchedulerService.episodeRefresh`,
+  6-hourly): one sentence summarising each new stretch of ≥16 messages.
+- Everything assembled in `AssistantService.memoryContext` and injected by
+  `systemPrompt`.
 
-Operational rule learned: **only ever run one agent.** A stray/`npm run dev`
-instance heartbeats `base_url: null` every 30s and overwrites a good URL; the
-new port guard enforces one.
+### 16.3 — the Pulse (`src/pulse/`)
+- `PulseService` (30-min cron) replaces the old one-off commitment check-in and
+  inactivity nudge (both removed from `SchedulerService`). It gathers candidate
+  signals — `commitment`, `task`, `email`, `silence`, `evening`, `weekly` —
+  scores each **urgency × value × novelty** (`pulse/scoring.ts`), and sends only
+  those that clear a min score, a per-signal **cooldown**, and a **daily budget
+  of 3**. Novelty decays from when each signal last fired.
+- Every candidate — sent or suppressed and why — is written to `interventions`
+  (`0011`). That's the suppressed log ("what did you decide not to tell me
+  today?"), and the tuning surface.
 
-### Phase 16.2 — memory (it knows you)
+### 16.4 — register + rhythm
+- **Register** (`src/assistant/register.ts`): derived from the situation
+  (health → serious, at-risk → concerned, deadline → focus, win → celebratory,
+  else casual), injected as one prompt line.
+- **Rhythm**: the evening close-out and Sunday letter are two Pulse signals
+  gated on the user's local time.
 
-- `0010_narrative_memory.sql` — `narrative_snapshots` (immutable, owner RLS).
-  **Apply by hand.** Semantic facts already live in `assistant_memory` (0001).
-- `AssistantService.memoryContext` reads the top facts (by confidence, then
-  last_used_at) + the latest narrative and injects both into **every** prompt
-  (`systemPrompt` grew a memory section). Facts are framed as background, not a
-  script to recite.
-- New agent skills `remember` / `forget` (`skills/definitions.ts`) — upsert /
-  delete a durable fact by key, so it learns as you talk.
-- `SchedulerService.narrativeRefresh` (hourly cron) regenerates a ~250-word
-  third-person sketch when the latest snapshot is >7 days old, from recent
-  messages + open commitments + reading. Skips users with no data (won't invent
-  a life). Degrades quietly on model failure.
+### Tests (this is the "test the AI" layer)
+New backend-local suites for the pure AI logic: `pulse-scoring` (score, novelty
+decay, the three gates, ranking), `memory-decay` (effective confidence, fading,
+live-fact selection), `register` (derivation precedence). Plus the existing
+recurrence / commitment-skill / memory-skill suites. 39 in backend-local, 74
+total. The pure logic that decides what the companion knows and whether it
+speaks is covered; the LLM-in-the-loop behaviour is not (can't be, headless).
 
-### Phase 16.3 — proactive check-ins (it speaks first)
+## Before it runs live (your steps)
+1. **Apply migrations by hand** in Supabase: `0009_commitments.sql`,
+   `0010_narrative_memory.sql`, `0011_companion.sql` (plus any still-pending
+   `0005`–`0008`).
+2. **Rebuild + restart the agent** (`start-agent.bat`) — it's on the old build.
+   Crons run with `SCHEDULER_ENABLED=true` (default).
+3. Deploy backend-render (push `main`) for the Commitments CRUD.
 
-- `SchedulerService.commitmentCheckins` (30-min cron) acts on
-  `commitments.next_checkin_at`: for live loops that are due, it writes a
-  contextual nudge (LLM over the commitment + upcoming events + memory,
-  degrading to a plain line) as a chat message **and** a `kind:'checkin'`
-  notification, then advances `next_checkin_at` (≈ halfway to the deadline, min
-  6h; daily if overdue) and flags an overdue open loop `at_risk`.
-- Restraint: a **daily budget of 3** per user (counts `kind:'checkin'`
-  notifications since UTC midnight) + the per-commitment cooldown. Only runs
-  for `proactive_enabled` personas.
-
-**What's deferred (next steps for 16):** episodic conversation summaries and
-confidence *decay* for facts (16.2); the full Pulse scoring across many signal
-types and the recorded *suppressed* log (16.3); attention threads and the
-rhythm/register layer (16.1/16.4).
-
-### Before any of this runs for the user
-
-1. **Apply migrations by hand** in Supabase: `0009_commitments.sql` and
-   `0010_narrative_memory.sql` (plus any still-pending `0005`–`0008`).
-2. **Rebuild + restart the laptop agent** (`start-agent.bat`) — the running
-   agent is on the old build until then. The crons only run with
-   `SCHEDULER_ENABLED=true` (default).
-3. Deploy backend-render for the Commitments CRUD (push to `main`), or run it
-   locally.
+### How to see each piece work (once live)
+- **Memory:** tell the assistant "remember I prefer deep work before noon",
+  then open a fresh chat and ask what it knows — it should use it without being
+  told. Then "forget that".
+- **Commitment + Pulse:** say "I promised to send the report by tomorrow 5pm";
+  it should record a commitment, and within the day a check-in should appear in
+  chat + as a notification. Overdue → it flags `at_risk`.
+- **Suppressed log:** query `interventions` — you'll see sent rows and
+  suppressed ones with `suppressed_reason`.
+- **Narrative/episodic:** accumulate some conversation; `narrative_snapshots`
+  and `memory_episodes` fill on their crons (hourly / 6-hourly).
 
 ## Verified this session
-
-- All four packages pass `npx tsc --noEmit`.
-- Unit tests: shared 14, backend-render 17, backend-local 19, frontend 4.
-- The live web ↔ agent round trip (message delivered + answered).
-- Not verified (sandbox / needs the running stack): the memory injection,
-  narrative generation, and a real proactive check-in firing — these need the
-  rebuilt agent + migrations applied, and time to pass.
+- All four packages `npx tsc --noEmit`.
+- Unit tests: backend-local 39, backend-render 17, shared 14, frontend 4 = 74.
+- Not verified (needs live stack + model + time): memory injection, decay,
+  narrative/episodic generation, any Pulse signal firing, register in a real
+  reply. All headless-impossible.
 
 ## Still true from earlier sessions
-
-- Web: `https://mypro-by-gova.vercel.app` · Render:
-  `https://mypro-km2k.onrender.com` (base `/api/v1`) · Supabase ref
-  `kssucdvrfzbdkyzovmjo`.
-- Tests run on **Vitest**: `pnpm --dir shared|frontend test`, `npm test` in
-  each backend; backend tests live in `test/`.
-- Auth is brokered by Render; clients hold no Supabase credentials except the
-  publishable key from `GET /me/realtime`.
+- Web `https://mypro-by-gova.vercel.app` · Render `https://mypro-km2k.onrender.com`
+  (`/api/v1`) · Supabase ref `kssucdvrfzbdkyzovmjo`.
+- Tests: Vitest — `pnpm --dir shared|frontend test`, `npm test` in each backend;
+  backend tests in `test/`.
+- Auth brokered by Render; clients hold no Supabase creds except the publishable
+  key from `GET /me/realtime`.
 - `performSupabaseUpload` in `utils/pdfStorage.ts` is still a fake progress
   simulator — only extracted JSON syncs, never the raw PDF.
-- Commit only when asked; use the co-author line your session's attribution
-  specifies.
+- Commit only when asked; use the co-author line the session's attribution gives.

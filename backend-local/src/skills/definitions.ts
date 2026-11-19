@@ -361,6 +361,83 @@ const forget = defineSkill({
 });
 
 /* ------------------------------------------------------------------ */
+/* attention threads — the live concerns a life has right now (Phase 16) */
+/* ------------------------------------------------------------------ */
+
+const openThread = defineSkill({
+  name: 'open_thread',
+  description:
+    'Open (or update) an attention thread — one of the handful of live concerns ' +
+    'the person is carrying right now (a project, a health thing, a job search). ' +
+    'Active threads are shown to you in future chats so you can say "about the ' +
+    'Friday project —". Reuse the same title to refresh a thread rather than ' +
+    'duplicating it. Open one when a concern clearly spans more than this chat.',
+  sideEffect: 'write',
+  schema: z.object({
+    title: z.string().min(1).max(200),
+    kind: z.enum(['project', 'topic', 'health', 'admin', 'other']).optional(),
+    summary: z.string().max(2000).optional(),
+  }),
+  async run(args, ctx) {
+    const existing = check(
+      await ctx.db
+        .from('attention_threads')
+        .select('id')
+        .eq('title', args.title)
+        .neq('state', 'closed')
+        .maybeSingle(),
+    ) as { id: string } | null;
+    if (existing) {
+      return check(
+        await ctx.db
+          .from('attention_threads')
+          .update({
+            summary: args.summary,
+            kind: args.kind,
+            state: 'active',
+            last_touched_at: ctx.now.toISOString(),
+          })
+          .eq('id', existing.id)
+          .select('id, title, kind, state')
+          .single(),
+      );
+    }
+    return check(
+      await ctx.db
+        .from('attention_threads')
+        .insert({
+          user_id: ctx.user.id,
+          title: args.title,
+          kind: args.kind ?? 'other',
+          summary: args.summary,
+          last_touched_at: ctx.now.toISOString(),
+        })
+        .select('id, title, kind, state')
+        .single(),
+    );
+  },
+});
+
+const closeThread = defineSkill({
+  name: 'close_thread',
+  description:
+    'Close an attention thread when the concern is resolved or no longer live, ' +
+    'by its id. It stops being shown to you in future chats.',
+  sideEffect: 'write',
+  schema: z.object({ id: z.string().uuid() }),
+  async run({ id }, ctx) {
+    return check(
+      await ctx.db
+        .from('attention_threads')
+        .update({ state: 'closed' })
+        .eq('id', id)
+        .select('id, title, state')
+        .single(),
+    );
+  },
+});
+
+/* ------------------------------------------------------------------ */
 /* library                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -736,6 +813,8 @@ export const SKILLS: Skill<any>[] = [
   updateCommitment,
   remember,
   forget,
+  openThread,
+  closeThread,
   searchLibrary,
   addLibraryItem,
   updateReadingProgress,
