@@ -87,7 +87,7 @@ never a second implementation.
 | 13 | The phone as main surface | web/app | 🟡 only 13.2 (offline cache) left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
-| 16 | A companion that initiates | local | 🟡 16.1 commitments built; check-ins/Pulse left |
+| 16 | A companion that initiates | local | 🟡 16.1 commitments + check-ins, 16.2 memory, 16.3 Pulse (partial) |
 | 17 | The seam | all | ⬜ |
 | 18 | Make it last | all | ⬜ |
 ---
@@ -524,11 +524,32 @@ did.** This is `COMPANION_VISION.md`, ordered by what changes the feel.
   and nothing's blocked" nudge — which is really the seam between here and
   16.3's Pulse. Also unbuilt: `commitment_evidence` (links to the calendar /
   email / annotation that prove progress) and `attention_threads`.
-- **16.2 Memory layers** — episodic summaries, semantic facts with decay, a
-  weekly narrative refresh.
-- **16.3 The Pulse** — signals scored urgency × value × novelty, a daily
+- 🟡 **16.2 Memory layers** — episodic summaries, semantic facts with decay, a
+  weekly narrative refresh. **Built (Nov 2026):** semantic facts
+  (`assistant_memory`, which already had `confidence`/`last_used_at`) are now
+  injected into *every* prompt, and the agent has `remember` / `forget` skills
+  to learn and drop facts as you talk. The **weekly narrative** is
+  `0010_narrative_memory.sql` + `SchedulerService.narrativeRefresh` (hourly
+  cron, regenerates a ~250-word third-person sketch when the latest snapshot is
+  >7 days old) injected via `AssistantService.memoryContext`. **Still to do:**
+  episodic summaries of past conversations, and confidence *decay* (facts that
+  stop being used should fade out of the prompt).
+- 🟡 **16.3 The Pulse** — signals scored urgency × value × novelty, a daily
   budget, cooldowns, and a recorded *suppressed* log. Initiative without
-  nagging.
+  nagging. **Built (Nov 2026):** the first proactive signal — derived
+  **check-ins on commitments**. `SchedulerService.commitmentCheckins` (30-min
+  cron) acts on `commitments.next_checkin_at` — now **auto-armed** when a
+  commitment is created/updated with a deadline (≈ halfway to it, min 30 min
+  out, in both the render CRUD and the agent's `create_commitment`), so the
+  scheduler always has something to fire. It writes a contextual nudge (LLM,
+  degrading to a plain one) as a chat message + `kind:'checkin'` notification,
+  then advances `next_checkin_at` (cooldown: ~halfway to the deadline, min 6h;
+  daily if overdue) and flags an overdue open loop `at_risk`. Restraint is a
+  **daily budget of 3** per user and the per-commitment cooldown; only runs for
+  `proactive_enabled` personas. **Still to do:** the full scoring model across
+  *many* signal types (overdue tasks, unanswered email, reading streaks,
+  silences), and the recorded *suppressed* log ("what did you decide not to
+  tell me today?").
 - **16.4 Rhythm and register** — morning, evening, the Sunday letter; tone
   derived rather than configured; catch-up collapse when the laptop wakes.
 
@@ -602,9 +623,11 @@ neighbours; this is what makes it one tool.
 - **Database size is the only thing that grows forever.** Phase 18.1. Email
   metadata and `email_insights` now grow too, though bodies are never stored.
 - **Migrations must be applied by hand** whenever they are added — a commit
-  does not run them. `0005`–`0009` are the current set; `0009_commitments.sql`
-  (Phase 16.1) is the newest and must be run before the Commitments section or
-  the agent's commitment skills work.
+  does not run them. `0005`–`0010` are the current set. `0009_commitments.sql`
+  (Phase 16.1) is needed before the Commitments section / commitment skills,
+  and `0010_narrative_memory.sql` (Phase 16.2) before the weekly narrative
+  (the `remember`/`forget` facts use `assistant_memory` from 0001, so those
+  work without 0010).
 - **Local dev agent connection.** The web app discovers the laptop through
   `node_status`, which is empty with no Cloudflare tunnel, so in `vite dev` a
   blank `VITE_AGENT_URL` now auto-targets `http://localhost:8787/api/v1`

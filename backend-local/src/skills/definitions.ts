@@ -244,10 +244,27 @@ const createCommitment = defineSkill({
     next_checkin_at: iso.optional().describe('when to proactively follow up'),
   }),
   async run(args, ctx) {
+    // Arm the first proactive check-in ~halfway to the deadline (min 30 min
+    // out) when the model didn't set one, so the scheduler has something to
+    // fire. Mirrors backend-render's deriveCheckin — change one, change both.
+    const row: Record<string, unknown> = {
+      ...args,
+      kind: args.kind ?? 'promise',
+      user_id: ctx.user.id,
+    };
+    if (!args.next_checkin_at && args.due_at) {
+      const due = new Date(args.due_at).getTime();
+      const now = ctx.now.getTime();
+      if (!Number.isNaN(due) && due > now) {
+        row.next_checkin_at = new Date(
+          Math.max(now + (due - now) * 0.5, now + 30 * 60_000),
+        ).toISOString();
+      }
+    }
     return check(
       await ctx.db
         .from('commitments')
-        .insert({ ...args, kind: args.kind ?? 'promise', user_id: ctx.user.id })
+        .insert(row)
         .select('id, title, kind, due_at, state, next_checkin_at')
         .single(),
     );
@@ -286,6 +303,60 @@ const updateCommitment = defineSkill({
         .select('id, title, state, due_at, next_checkin_at')
         .single(),
     );
+  },
+});
+
+/* ------------------------------------------------------------------ */
+/* memory — durable facts the companion carries between chats (Phase 16) */
+/* ------------------------------------------------------------------ */
+
+const remember = defineSkill({
+  name: 'remember',
+  description:
+    'Save a durable fact about the user so you still know it in future ' +
+    'conversations — a preference, a relationship, an ongoing situation ' +
+    '("prefers deep work before noon", "sister is called Anu", "learning ' +
+    'Spanish"). Use a short stable key and a concise value; writing the same ' +
+    'key again overwrites it. These are injected into every future chat, so ' +
+    'store what helps you understand them — never passwords or anything secret.',
+  sideEffect: 'write',
+  schema: z.object({
+    key: z.string().min(1).max(80).describe('short stable slug, e.g. work_rhythm'),
+    value: z.string().min(1).max(2000),
+    confidence: z.number().min(0).max(1).optional().describe('how sure you are, 0-1'),
+  }),
+  async run(args, ctx) {
+    return check(
+      await ctx.db
+        .from('assistant_memory')
+        .upsert(
+          {
+            user_id: ctx.user.id,
+            key: args.key,
+            value: args.value,
+            source: 'assistant',
+            confidence: args.confidence ?? 0.8,
+            last_used_at: ctx.now.toISOString(),
+          },
+          { onConflict: 'user_id,key' },
+        )
+        .select('key, value')
+        .single(),
+    );
+  },
+});
+
+const forget = defineSkill({
+  name: 'forget',
+  description:
+    'Remove a fact you previously remembered, by its key. Use when the user ' +
+    'says something is no longer true or asks you to forget it. List what you ' +
+    'know is already in your context, so you can pick the right key.',
+  sideEffect: 'write',
+  schema: z.object({ key: z.string().min(1).max(80) }),
+  async run(args, ctx) {
+    check(await ctx.db.from('assistant_memory').delete().eq('key', args.key).select('key'));
+    return { forgotten: args.key };
   },
 });
 
@@ -663,6 +734,8 @@ export const SKILLS: Skill<any>[] = [
   listCommitments,
   createCommitment,
   updateCommitment,
+  remember,
+  forget,
   searchLibrary,
   addLibraryItem,
   updateReadingProgress,

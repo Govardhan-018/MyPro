@@ -139,11 +139,12 @@ export class AssistantService {
 
   async send(user: AuthUser, content: string) {
     const db = this.supabase.forUser(user.token);
-    const [conversation, settings, persona, profile] = await Promise.all([
+    const [conversation, settings, persona, profile, memory] = await Promise.all([
       this.primaryConversation(user),
       this.settings(user),
       this.persona(user),
       this.profile(user),
+      this.memoryContext(user),
     ]);
     const conversationId = (conversation as { id: string }).id;
     const timezone = (profile?.timezone as string) || 'UTC';
@@ -178,7 +179,7 @@ export class AssistantService {
       user,
       model: settings.model ?? env().ASSISTANT_MODEL,
       temperature: Number(settings.temperature ?? 1),
-      system: this.systemPrompt(persona, { timezone, now: new Date() }),
+      system: this.systemPrompt(persona, { timezone, now: new Date() }, memory),
       messages: [...prior, { role: 'user', text: content }],
       conversationId,
       timezone,
@@ -292,6 +293,36 @@ export class AssistantService {
     return (data as Record<string, unknown> | null) ?? null;
   }
 
+  /**
+   * What the companion carries between conversations (Phase 16 — memory).
+   * Durable facts (`assistant_memory`, highest-confidence first) and the latest
+   * weekly narrative snapshot, injected into every prompt so the assistant
+   * starts from "knows you" rather than from zero.
+   */
+  async memoryContext(
+    user: AuthUser,
+  ): Promise<{ facts: { key: string; value: string }[]; narrative?: string }> {
+    const db = this.supabase.forUser(user.token);
+    const [factsRes, narrativeRes] = await Promise.all([
+      db
+        .from('assistant_memory')
+        .select('key, value')
+        .order('confidence', { ascending: false, nullsFirst: false })
+        .order('last_used_at', { ascending: false, nullsFirst: false })
+        .limit(25),
+      db
+        .from('narrative_snapshots')
+        .select('content')
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    return {
+      facts: (factsRes.data ?? []) as { key: string; value: string }[],
+      narrative: (narrativeRes.data as { content?: string } | null)?.content,
+    };
+  }
+
   /** "Clear chat": wipe the messages, or archive the thread and start fresh. */
   async clear(user: AuthUser, mode: 'wipe' | 'archive') {
     const db = this.supabase.forUser(user.token);
@@ -346,6 +377,7 @@ export class AssistantService {
   systemPrompt(
     persona: { name?: string; tone?: string; style_notes?: string | null },
     context?: { timezone: string; now: Date },
+    memory?: { facts: { key: string; value: string }[]; narrative?: string },
   ): string {
     const when = context
       ? `Right now it is ${context.now.toLocaleString('en-GB', {
@@ -355,11 +387,23 @@ export class AssistantService {
         })} (${context.timezone}). Use this for any date reasoning.`
       : '';
 
+    // Memory is background knowledge, not a script: the model should let it
+    // inform the reply without reciting it back.
+    const narrative = memory?.narrative
+      ? `WHO THEY ARE RIGHT NOW (a recent sketch — context, never to be read aloud)\n${memory.narrative}`
+      : '';
+    const facts = memory?.facts?.length
+      ? 'THINGS YOU KNOW ABOUT THEM (use naturally; do not list them back)\n' +
+        memory.facts.map((f) => `- ${f.key}: ${f.value}`).join('\n')
+      : '';
+
     return [
       `You are ${persona.name ?? 'MyPro'}, a personal assistant and close friend to one person.`,
       `Tone: ${persona.tone ?? 'warm, casual, like a close friend'}.`,
       persona.style_notes ? `Charter: ${persona.style_notes}` : '',
       when,
+      narrative ? `\n${narrative}` : '',
+      facts ? `\n${facts}` : '',
       '',
       'HOW YOU WRITE',
       'Like a friend texting: short, natural, specific. No corporate filler, no "Great question!",',

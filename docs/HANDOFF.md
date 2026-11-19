@@ -3,107 +3,99 @@
 What the last session changed. `docs/PHASES.md` is the durable plan; this file
 is volatile. Read `AGENTS.md` too.
 
-## This session: the local agent connection, and Phase 16.1 (commitments)
+## This session: connection verified, then the assistant upgraded toward a companion
 
-Two things. First, the web app could not reach `backend-local` when run
-locally. Second, the first slice of Phase 16 — commitments, the open loops the
-companion tracks — is now built end to end across all four corners.
+Three threads: (1) verified the full web ↔ laptop-agent chain end to end and
+fixed the two bugs that broke it; (2) built Phase 16.2 **memory** so the agent
+knows you across sessions; (3) built the first slice of Phase 16.3 **proactive
+check-ins** so it speaks unprompted. Everything typechecks; backend-local has
+19 unit tests (recurrence + commitment + memory skills), all green.
 
-### Fix: the frontend could not connect to the local agent
+### Connection chain — verified working
 
-The web app discovers the laptop's URL from `node_status.base_url`, which the
-agent heartbeats from `PUBLIC_BASE_URL`. With no Cloudflare tunnel (plain local
-dev) that is blank, so discovery returned nothing and `resolveAgentBase` threw
-`AgentOfflineError` — the assistant looked permanently offline.
+A message sent from the live web app reached backend-local and got a reply
+(`"Hello"` → `"Hey! What's up?"`). Two real bugs fixed along the way:
 
-- `frontend/src/lib/client.ts` now defaults `agentUrl` to
-  `http://localhost:8787/api/v1` when `VITE_AGENT_URL` is blank **and**
-  `import.meta.env.DEV` is true. Production builds (DEV=false) are untouched and
-  still discover through render. `frontend/.env` stays blank, with its comment
-  updated to explain the dev behaviour.
-- Verified: `backend-local` boots, a CORS preflight from `http://localhost:8443`
-  returns `204` with `Access-Control-Allow-Origin: http://localhost:8443`, and
-  an unauthenticated GET returns `401` (reachable, needs a token). The
-  logged-in browser round trip is the one thing a sandbox cannot do — that is
-  yours to confirm.
+- **`start-agent.bat` never captured the tunnel URL.** Its old `timeout`-based
+  log-scrape silently produced a blank `Public URL`, so the agent booted with
+  an empty `PUBLIC_BASE_URL` and heartbeat `node_status.base_url = null` —
+  nobody could discover the laptop. Rewrote it to read the hostname from
+  cloudflared's **metrics API** (`--metrics 127.0.0.1:20789` →
+  `/quicktunnel`), use `ping` as the sleep (`timeout` errors on redirected
+  stdin), always rebuild (no stale `dist`), and refuse to start if the port is
+  busy. **`start-agent.bat` is committable and should be kept.**
+- **Agent CORS didn't allow the production origin.** `backend-local/.env`
+  `CORS_ORIGINS` listed only localhost, so the live app's request was
+  browser-blocked. Added `https://mypro-by-gova.vercel.app`. (`.env` is
+  gitignored — this is machine config, not a repo change.)
+- Earlier dev fix still in place: blank `VITE_AGENT_URL` auto-targets
+  `http://localhost:8787/api/v1` in `vite dev` (`frontend/src/lib/client.ts`).
 
-### Phase 16.1 — commitments (open loops)
+Operational rule learned: **only ever run one agent.** A stray/`npm run dev`
+instance heartbeats `base_url: null` every 30s and overwrites a good URL; the
+new port guard enforces one.
 
-A commitment is a thing the user said they'd do, with a believed deadline and a
-state the companion follows up on — distinct from a task (a checkbox).
+### Phase 16.2 — memory (it knows you)
 
-- **Migration `supabase/migrations/0009_commitments.sql`** — the `commitments`
-  table: `kind` (promise|goal|decision|intention), `due_at`, `confidence`,
-  `state` (open|at_risk|done|slipped|abandoned), `source_message_id`,
-  `next_checkin_at`, resolved_at, with default-deny owner RLS and a
-  `set_updated_at` trigger. **Apply it by hand in the Supabase SQL editor** —
-  nothing works until you do. (A commit does not run migrations.)
-- **backend-render** `src/commitments/commitments.module.ts` — CRUD
-  (`GET/POST/PATCH/DELETE /commitments`), mirroring tasks, registered in
-  `app.module.ts`. This is the always-on read/write path so the web/app see
-  commitments with the laptop asleep. Reaching a terminal state stamps
-  `resolved_at`; reopening clears it.
-- **backend-local** three skills in `src/skills/definitions.ts`:
-  `list_commitments` (read), `create_commitment` (write), `update_commitment`
-  (write). The agent records a loop the moment it hears "I need to finish this
-  by Friday", and can mark it done / at-risk / slipped.
-- **shared** `api.commitments.*` and the `CommitmentRow` / `CommitmentKind` /
-  `CommitmentState` types.
-- **frontend** a new **Commitments** section: `lib/useCommitments.ts` +
-  `components/commitments/CommitmentsView.tsx`, wired into `App.tsx` (View type,
-  VIEWS, NOTIFICATION_VIEWS, navItems, the render switch). Open loops sorted
-  live-first; inline add; mark done / flag at-risk / reopen / delete. Reuses the
-  existing shell classes, no new CSS.
-- **Tests** `backend-local/test/commitment-skills.test.ts` — the three skills
-  are registered with the right side-effect tier and their schemas accept valid
-  input and reject bad (empty title, unknown kind/state, missing id).
+- `0010_narrative_memory.sql` — `narrative_snapshots` (immutable, owner RLS).
+  **Apply by hand.** Semantic facts already live in `assistant_memory` (0001).
+- `AssistantService.memoryContext` reads the top facts (by confidence, then
+  last_used_at) + the latest narrative and injects both into **every** prompt
+  (`systemPrompt` grew a memory section). Facts are framed as background, not a
+  script to recite.
+- New agent skills `remember` / `forget` (`skills/definitions.ts`) — upsert /
+  delete a durable fact by key, so it learns as you talk.
+- `SchedulerService.narrativeRefresh` (hourly cron) regenerates a ~250-word
+  third-person sketch when the latest snapshot is >7 days old, from recent
+  messages + open commitments + reading. Skips users with no data (won't invent
+  a life). Degrades quietly on model failure.
 
-**What 16.1 still needs (deliberately deferred):** nothing fires on
-`next_checkin_at` yet — it is stored but not acted on. The derived check-in
-("you said Friday, it's Wednesday, nothing's blocked — want tomorrow 9–11?") is
-the moment that makes this feel like a companion, and it wants the laptop drain
-loop (`backend-local/src/scheduler/`) to scan live commitments on its tick.
-That is the seam into Phase 16.3's Pulse. Also unbuilt: `commitment_evidence`
-(links to the calendar/email/annotation that show progress) and
-`attention_threads`.
+### Phase 16.3 — proactive check-ins (it speaks first)
 
-### Before any of this works for real
+- `SchedulerService.commitmentCheckins` (30-min cron) acts on
+  `commitments.next_checkin_at`: for live loops that are due, it writes a
+  contextual nudge (LLM over the commitment + upcoming events + memory,
+  degrading to a plain line) as a chat message **and** a `kind:'checkin'`
+  notification, then advances `next_checkin_at` (≈ halfway to the deadline, min
+  6h; daily if overdue) and flags an overdue open loop `at_risk`.
+- Restraint: a **daily budget of 3** per user (counts `kind:'checkin'`
+  notifications since UTC midnight) + the per-commitment cooldown. Only runs
+  for `proactive_enabled` personas.
 
-1. **Apply `0009_commitments.sql`** in the Supabase dashboard.
-2. **Deploy backend-render** (push to `main` → Render auto-deploys), or run it
-   locally and point `VITE_API_URL` at it — the production Render does not have
-   the `/commitments` module until it is deployed. The agent skills write to
-   Supabase directly, so once the migration is applied they work against the
-   locally-running laptop immediately.
-3. Log in on the web and try it: tell the assistant "remind me I promised to
-   finish the report by Friday", then open Commitments.
+**What's deferred (next steps for 16):** episodic conversation summaries and
+confidence *decay* for facts (16.2); the full Pulse scoring across many signal
+types and the recorded *suppressed* log (16.3); attention threads and the
+rhythm/register layer (16.1/16.4).
+
+### Before any of this runs for the user
+
+1. **Apply migrations by hand** in Supabase: `0009_commitments.sql` and
+   `0010_narrative_memory.sql` (plus any still-pending `0005`–`0008`).
+2. **Rebuild + restart the laptop agent** (`start-agent.bat`) — the running
+   agent is on the old build until then. The crons only run with
+   `SCHEDULER_ENABLED=true` (default).
+3. Deploy backend-render for the Commitments CRUD (push to `main`), or run it
+   locally.
 
 ## Verified this session
 
 - All four packages pass `npx tsc --noEmit`.
-- Unit tests green: shared 14, backend-render 17, backend-local 14 (recurrence
-  + the new commitment-skill suite), frontend 4 — **49 total**.
-- The web dev server builds and loads with the new view wired in, no console
-  errors (so the new imports resolve). Behind the login guard, so the
-  Commitments UI itself was not exercised signed-in.
-- The local agent connection (CORS + reachability), as above.
-
-Not verified (a sandbox cannot): anything signed-in, the commitment round trip
-through a real browser, and the migration (not applied here).
+- Unit tests: shared 14, backend-render 17, backend-local 19, frontend 4.
+- The live web ↔ agent round trip (message delivered + answered).
+- Not verified (sandbox / needs the running stack): the memory injection,
+  narrative generation, and a real proactive check-in firing — these need the
+  rebuilt agent + migrations applied, and time to pass.
 
 ## Still true from earlier sessions
 
 - Web: `https://mypro-by-gova.vercel.app` · Render:
   `https://mypro-km2k.onrender.com` (base `/api/v1`) · Supabase ref
   `kssucdvrfzbdkyzovmjo`.
-- Auth is **brokered by Render**; clients hold no Supabase credentials except
-  the publishable key served at runtime by `GET /me/realtime`.
-- Tests run on **Vitest**: `pnpm --dir shared test`, `pnpm --dir frontend test`,
-  and `npm test` in each backend. Backend tests live in `test/`.
-- `performSupabaseUpload` in `utils/pdfStorage.ts` is **still a fake progress
-  simulator** — only extracted JSON really syncs, never the raw PDF.
-- pdfjs runs without CMaps, so CJK PDFs may extract poorly.
-- Images are Git LFS, except `frontend/public/*.png`.
-- A test item "API Test Book" sits in the real library; Library has no delete UI.
-- Commit only when asked, and use the co-author line your session's own
-  attribution specifies.
+- Tests run on **Vitest**: `pnpm --dir shared|frontend test`, `npm test` in
+  each backend; backend tests live in `test/`.
+- Auth is brokered by Render; clients hold no Supabase credentials except the
+  publishable key from `GET /me/realtime`.
+- `performSupabaseUpload` in `utils/pdfStorage.ts` is still a fake progress
+  simulator — only extracted JSON syncs, never the raw PDF.
+- Commit only when asked; use the co-author line your session's attribution
+  specifies.

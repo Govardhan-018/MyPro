@@ -432,4 +432,292 @@ export class SchedulerService implements OnModuleInit {
       .maybeSingle();
     return Boolean((data as { allow_auto_send_email?: boolean } | null)?.allow_auto_send_email);
   }
+
+  // ---- Phase 16: memory refresh + proactive check-ins -------------------
+
+  private static readonly NARRATIVE_MAX_AGE_MS = 7 * 24 * 3600_000;
+  private static readonly DAILY_CHECKIN_BUDGET = 3;
+  private static readonly CHECKIN_MIN_INTERVAL_MS = 6 * 3600_000;
+
+  /**
+   * The weekly narrative (COMPANION_VISION §1). When a user's latest snapshot
+   * is older than a week — or missing — regenerate a short third-person sketch
+   * of who they are right now; `assistant.service` injects the latest one into
+   * every prompt. One generation per user per week, so this stays cheap even
+   * though the cron fires hourly.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async narrativeRefresh(): Promise<void> {
+    if (!env().SCHEDULER_ENABLED) return;
+    const db = this.supabase.admin;
+    const { data: personas } = await db
+      .from('assistant_persona')
+      .select('user_id, name, tone, style_notes');
+
+    for (const p of (personas ?? []) as Persona[]) {
+      const { data: latest } = await db
+        .from('narrative_snapshots')
+        .select('generated_at')
+        .eq('user_id', p.user_id)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const age = latest
+        ? Date.now() - new Date((latest as { generated_at: string }).generated_at).getTime()
+        : Infinity;
+      if (age < SchedulerService.NARRATIVE_MAX_AGE_MS) continue;
+      await this.refreshNarrative(p);
+    }
+  }
+
+  private async refreshNarrative(p: Persona): Promise<void> {
+    const db = this.supabase.admin;
+    const [msgs, commitments, library] = await Promise.all([
+      db
+        .from('assistant_messages')
+        .select('role, content')
+        .eq('user_id', p.user_id)
+        .in('role', ['user', 'assistant'])
+        .order('created_at', { ascending: false })
+        .limit(40),
+      db
+        .from('commitments')
+        .select('title, state, due_at')
+        .eq('user_id', p.user_id)
+        .in('state', ['open', 'at_risk'])
+        .limit(20),
+      db
+        .from('library_items')
+        .select('title, type, status')
+        .eq('user_id', p.user_id)
+        .order('accessed_at', { ascending: false, nullsFirst: false })
+        .limit(8),
+    ]);
+
+    const conversation = ((msgs.data ?? []) as { role: string; content: string | null }[])
+      .reverse()
+      .filter((m) => m.content)
+      .map((m) => `${m.role}: ${m.content}`)
+      .slice(-30);
+    const open = (commitments.data ?? []) as Record<string, unknown>[];
+    const reading = (library.data ?? []) as Record<string, unknown>[];
+
+    // Don't invent a life out of nothing — skip until there's something to go on.
+    if (!conversation.length && !open.length && !reading.length) return;
+
+    try {
+      const res = await this.llm.generate({
+        system:
+          'You write a private, third-person sketch of a person for their AI ' +
+          "companion's own memory. 200-300 words, plain prose, present tense. " +
+          "Capture what they're working on, what's weighing on them, what " +
+          "they're reading, their rhythm, and what they've been avoiding. No " +
+          'bullet points, no headings, no advice. Only use the facts given; ' +
+          'never invent detail.',
+        messages: [
+          {
+            role: 'user',
+            text:
+              'Write the current sketch of this person from these facts:\n\n' +
+              JSON.stringify({ recent_conversation: conversation, open_commitments: open, reading }),
+          },
+        ],
+      });
+      const content = res.text.trim();
+      if (!content) return;
+      await db.from('narrative_snapshots').insert({ user_id: p.user_id, content });
+      this.logger.log(`narrative refreshed for ${p.user_id}`);
+    } catch (err) {
+      this.logger.warn(
+        `narrative refresh failed for ${p.user_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Derived check-ins (COMPANION_VISION §2/§3). When a commitment's
+   * `next_checkin_at` falls due, say something useful about it — but with
+   * restraint: a per-user daily budget and a per-commitment cooldown (the next
+   * check-in is pushed forward after each nudge). Only for users who left
+   * proactivity on. This is the first time the companion speaks unprompted.
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async commitmentCheckins(): Promise<void> {
+    if (!env().SCHEDULER_ENABLED) return;
+    const db = this.supabase.admin;
+    const { data: personas } = await db
+      .from('assistant_persona')
+      .select('user_id, name, tone, style_notes')
+      .eq('proactive_enabled', true);
+
+    for (const p of (personas ?? []) as Persona[]) {
+      await this.checkinsForUser(p);
+    }
+  }
+
+  private async checkinsForUser(p: Persona): Promise<void> {
+    const db = this.supabase.admin;
+
+    // Daily budget: proactive check-ins already sent to this user today (UTC).
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const { count } = await db
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', p.user_id)
+      .eq('kind', 'checkin')
+      .gte('created_at', dayStart.toISOString());
+    let budget = SchedulerService.DAILY_CHECKIN_BUDGET - (count ?? 0);
+    if (budget <= 0) return;
+
+    const { data: due } = await db
+      .from('commitments')
+      .select('id, title, detail, due_at, state')
+      .eq('user_id', p.user_id)
+      .in('state', ['open', 'at_risk'])
+      .not('next_checkin_at', 'is', null)
+      .lte('next_checkin_at', new Date().toISOString())
+      .order('next_checkin_at')
+      .limit(budget);
+
+    for (const c of (due ?? []) as CommitmentDue[]) {
+      if (budget <= 0) break;
+      await this.checkinOne(p, c);
+      budget--;
+    }
+  }
+
+  private async checkinOne(p: Persona, c: CommitmentDue): Promise<void> {
+    const db = this.supabase.admin;
+    const now = Date.now();
+    const overdue = c.due_at ? new Date(c.due_at).getTime() < now : false;
+
+    const [eventsRes, factsRes] = await Promise.all([
+      db
+        .from('calendar_events')
+        .select('title, starts_at')
+        .eq('user_id', p.user_id)
+        .gte('starts_at', new Date(now).toISOString())
+        .lte('starts_at', new Date(now + 3 * 864e5).toISOString())
+        .order('starts_at')
+        .limit(10),
+      db
+        .from('assistant_memory')
+        .select('key, value')
+        .eq('user_id', p.user_id)
+        .order('confidence', { ascending: false, nullsFirst: false })
+        .limit(15),
+    ]);
+
+    const nudge = await this.composeCheckin(
+      p,
+      c,
+      (eventsRes.data ?? []) as Record<string, unknown>[],
+      (factsRes.data ?? []) as Record<string, unknown>[],
+      overdue,
+    );
+
+    // Deliver as a chat message (kind 'checkin' so the daily budget can count it).
+    const { data: convo } = await db
+      .from('assistant_conversations')
+      .select('id')
+      .eq('user_id', p.user_id)
+      .eq('is_primary', true)
+      .is('archived_at', null)
+      .maybeSingle();
+    if (convo) {
+      await db.from('assistant_messages').insert({
+        user_id: p.user_id,
+        conversation_id: (convo as { id: string }).id,
+        role: 'assistant',
+        content: nudge,
+      });
+    }
+    await this.push.send(p.user_id, {
+      title: 'MyPro',
+      body: nudge,
+      kind: 'checkin',
+      deeplink: '/assistant',
+    });
+
+    // Cooldown: aim for roughly halfway to the deadline, but never sooner than
+    // the minimum interval; with no future deadline, nudge at most daily. An
+    // overdue, still-open loop is flagged at_risk so the UI and prompt see it.
+    const patch: Record<string, unknown> = {};
+    if (overdue && c.state === 'open') patch.state = 'at_risk';
+    let nextMs: number;
+    if (c.due_at && new Date(c.due_at).getTime() > now) {
+      const halfway = now + (new Date(c.due_at).getTime() - now) / 2;
+      nextMs = Math.max(halfway, now + SchedulerService.CHECKIN_MIN_INTERVAL_MS);
+    } else {
+      nextMs = now + 24 * 3600_000;
+    }
+    patch.next_checkin_at = new Date(nextMs).toISOString();
+    await db.from('commitments').update(patch).eq('id', c.id);
+
+    await this.audit.record({
+      userId: p.user_id,
+      actor: 'system',
+      action: 'commitment.checkin',
+      targetType: 'commitment',
+      targetId: c.id,
+      detail: { overdue },
+    });
+  }
+
+  private async composeCheckin(
+    p: Persona,
+    c: CommitmentDue,
+    events: Record<string, unknown>[],
+    facts: Record<string, unknown>[],
+    overdue: boolean,
+  ): Promise<string> {
+    try {
+      const res = await this.llm.generate({
+        system:
+          `You are ${p.name ?? 'MyPro'}, a close-friend assistant.` +
+          (p.tone ? ` Tone: ${p.tone}.` : '') +
+          (p.style_notes ? ` ${p.style_notes}` : '') +
+          ' Write ONE short proactive check-in (1-3 sentences, no greeting, no ' +
+          'lists) about a commitment the person made. Be specific and useful: ' +
+          'note the deadline, whether any time is blocked for it, and offer one ' +
+          'concrete next move. If it is overdue, be gentle but honest. Only use ' +
+          'the facts given.',
+        messages: [
+          {
+            role: 'user',
+            text:
+              `COMMITMENT: ${JSON.stringify({ title: c.title, detail: c.detail, due_at: c.due_at, overdue })}\n` +
+              `UPCOMING EVENTS: ${JSON.stringify(events)}\n` +
+              `WHAT YOU KNOW ABOUT THEM: ${JSON.stringify(facts)}`,
+          },
+        ],
+      });
+      const text = res.text.trim();
+      if (text) return text;
+    } catch (err) {
+      this.logger.warn(
+        `check-in generation failed (${err instanceof Error ? err.message : String(err)}) — plain nudge`,
+      );
+    }
+    const due = c.due_at ? ` (due ${new Date(c.due_at).toLocaleDateString('en-GB')})` : '';
+    return overdue
+      ? `About "${c.title}"${due} — it's past due. Want to reschedule it or close it out?`
+      : `Checking in on "${c.title}"${due}. How's it going — want me to block some time for it?`;
+  }
+}
+
+interface Persona {
+  user_id: string;
+  name?: string | null;
+  tone?: string | null;
+  style_notes?: string | null;
+}
+
+interface CommitmentDue {
+  id: string;
+  title: string;
+  detail: string | null;
+  due_at: string | null;
+  state: string;
 }

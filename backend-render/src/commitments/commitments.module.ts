@@ -17,6 +17,23 @@ const KIND = z.enum(['promise', 'goal', 'decision', 'intention']);
 const STATE = z.enum(['open', 'at_risk', 'done', 'slipped', 'abandoned']);
 const TERMINAL: ReadonlyArray<z.infer<typeof STATE>> = ['done', 'slipped', 'abandoned'];
 
+/**
+ * First derived check-in: roughly halfway to the deadline (COMPANION_VISION
+ * §2's "50% elapsed"), never sooner than 30 minutes out so it doesn't fire
+ * immediately. No deadline → no auto check-in (the agent can still set one
+ * explicitly). Lives on both create and update, so a commitment that gains a
+ * due date later still arms the scheduler. `backend-local`'s create skill has
+ * the same rule — change one, change both.
+ */
+function deriveCheckin(dueIso?: string | null): string | undefined {
+  if (!dueIso) return undefined;
+  const due = new Date(dueIso).getTime();
+  const now = Date.now();
+  if (Number.isNaN(due) || due <= now) return undefined;
+  const halfway = now + (due - now) * 0.5;
+  return new Date(Math.max(halfway, now + 30 * 60_000)).toISOString();
+}
+
 const createCommitment = z.object({
   title: z.string().min(1).max(300),
   detail: z.string().max(10_000).optional(),
@@ -45,13 +62,12 @@ export class CommitmentsService {
 
   async create(user: AuthUser, input: z.infer<typeof createCommitment>) {
     const db = this.supabase.forUser(user.token);
-    return one(
-      await db
-        .from('commitments')
-        .insert({ ...input, user_id: user.id })
-        .select('*')
-        .single(),
-    );
+    const row: Record<string, unknown> = { ...input, user_id: user.id };
+    if (!input.next_checkin_at) {
+      const derived = deriveCheckin(input.due_at);
+      if (derived) row.next_checkin_at = derived;
+    }
+    return one(await db.from('commitments').insert(row).select('*').single());
   }
 
   async get(user: AuthUser, id: string) {
@@ -68,6 +84,12 @@ export class CommitmentsService {
       row.resolved_at = (input as { resolved_at?: string }).resolved_at ?? new Date().toISOString();
     } else if (input.state) {
       row.resolved_at = null;
+    }
+    // A commitment that gains (or changes) a due date re-arms its check-in,
+    // unless the caller set one explicitly in the same patch.
+    if (input.due_at && !input.next_checkin_at) {
+      const derived = deriveCheckin(input.due_at);
+      if (derived) row.next_checkin_at = derived;
     }
     if (Object.keys(row).length) none(await db.from('commitments').update(row).eq('id', id));
     return this.get(user, id);
