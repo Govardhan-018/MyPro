@@ -758,7 +758,18 @@ Read this before assuming a capability exists.
   mid-way cannot be resumed from its last verified step — the next message
   starts over. There is no progress signal *during* a turn either; without
   streaming, a 12-step Deep turn is a single silent HTTP wait.
-- **No token accounting.** No tokenizer anywhere. `assistant_messages.token_count`
+- **Token accounting is an estimate, not a count.** `agent/token-budget.ts`
+  approximates at chars/4 and trims the context to fit `maxInputTokens`
+  before every call, which is what stopped the free tier's 413s. There is
+  still no tokenizer, so the numbers are approximate and the budgets leave
+  headroom for that. `assistant_messages.token_count` remains null.
+- **Nothing tracks tokens per minute.** The budgets size a single request;
+  a six-step turn makes six of them, and on a free tier that can exhaust a
+  per-minute allowance even when every individual call is legal. The
+  mitigation is configuration, not code: point `ASSISTANT_ROUTER_MODEL` and
+  `ASSISTANT_PLANNER_MODEL` at a smaller model, since the limits are
+  per-model.
+- **No historical token accounting.** No tokenizer anywhere. `assistant_messages.token_count`
   exists and is always null. Context is bounded by message count; tool results
   by characters. There is no context budget and no detection of overflow.
 - **No model fallback chain.** One model name; a non-transient error is the end

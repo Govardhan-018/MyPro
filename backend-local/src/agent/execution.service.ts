@@ -4,6 +4,7 @@ import { SkillsService } from '../skills/skills.service';
 import type { AuthUser } from '../common/auth.guard';
 import type { InvocationReceipt, SideEffect } from '../skills/types';
 import type { EffortBudget } from './effort';
+import { estimateTokens, fitMessages, toolTokens } from './token-budget';
 
 export interface ExecutionRequest {
   user: AuthUser;
@@ -61,13 +62,30 @@ export class ExecutionService {
     const messages: LlmMessage[] = [...request.messages];
     const receipts: InvocationReceipt[] = [];
 
+    const schemaTokens = toolTokens(request.tools);
+    const systemTokens = estimateTokens(request.system);
+
     for (let step = 0; step < budget.maxToolSteps; step++) {
+      // Nothing counted tokens before this; a single page of extracted
+      // article text was enough to put a request over the free tier's
+      // per-minute ceiling, which fails as a 413 that no retry can fix.
+      const fitted = fitMessages(messages, {
+        systemTokens,
+        toolTokens: schemaTokens,
+        maxInputTokens: budget.maxInputTokens,
+      });
+      if (fitted.trimmed) {
+        this.logger.warn(
+          `trimmed the context to fit ~${budget.maxInputTokens} tokens: ${fitted.detail}`,
+        );
+      }
+
       const res = await this.llm.generate({
         model: request.model,
         temperature: request.temperature,
         maxTokens: budget.maxOutputTokens,
         system: request.system,
-        messages,
+        messages: fitted.messages,
         tools: request.tools,
       });
 
@@ -121,12 +139,20 @@ export class ExecutionService {
     const messages: LlmMessage[] = [...params.history];
     if (params.note) messages.push({ role: 'user', text: params.note });
 
+    // No tools on this call, so the schemas are not in the budget — but the
+    // history that accumulated during the loop still is.
+    const fitted = fitMessages(messages, {
+      systemTokens: estimateTokens(params.system),
+      toolTokens: 0,
+      maxInputTokens: params.budget.maxInputTokens,
+    });
+
     const res = await this.llm.generate({
       model: params.model,
       temperature: params.temperature,
       maxTokens: params.budget.maxOutputTokens,
       system: params.system,
-      messages,
+      messages: fitted.messages,
     });
     return res.text;
   }

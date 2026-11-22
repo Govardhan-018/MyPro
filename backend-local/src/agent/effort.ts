@@ -12,6 +12,15 @@
 
 export type EffortMode = 'light' | 'default' | 'deep';
 
+/**
+ * These numbers are sized for a free Groq tier: **8,000 tokens per minute**,
+ * applied per request as well as per minute. A request over the limit is a
+ * 413 that no retry can fix, so every budget here leaves real headroom —
+ * the token estimate is approximate and the output allowance is spent from
+ * the same pot. Raising them is the first thing to do on a paid tier; it is
+ * also the first thing to suspect if 413s come back.
+ */
+
 export const EFFORT_MODES: readonly EffortMode[] = ['light', 'default', 'deep'] as const;
 
 export interface EffortBudget {
@@ -34,6 +43,13 @@ export interface EffortBudget {
   threads: number;
   /** Characters of a single tool result the model is shown. */
   toolResultChars: number;
+  /**
+   * Ceiling on estimated INPUT tokens per model call, enforced by
+   * `token-budget.ts`. Groq's free tier allows 8,000 tokens per minute and
+   * applies it per request too, so these sit well under it: the estimate is
+   * approximate, and the output allowance comes out of the same budget.
+   */
+  maxInputTokens: number;
   /** Ceiling on model output per call. */
   maxOutputTokens: number;
   /** Research breadth, once the research capabilities land. */
@@ -46,14 +62,15 @@ const BUDGETS: Readonly<Record<EffortMode, EffortBudget>> = {
   light: {
     mode: 'light',
     maxToolSteps: 3,
-    maxCapabilities: 6,
+    maxCapabilities: 5,
     plan: false,
     verify: false,
     parallelism: 3,
     memoryFacts: 6,
     episodes: 0,
     threads: 2,
-    toolResultChars: 4_000,
+    toolResultChars: 2_500,
+    maxInputTokens: 3_500,
     maxOutputTokens: 1_024,
     searchResults: 3,
     fetchPages: 0,
@@ -61,30 +78,38 @@ const BUDGETS: Readonly<Record<EffortMode, EffortBudget>> = {
   default: {
     mode: 'default',
     maxToolSteps: 6,
+    maxCapabilities: 8,
+    plan: true,
+    verify: true,
+    parallelism: 4,
+    memoryFacts: 14,
+    episodes: 2,
+    threads: 4,
+    toolResultChars: 4_000,
+    maxInputTokens: 5_200,
+    maxOutputTokens: 2_048,
+    searchResults: 5,
+    fetchPages: 2,
+  },
+  /**
+   * Deep is deeper in *steps and sources*, not in window size. On a free
+   * 8,000 TPM tier there is no room for a bigger per-call context — so what
+   * it buys is twelve tool steps instead of six, more memory, and more
+   * sources read, each call still sized to fit.
+   */
+  deep: {
+    mode: 'deep',
+    maxToolSteps: 12,
     maxCapabilities: 14,
     plan: true,
     verify: true,
     parallelism: 4,
-    memoryFacts: 20,
-    episodes: 3,
-    threads: 5,
-    toolResultChars: 20_000,
-    maxOutputTokens: 4_096,
-    searchResults: 5,
-    fetchPages: 2,
-  },
-  deep: {
-    mode: 'deep',
-    maxToolSteps: 12,
-    maxCapabilities: 32,
-    plan: true,
-    verify: true,
-    parallelism: 4,
-    memoryFacts: 40,
-    episodes: 6,
-    threads: 8,
-    toolResultChars: 20_000,
-    maxOutputTokens: 8_192,
+    memoryFacts: 24,
+    episodes: 4,
+    threads: 6,
+    toolResultChars: 8_000,
+    maxInputTokens: 5_600,
+    maxOutputTokens: 2_048,
     searchResults: 8,
     fetchPages: 5,
   },

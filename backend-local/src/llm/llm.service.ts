@@ -46,7 +46,20 @@ const DEFAULT_MAX_TOKENS = 4_096;
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 1_500;
 
+/**
+ * A request bigger than the model's whole per-minute allowance.
+ *
+ * Groq answers this with a 413 whose body says `rate_limit_exceeded`, which
+ * reads as transient and is not: waiting changes nothing, because the
+ * request could never have fitted. It was retried three times before anyone
+ * noticed. Checked FIRST, ahead of the transient test, precisely because the
+ * two overlap.
+ */
+const isTooLarge = (message: string): boolean =>
+  /request too large|reduce your message size|context[_ ]length[_ ]exceeded|\b413\b/i.test(message);
+
 const isTransient = (message: string): boolean =>
+  !isTooLarge(message) &&
   /\b(408|429|500|502|503|504)\b|rate.?limit|timeout|ECONNRESET|overloaded/i.test(message);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -166,6 +179,18 @@ export class LlmService {
     }
 
     this.logger.error(`model call failed: ${lastError}`);
+
+    if (isTooLarge(lastError)) {
+      // Worth its own message: this one is a configuration problem, not
+      // weather. Either the effort budgets are too generous for the tier,
+      // or something put an unexpectedly large result into the context.
+      throw new BadRequestException(
+        'That turn was too big for the model to accept. Try Light mode, or a ' +
+          'shorter question — and if it keeps happening, the effort budgets in ' +
+          'agent/effort.ts are above what this tier allows.',
+      );
+    }
+
     throw new BadRequestException(
       isTransient(lastError)
         ? 'The model is busy right now — try again in a moment'
