@@ -9,11 +9,12 @@
 --                and episode refreshes and the email summaries. The 8am
 --                brief simply never arrives, with no error anywhere.
 --
--- Free instance hours are pooled per account (~750/month at the time of
--- writing), and one service resident around the clock is ~730 of them. So
--- this is not a choice between two good options: keep the agent awake and
--- let the core wake on demand. If you move to a paid instance, re-enable
--- the core ping at the bottom of this file.
+-- Two services, not one, because a free Render instance is 512MB and a
+-- fraction of a CPU *per service* — splitting the model work from the CRUD
+-- work buys twice the headroom. What it costs is instance hours, which are
+-- pooled per account (~750/month at the time of writing, worth checking on
+-- your own dashboard). Two services resident around the clock is roughly
+-- double that, so confirm the budget before relying on both staying up.
 --
 -- ---------------------------------------------------------------------
 -- BEFORE RUNNING: add the agent's URL to the Vault.
@@ -80,15 +81,18 @@ select cron.unschedule('mypro-agent-keepalive')
   where exists (select 1 from cron.job where jobname = 'mypro-agent-keepalive');
 select cron.schedule('mypro-agent-keepalive', '*/10 * * * *', $$select ping_agent()$$);
 
--- ---- stop paying for the core ----------------------------------------
--- Two services kept awake does not fit in the free hour budget. The core
--- is request-driven and holds no cron, so it is the one that sleeps.
-select cron.unschedule('mypro-keepalive')
-  where exists (select 1 from cron.job where jobname = 'mypro-keepalive');
-
--- On a paid instance, bring it back with:
+-- ---- the core is woken by the agent now ------------------------------
+-- Supabase wakes the agent; the agent wakes the core (CoreKeepAliveService,
+-- every 10 minutes, only on the node that owns the clock). Chaining it that
+-- way means Supabase needs to know one URL rather than two, and the node
+-- that is already awake does the next hop for free.
+--
+-- So this Supabase-side ping to the core is retired. ping_render_core() is
+-- left in place: if you ever stop running the agent, re-schedule it with
 --   select cron.schedule('mypro-keepalive', '*/10 * * * *',
 --                        $$select ping_render_core()$$);
+select cron.unschedule('mypro-keepalive')
+  where exists (select 1 from cron.job where jobname = 'mypro-keepalive');
 
 -- ---- checking it ------------------------------------------------------
 --   select service, created_at, outcome, status_code, detail

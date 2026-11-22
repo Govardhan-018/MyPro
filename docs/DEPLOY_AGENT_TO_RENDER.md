@@ -16,13 +16,15 @@ whole reason the Pulse existed and the main thing the laptop could not do.
    now sits in Render's environment. So does the Web Push private key. This
    is a real reduction in the blast radius guarantee, traded for an agent
    that is actually awake.
-2. **Free instance hours are pooled** (~750/month at the time of writing —
-   check your own dashboard, the number moves). One service resident around
-   the clock is ~730. You can keep **one** of the two awake, not both.
-3. **Cold starts.** The core will sleep. The first screen after a quiet
-   period waits ~30 seconds for it.
+2. **Instance hours are pooled** (~750/month at the time of writing — check
+   your own dashboard, the number moves). Two services resident around the
+   clock is roughly double that. See "the hours question" below before you
+   rely on both staying up.
 
-If any of that is unacceptable, the honest alternative is at the bottom.
+Two services rather than one merged deployable is the right shape for a
+different reason: a free Render instance is 512MB and a fraction of a CPU
+**per service**, so splitting the model work from the CRUD work buys twice
+the headroom, and a slow research call cannot starve the calendar.
 
 ---
 
@@ -64,7 +66,15 @@ Two that are set for you by the blueprint and must not be changed:
 
 ## 3. Keep it awake
 
-Render free sleeps after ~15 minutes idle. Supabase wakes it.
+Render free sleeps after ~15 minutes idle. The chain is:
+
+```
+Supabase Cron  --every 10 min-->  mypro-agent  --every 10 min-->  mypro-core
+```
+
+Supabase only needs to know one URL, and the node that is already awake does
+the next hop itself (`CoreKeepAliveService`, which runs only on the node with
+`SCHEDULER_ENABLED=true`, so a laptop in dev never pings production).
 
 In the Supabase SQL editor, add the agent's URL to the Vault:
 
@@ -75,9 +85,9 @@ select vault.create_secret(
   'MyPro agent keep-alive endpoint');
 ```
 
-Then run `supabase/migrations/0016_keepalive_agent.sql`. It schedules a ping
-every 10 minutes and **unschedules the core's ping**, because the hours do not
-stretch to both.
+Then run `supabase/migrations/0016_keepalive_agent.sql`. It schedules the
+agent ping every 10 minutes and retires the Supabase-side core ping, which
+the agent now does instead.
 
 Check it after twenty minutes:
 
@@ -128,15 +138,22 @@ service while you work.
 
 ---
 
-## The alternative, if the hours do not work
+## The hours question
 
-Merge the two services into one deployable. The agent's modules are ordinary
-Nest modules; `backend-render` could import them directly, and then there is
-one service, one set of hours, one scheduler and no node-to-node hop for mail
-or Strava at all.
+Compute is per service; hours are per account. That is the whole tension.
 
-The reason the repo is not already shaped that way is that the split was built
-when the model key had to stay on a personal machine. Once that constraint is
-gone — and moving to Render is exactly giving it up — the two-service topology
-is paying a cost for a guarantee it no longer provides. Worth doing if free
-hours start biting; not worth doing today just for tidiness.
+Check yours in the Render dashboard under **Billing → Usage** after a few
+days. If two always-on services fit the budget, nothing more to do. If they
+do not, in order of what I would try:
+
+1. **Let the core sleep.** Comment out `CoreKeepAliveService`'s cron or clear
+   `RENDER_API_URL`. The core is request-driven and holds no clock, so the
+   only cost is a ~30s cold start on the first screen after a quiet period —
+   and the agent's own calls to it (mail, Strava) wake it anyway.
+2. **Widen the agent's ping to 14 minutes.** Still inside the idle window,
+   ~30% fewer wakes if Render bills partial hours by activity.
+3. **Merge the two services.** The agent's modules are ordinary Nest modules
+   and `backend-render` could import them directly: one service, one set of
+   hours, one scheduler, no node-to-node hop. You lose the memory headroom
+   that motivated the split, so this is the last resort rather than the
+   first — but it is the one that definitively fits a free account.

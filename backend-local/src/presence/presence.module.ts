@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { hostname } from 'node:os';
 import { SupabaseService } from '../common/supabase.service';
 import { env } from '../config/env';
+import { CoreKeepAliveService } from './core-keepalive.service';
 
 /**
  * Announces this laptop every 30 seconds. render and the UI treat the
@@ -35,5 +36,10 @@ export class PresenceService implements OnModuleInit {
   }
 }
 
-@Module({ providers: [PresenceService] })
+/**
+ * Presence: this node announces itself, and — when it owns the clock —
+ * keeps the core awake too. Supabase wakes this service, this service
+ * wakes the other.
+ */
+@Module({ providers: [PresenceService, CoreKeepAliveService] })
 export class PresenceModule {}
