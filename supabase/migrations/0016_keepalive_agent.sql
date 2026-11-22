@@ -20,7 +20,7 @@
 -- BEFORE RUNNING: add the agent's URL to the Vault.
 --
 --   select vault.create_secret(
---     'https://mypro-agent.onrender.com/api/v1/internal/keepalive',
+--     'https://myproagent.onrender.com/api/v1/internal/keepalive',
 --     'agent_keepalive_url',
 --     'MyPro agent keep-alive endpoint');
 --

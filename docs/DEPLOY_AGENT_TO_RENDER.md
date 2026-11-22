@@ -54,7 +54,7 @@ In the Render dashboard, on **mypro-agent**:
 | `GROQ_API_KEY` | from console.groq.com |
 | `CORS_ORIGINS` | your Vercel origin(s), comma separated |
 | `RENDER_API_URL` | `https://<core-host>/api/v1` |
-| `PUBLIC_BASE_URL` | `https://mypro-agent.onrender.com` — origin only, **no** `/api/v1` |
+| `PUBLIC_BASE_URL` | `https://myproagent.onrender.com` — origin only, **no** `/api/v1` |
 | `WEB_PUSH_PUBLIC_KEY` / `WEB_PUSH_PRIVATE_KEY` / `WEB_PUSH_SUBJECT` | the VAPID pair |
 
 Optional, for research: `GUARDIAN_API_KEY` (free, instant, ~12,000/day — the
@@ -86,7 +86,7 @@ In the Supabase SQL editor, add the agent's URL to the Vault:
 
 ```sql
 select vault.create_secret(
-  'https://mypro-agent.onrender.com/api/v1/internal/keepalive',
+  'https://myproagent.onrender.com/api/v1/internal/keepalive',
   'agent_keepalive_url',
   'MyPro agent keep-alive endpoint');
 ```
@@ -109,7 +109,7 @@ agent through `node_status`, which the agent heartbeats every 30 seconds.
 That indirection was built for the ephemeral tunnel and it works just as well
 for a fixed Render URL.
 
-Setting `VITE_AGENT_URL=https://mypro-agent.onrender.com/api/v1` skips the
+Setting `VITE_AGENT_URL=https://myproagent.onrender.com/api/v1` skips the
 lookup. It is slightly faster and one more thing to change later; the
 discovery path is the better default.
 
@@ -126,7 +126,7 @@ message should get a reply. Finally, confirm the clock is running — the
 keep-alive reports it:
 
 ```powershell
-curl -X POST https://mypro-agent.onrender.com/api/v1/internal/keepalive -H "x-internal-token: <INTERNAL_SERVICE_TOKEN>"
+curl -X POST https://myproagent.onrender.com/api/v1/internal/keepalive -H "x-internal-token: <INTERNAL_SERVICE_TOKEN>"
 ```
 
 `{"status":"ok","scheduler":true}` means the drain loop is alive.
