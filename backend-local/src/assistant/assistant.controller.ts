@@ -31,8 +31,25 @@ export class AssistantController {
 
   @Post('messages')
   send(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { content } = sendMessageInput.parse(body);
-    return this.assistant.send(user, content);
+    const { content, mode } = sendMessageInput.parse(body);
+    return this.assistant.send(user, content, mode);
+  }
+
+  /**
+   * What the agent can do and how hard it is currently allowed to think.
+   * The executable registry is the source of truth; this is its readout, so
+   * the UI can never drift from what the agent actually has.
+   */
+  @Get('capabilities')
+  capabilities(@CurrentUser() user: AuthUser) {
+    return this.assistant.capabilityReadout(user);
+  }
+
+  /** Recent plans with their verified outcome — "did it actually do it?". */
+  @Get('plans')
+  plans(@CurrentUser() user: AuthUser, @Query('limit') limit?: string) {
+    const n = limit ? Number.parseInt(limit, 10) : 10;
+    return this.assistant.recentPlans(user, Number.isFinite(n) ? n : 10);
   }
 
   @Post('clear')

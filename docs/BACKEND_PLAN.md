@@ -22,7 +22,13 @@ A single intelligent personal space: **Calendar · Library/Reader · Knowledge �
 >   second implementation. The backends are *not* workspace members.
 > - `supabase/migrations/` — 0001 schema (4NF) · 0002 RLS + health gate ·
 >   0003 node presence · 0004 skills · 0005 pdf-text storage · 0006 realtime ·
->   0007 deferred run status · 0008 pending-action result
+>   0007 deferred run status · 0008 pending-action result · 0009 commitments ·
+>   0010 narrative memory · 0011 companion layers · **0012 agent core**
+>
+> Staying awake: Supabase Cron + pg_net POST render's `/internal/keepalive`
+> every 10 minutes (`0015_keepalive.sql`), which is what keeps the free
+> instance resident. It is a ping, not a scheduler tick — `SCHEDULER_ENABLED`
+> stays false on render, and the clock remains on the laptop.
 >
 > Offline story: laptop closes → heartbeat stale in ~90s → UI greys the
 > assistant. Scheduled work simply waits for the laptop and is skipped if it
@@ -579,6 +585,24 @@ The assistant page becomes **one continuous thread** (`assistant_conversations.i
 | **Model / temperature** | `assistant_settings.model`, `.temperature` |
 | **Character (charter)** — name, tone, style notes, check-in time, inactivity threshold | `assistant_persona` |
 | **Auto-send guard** | `assistant_settings.allow_auto_send_email` (default **off**) |
+| **Effort** — how hard it thinks: light / default / deep | `assistant_settings.effort_mode` (default `default`); per-message override `POST /assistant/messages { content, mode }` |
+
+### 7.1a The agent core (Phase 19)
+
+One request may contain several tasks. The agent on LOCAL routes the request to
+the capabilities it needs, plans the separate things being asked for, executes
+them (reads in parallel where that is safe), then **reconciles every planned
+step against the receipt trail** before it writes one reply — so "I added them
+to your calendar" is only ever said when `skill_invocations` agrees.
+
+| Table | Holds |
+|---|---|
+| `agent_plans` | one row per planned turn: request, intent, mode, status, and why those capabilities were offered |
+| `agent_plan_steps` | one row per step with its settled status (`verified` / `queued` / `failed` / `not_attempted`) and the invocation that settled it |
+
+Both owner-only RLS, written with the user's own client. Read back at
+`GET /assistant/plans`; the capability list at `GET /assistant/capabilities`.
+Spec: `docs/AGENT_SPEC.md`.
 
 ### 7.2 Scheduled buddy tasks
 

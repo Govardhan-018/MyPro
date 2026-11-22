@@ -12,6 +12,8 @@ import { TasksModule } from './tasks/tasks.module';
 import { CommitmentsModule } from './commitments/commitments.module';
 import { HealthRecordsModule } from './health/health-records.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { StravaModule } from './strava/strava.module';
+import { InterestsModule } from './interests/interests.module';
 import { GmailModule } from './gmail/gmail.module';
 import { SchedulesModule } from './schedules/schedules.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
@@ -36,6 +38,8 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     HealthRecordsModule,
     NotificationsModule,
     GmailModule,
+    StravaModule,
+    InterestsModule,
     SchedulesModule,
     SchedulerModule,
   ],

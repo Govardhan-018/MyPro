@@ -58,6 +58,14 @@ const schema = z.object({
   /** Groq (console.groq.com). Never leaves this machine. */
   GROQ_API_KEY: z.string().min(10),
   ASSISTANT_MODEL: z.string().default('openai/gpt-oss-120b'),
+  /**
+   * Optional cheaper models for the two classification-shaped calls in the
+   * agent core: routing a request to capabilities, and turning it into a
+   * plan. Blank → the turn's own model, so leaving these unset changes
+   * nothing. Never hardcode a name here; Groq's catalogue moves.
+   */
+  ASSISTANT_ROUTER_MODEL: optionalText(),
+  ASSISTANT_PLANNER_MODEL: optionalText(),
 
   /**
    * The drain loop (Phase 11.1). On by default: this machine is the clock's
@@ -83,6 +91,52 @@ const schema = z.object({
   WEB_PUSH_PRIVATE_KEY: optionalText(),
   /** 'mailto:you@example.com' — push services require a contact. */
   WEB_PUSH_SUBJECT: optionalText(),
+
+  /* ---- research providers (Phase 20) ----------------------------------
+   * Every one optional: with none of them set, research still works on the
+   * free keyless providers (Wikipedia, GDELT, TheSportsDB's public test key,
+   * Open-Meteo). Adding a key promotes a better provider; the chain order is
+   * in RESEARCH_*_PROVIDERS. See docs/RESEARCH_PROVIDERS.md.
+   */
+  TAVILY_API_KEY: optionalText(),
+  BRAVE_SEARCH_API_KEY: optionalText(),
+  /** Origin of a SearXNG instance you trust, e.g. https://searx.example.org */
+  SEARXNG_BASE_URL: optionalUrl(),
+  NEWSDATA_API_KEY: optionalText(),
+  GUARDIAN_API_KEY: optionalText(),
+  /**
+   * Comma-separated RSS/Atom feed URLs. Free, keyless news from sources you
+   * chose — nothing is hardcoded, because whose news this is should be your
+   * decision. Up to 8 are read.
+   */
+  NEWS_RSS_FEEDS: optionalText(),
+  /** Blank uses TheSportsDB's public test key, which works but is throttled. */
+  THESPORTSDB_API_KEY: optionalText(),
+  FIRECRAWL_API_KEY: optionalText(),
+
+  /**
+   * Comma-separated provider ids, best first. Blank → the built-in order,
+   * filtered to whatever is configured. An unknown id is logged and skipped.
+   */
+  RESEARCH_SEARCH_PROVIDERS: optionalText(),
+  RESEARCH_NEWS_PROVIDERS: optionalText(),
+  RESEARCH_SPORTS_PROVIDERS: optionalText(),
+  RESEARCH_EXTRACT_PROVIDERS: optionalText(),
+  RESEARCH_WEATHER_PROVIDERS: optionalText(),
+
+  /** How we identify ourselves when fetching. Never the user's details. */
+  RESEARCH_USER_AGENT: optionalText(),
+  /** Byte ceiling on a fetched body, enforced while streaming. */
+  RESEARCH_MAX_FETCH_BYTES: z.coerce.number().int().positive().default(1_500_000),
+  RESEARCH_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  /** Minimum gap between two requests to the same host. */
+  RESEARCH_HOST_DELAY_MS: z.coerce.number().int().min(0).default(1_000),
+  /** Characters of extracted page text the model is shown. */
+  RESEARCH_MAX_PAGE_CHARS: z.coerce.number().int().positive().default(6_000),
+  /** Cache lifetime for search, news, fixtures and pages. 0 disables caching. */
+  RESEARCH_CACHE_TTL_MINUTES: z.coerce.number().int().min(0).default(180),
+  /** Forecasts go stale faster than articles do. */
+  RESEARCH_WEATHER_TTL_MINUTES: z.coerce.number().int().min(0).default(30),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),

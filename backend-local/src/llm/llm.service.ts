@@ -40,6 +40,8 @@ export interface LlmResult {
 
 /** Hard ceiling on a single model call, so a busy model cannot wedge a request. */
 const REQUEST_TIMEOUT_MS = 60_000;
+/** Output ceiling when the caller names none. Effort modes override per call. */
+const DEFAULT_MAX_TOKENS = 4_096;
 /** Free tiers rate-limit and occasionally 5xx; a couple of retries smooths it. */
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 1_500;
@@ -74,6 +76,25 @@ export class LlmService {
   async generate(params: {
     model?: string;
     temperature?: number;
+    /**
+     * Output ceiling for this call. Effort modes set it; default
+     * DEFAULT_MAX_TOKENS.
+     *
+     * ⚠️ **On a reasoning model this budget includes the reasoning.** The
+     * default model (`openai/gpt-oss-120b`) thinks before it answers, and
+     * that thinking is spent from the same allowance — so a ceiling that
+     * looks generous for the visible answer can truncate it mid-sentence
+     * with no error. This cost the planner every single call until it was
+     * found: valid JSON, cut off at "Get current date and".
+     */
+    maxTokens?: number;
+    /**
+     * How hard to think, where the model supports it. 'low' is the right
+     * answer for the classification-shaped calls (routing, planning) — they
+     * need a correct shape, not deliberation, and the saved tokens go to the
+     * answer instead.
+     */
+    reasoningEffort?: 'low' | 'medium' | 'high';
     system: string;
     messages: LlmMessage[];
     tools?: LlmTool[];
@@ -128,7 +149,14 @@ export class LlmService {
     let lastError = '';
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        return await this.attempt(model, messages, tools, params.temperature);
+        return await this.attempt(
+          model,
+          messages,
+          tools,
+          params.temperature,
+          params.maxTokens,
+          params.reasoningEffort,
+        );
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         if (!isTransient(lastError) || attempt === MAX_ATTEMPTS) break;
@@ -150,12 +178,16 @@ export class LlmService {
     messages: ChatMessage[],
     tools: { type: 'function'; function: Record<string, unknown> }[],
     temperature?: number,
+    maxTokens?: number,
+    reasoningEffort?: 'low' | 'medium' | 'high',
   ): Promise<LlmResult> {
     const res = await this.groq().chat.completions.create({
       model,
       messages,
       temperature: temperature ?? 1,
-      max_tokens: 4096,
+      max_tokens: maxTokens && maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS,
+      // Groq accepts this on its reasoning models and ignores it elsewhere.
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       ...(tools.length
         ? { tools: tools as unknown as Groq.Chat.Completions.ChatCompletionTool[], tool_choice: 'auto' as const }
         : {}),

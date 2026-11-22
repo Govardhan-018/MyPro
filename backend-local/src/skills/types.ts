@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { z } from 'zod';
 import type { AuthUser } from '../common/auth.guard';
+import type { ResearchService } from '../research/research.service';
+import type { StravaClientService } from '../fitness/strava-client.service';
+import type { EffortBudget } from '../agent/effort';
 
 /**
  * What a skill is allowed to do. Enforced by the executor, not by the prompt.
@@ -19,6 +22,23 @@ export interface SkillContext {
   admin: SupabaseClient;
   now: Date;
   timezone: string;
+  /**
+   * The internet, behind the provider chains (Phase 20). Present whenever the
+   * agent is running normally; a skill must still handle `undefined` so it
+   * degrades to a clear refusal rather than a crash.
+   */
+  research?: ResearchService;
+  /**
+   * Training history, read through render (Phase 20.5). Absent on a node
+   * with no RENDER_API_URL, so a skill must degrade to a clear refusal.
+   */
+  fitness?: StravaClientService;
+  /**
+   * This turn's effort budget. Research skills read `searchResults` and
+   * `fetchPages` from it so breadth follows the user's mode rather than
+   * whatever the model asked for.
+   */
+  budget?: EffortBudget;
 }
 
 export interface Skill<A = unknown> {

@@ -61,6 +61,15 @@ const schema = z.object({
    * disconnects every week. Publishing it needs Google's verification review
    * for the restricted `gmail.readonly` scope — free, but slow.
    */
+  /**
+   * Strava (Phase 20.5). Create an app at strava.com/settings/api; the
+   * redirect URI must be this service's /api/v1/strava/callback. Read-only
+   * scopes are requested in code, not here.
+   */
+  STRAVA_CLIENT_ID: optionalText(),
+  STRAVA_CLIENT_SECRET: optionalText(),
+  STRAVA_REDIRECT_URI: optionalUrl(),
+
   GOOGLE_CLIENT_ID: optionalText(),
   GOOGLE_CLIENT_SECRET: optionalText(),
   /** Must match the console exactly, e.g. https://…/api/v1/gmail/callback */

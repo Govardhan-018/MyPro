@@ -1,0 +1,177 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { LlmService, type LlmMessage, type LlmTool } from '../llm/llm.service';
+import { SkillsService } from '../skills/skills.service';
+import type { AuthUser } from '../common/auth.guard';
+import type { InvocationReceipt, SideEffect } from '../skills/types';
+import type { EffortBudget } from './effort';
+
+export interface ExecutionRequest {
+  user: AuthUser;
+  model: string;
+  temperature: number;
+  system: string;
+  messages: LlmMessage[];
+  conversationId: string;
+  timezone: string;
+  tools: LlmTool[];
+  /** Capability name → tier. Decides what may run in parallel. */
+  permissions: ReadonlyMap<string, SideEffect>;
+  budget: EffortBudget;
+}
+
+export interface ExecutionResult {
+  text: string;
+  receipts: InvocationReceipt[];
+  /** Model round trips taken. */
+  steps: number;
+  /** True when the step budget ran out with the model still calling tools. */
+  exhausted: boolean;
+  /** The conversation as executed, so a final pass can be appended to it. */
+  history: LlmMessage[];
+}
+
+/**
+ * The execution engine: the tool-calling loop, with two changes from the flat
+ * loop it replaces.
+ *
+ * **Parallelism.** When every tool call in one model step is read-tier, they
+ * run together. The moment a `write` or `outward` call is in the batch, the
+ * whole batch runs sequentially in the order the model emitted it — a read
+ * after a write may be *checking* that write, and reordering it would make
+ * verification lie.
+ *
+ * **Honest exhaustion.** Running out of steps is no longer silent: the final
+ * pass is told it ran out, so the reply can say what is still unfinished
+ * instead of quietly answering from a partial gather.
+ *
+ * Skills still never throw into the loop — every failure arrives as a readable
+ * error result plus a receipt, which is what verification later reads.
+ */
+@Injectable()
+export class ExecutionService {
+  private readonly logger = new Logger(ExecutionService.name);
+
+  constructor(
+    private readonly llm: LlmService,
+    private readonly skills: SkillsService,
+  ) {}
+
+  async run(request: ExecutionRequest): Promise<ExecutionResult> {
+    const { budget } = request;
+    const messages: LlmMessage[] = [...request.messages];
+    const receipts: InvocationReceipt[] = [];
+
+    for (let step = 0; step < budget.maxToolSteps; step++) {
+      const res = await this.llm.generate({
+        model: request.model,
+        temperature: request.temperature,
+        maxTokens: budget.maxOutputTokens,
+        system: request.system,
+        messages,
+        tools: request.tools,
+      });
+
+      if (!res.toolCalls.length) {
+        return { text: res.text, receipts, steps: step + 1, exhausted: false, history: messages };
+      }
+
+      messages.push({
+        role: 'model',
+        text: res.text,
+        toolCalls: res.toolCalls,
+        raw: res.rawParts,
+      });
+
+      const calls = res.toolCalls;
+      const allReads = calls.every(
+        (call) => (request.permissions.get(call.name) ?? 'write') === 'read',
+      );
+
+      const results = allReads
+        ? await this.parallel(calls, request)
+        : await this.sequential(calls, request);
+
+      for (const entry of results) receipts.push(entry.receipt);
+      messages.push({
+        role: 'tool',
+        responses: results.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          result: entry.content.slice(0, budget.toolResultChars),
+        })),
+      });
+    }
+
+    this.logger.warn(`step budget (${budget.maxToolSteps}) exhausted in ${budget.mode} mode`);
+    return { text: '', receipts, steps: budget.maxToolSteps, exhausted: true, history: messages };
+  }
+
+  /**
+   * The closing generation: no tools, plus whatever the turn must be honest
+   * about (the verification note, and that the budget ran out).
+   */
+  async finalAnswer(params: {
+    model: string;
+    temperature: number;
+    system: string;
+    history: LlmMessage[];
+    note?: string;
+    budget: EffortBudget;
+  }): Promise<string> {
+    const messages: LlmMessage[] = [...params.history];
+    if (params.note) messages.push({ role: 'user', text: params.note });
+
+    const res = await this.llm.generate({
+      model: params.model,
+      temperature: params.temperature,
+      maxTokens: params.budget.maxOutputTokens,
+      system: params.system,
+      messages,
+    });
+    return res.text;
+  }
+
+  // ---- call execution --------------------------------------------------
+
+  private async parallel(
+    calls: { id: string; name: string; args: Record<string, unknown> }[],
+    request: ExecutionRequest,
+  ) {
+    const out: { id: string; name: string; content: string; receipt: InvocationReceipt }[] = [];
+    const width = Math.max(1, request.budget.parallelism);
+
+    for (let i = 0; i < calls.length; i += width) {
+      const batch = calls.slice(i, i + width);
+      const settled = await Promise.all(batch.map((call) => this.one(call, request)));
+      out.push(...settled);
+    }
+    return out;
+  }
+
+  private async sequential(
+    calls: { id: string; name: string; args: Record<string, unknown> }[],
+    request: ExecutionRequest,
+  ) {
+    const out: { id: string; name: string; content: string; receipt: InvocationReceipt }[] = [];
+    for (const call of calls) out.push(await this.one(call, request));
+    return out;
+  }
+
+  private async one(
+    call: { id: string; name: string; args: Record<string, unknown> },
+    request: ExecutionRequest,
+  ) {
+    const outcome = await this.skills.execute(request.user, call.name, call.args, {
+      conversationId: request.conversationId,
+      timezone: request.timezone,
+      // Research breadth follows the user's effort mode, not the model's whim.
+      budget: request.budget,
+    });
+    return {
+      id: call.id,
+      name: call.name,
+      content: outcome.content,
+      receipt: outcome.receipt,
+    };
+  }
+}

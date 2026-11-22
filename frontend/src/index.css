@@ -7284,3 +7284,387 @@ button {
     font-size: 13px;
   }
 }
+
+/* ===================================================================
+   The character, the agent's plan, and the capability readout
+   (Phases 19–20). Monochrome: thin borders, graphite surfaces, size
+   for hierarchy. Accent only inside .color-mode, like everything else.
+   =================================================================== */
+
+/* ---- the character's face and name ---- */
+.character-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.character-avatar {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.character-head-fields {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+.character-name-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+.character-head-hint,
+.character-note {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---- presets and the effort dial: the same card grid ---- */
+.character-presets,
+.character-modes {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.character-modes {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.character-preset,
+.character-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.character-preset:hover,
+.character-mode:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+}
+.character-preset.is-active,
+.character-mode.is-active {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.1);
+}
+.character-preset-label,
+.character-mode-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.character-preset-blurb,
+.character-mode-blurb {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.settings-toggle-row > span > small {
+  display: block;
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11.5px;
+}
+@media (max-width: 560px) {
+  .character-presets,
+  .character-modes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- the per-message effort picker in the chat header ---- */
+.effort-picker {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.effort-chip {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.effort-chip:hover {
+  color: rgba(255, 255, 255, 0.75);
+}
+.effort-chip.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+@media (max-width: 760px) {
+  /* It is the only place effort is chosen, so it stays — just tighter. */
+  .effort-chip {
+    padding: 4px 8px;
+    font-size: 10.5px;
+  }
+}
+
+/* ---- the plan, under the reply that acted on it ---- */
+.agent-plan {
+  margin: 10px 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.agent-plan.is-incomplete {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.agent-plan-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  cursor: pointer;
+  list-style: none;
+}
+.agent-plan-summary::-webkit-details-marker {
+  display: none;
+}
+.agent-plan-count {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.agent-plan-intent {
+  /* min-width:0 or the flex default (auto) refuses to shrink and a long
+     intent widens the whole message bubble instead of ellipsing. */
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-plan-mode {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.agent-plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 2px 11px 10px;
+  list-style: none;
+}
+.agent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.agent-step-icon {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+}
+.agent-step-goal {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.45;
+}
+.agent-step-status {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 11px;
+}
+.agent-step-ok .agent-step-icon {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+/* A failed or skipped step is the one thing here that must not be missed. */
+.agent-step-bad .agent-step-icon {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.agent-step-bad .agent-step-goal,
+.agent-step-bad .agent-step-status {
+  color: #fff;
+}
+.agent-step-idle .agent-step-goal {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* ---- what it can do, read from the agent itself ---- */
+.capability-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+}
+.capability-summary strong {
+  font-size: 15px;
+}
+.capability-summary > span,
+.capability-note {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.capability-note code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+}
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.provider-list > li {
+  display: grid;
+  gap: 1px 10px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+.provider-list > li.is-off {
+  opacity: 0.55;
+}
+.provider-kind {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11.5px;
+}
+.provider-active {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  word-break: break-word;
+}
+.provider-inactive {
+  grid-column: 2;
+  color: rgba(255, 255, 255, 0.33);
+  font-size: 11px;
+}
+
+/* Accents live only here, per the design system. */
+.color-mode .character-preset.is-active,
+.color-mode .character-mode.is-active {
+  border-color: var(--accent);
+}
+.color-mode .effort-chip.is-active {
+  background: var(--accent);
+  color: #000;
+}
+.color-mode .agent-step-ok .agent-step-icon {
+  background: var(--accent);
+  color: #000;
+}
+
+/* ---- what it watches for you (Phase 20.6) ---- */
+.watch-add {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.watch-add input,
+.watch-add select,
+.watch-list select {
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 12.5px;
+}
+.watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.watch-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+}
+.watch-list > li.is-paused {
+  opacity: 0.5;
+}
+.watch-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.watch-entity {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watch-meta {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+}
+.watch-list .quiet-button {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+}
+@media (max-width: 560px) {
+  .watch-add {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .watch-add > .quiet-button {
+    grid-column: 2;
+  }
+  .watch-list > li {
+    flex-wrap: wrap;
+  }
+  .watch-main {
+    flex: 1 1 100%;
+  }
+}

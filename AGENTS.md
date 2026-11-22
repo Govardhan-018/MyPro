@@ -78,5 +78,9 @@ transitions).
 - Never hardcode secrets, URLs, or model names — env only.
 - The architecture contract is `docs/BACKEND_PLAN.md`; update it when the
   topology or schema changes.
+- The assistant as actually built is `docs/AI_SYSTEM.md`, and the agent core
+  (capability routing, planning, verification, effort modes) is
+  `docs/AGENT_SPEC.md`. A new skill needs an entry in
+  `capabilities/capability.meta.ts` or the registry test fails.
 - **What to build next lives in `docs/PHASES.md`** — every phase, its goal and
   its status, in one file. Keep it current; it is what a new chat reads.

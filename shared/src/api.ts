@@ -17,6 +17,12 @@ import type {
   ReceiptRow,
   ScheduleOccurrence,
   ScheduleRow,
+  AgentCapabilityReadout,
+  AgentPlanRow,
+  EffortMode,
+  InterestRow,
+  InterestFindingRow,
+  StravaStatus,
   SendResult,
   SkillRow,
 } from './types';
@@ -372,14 +378,43 @@ export function createApi(
     assistant: {
       conversation: () => agentGet<Record<string, unknown>>('/assistant/conversation'),
       messages: (limit = 50) => agentGet<AssistantMessageRow[]>('/assistant/messages', { limit }),
-      /** Returns the reply plus receipts for anything it did along the way. */
-      send: (content: string) => agentPost<SendResult>('/assistant/messages', { content }),
+      /**
+       * Returns the reply, receipts for anything it did along the way, and —
+       * since Phase 19 — what it planned and what verification made of it.
+       * `mode` overrides the stored effort for this one message only.
+       */
+      send: (content: string, mode?: EffortMode) =>
+        agentPost<SendResult>('/assistant/messages', mode ? { content, mode } : { content }),
+      /** What this agent can do right now, plus the effort modes. */
+      capabilities: () => agentGet<AgentCapabilityReadout>('/assistant/capabilities'),
+      /** Recent plans with each step's verified outcome. */
+      plans: (limit = 10) => agentGet<AgentPlanRow[]>('/assistant/plans', { limit }),
       clear: (mode: 'wipe' | 'archive' = 'wipe') => agentPost('/assistant/clear', { mode }),
       settings: () => agentGet<AssistantSettingsRow>('/assistant/settings'),
       updateSettings: (body: Partial<AssistantSettingsRow>) =>
         agentPatch<AssistantSettingsRow>('/assistant/settings', body),
       persona: () => agentGet<Record<string, unknown>>('/assistant/persona'),
       updatePersona: (body: Record<string, unknown>) => agentPatch('/assistant/persona', body),
+    },
+
+    /** Things the companion watches for you (Phase 20.6). Render-owned, so
+     *  the list works whether or not the laptop is awake. */
+    interests: {
+      list: (includePaused = false) =>
+        get<InterestRow[]>('/interests', includePaused ? { include_paused: 'true' } : {}),
+      findings: (limit = 20) => get<InterestFindingRow[]>('/interests/findings', { limit }),
+      create: (body: Partial<InterestRow> & { entity: string }) =>
+        post<InterestRow>('/interests', body),
+      update: (id: string, body: Partial<InterestRow>) =>
+        patch<InterestRow>(`/interests/${id}`, body),
+      remove: (id: string) => del(`/interests/${id}`),
+    },
+
+    /** Strava, connected and read on render — it holds the tokens. */
+    strava: {
+      status: () => get<StravaStatus>('/strava/status'),
+      connect: () => post<{ url: string }>('/strava/connect', {}),
+      disconnect: () => del('/strava/account'),
     },
 
     /** What the companion can do, what it did, and what awaits your approval. */

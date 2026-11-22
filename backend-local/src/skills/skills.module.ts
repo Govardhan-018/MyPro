@@ -6,6 +6,8 @@ import { AuthGuard, CurrentUser, type AuthUser } from '../common/auth.guard';
 import { AuditService } from '../common/audit.service';
 import { SupabaseService } from '../common/supabase.service';
 import { LocalGmailModule } from '../gmail/gmail.module';
+import { ResearchModule } from '../research/research.module';
+import { FitnessModule } from '../fitness/fitness.module';
 import { RenderMailService } from '../gmail/render-mail.service';
 import { SkillsService } from './skills.service';
 import { SKILLS } from './definitions';
@@ -171,7 +173,7 @@ export class SkillsController {
 }
 
 @Module({
-  imports: [LocalGmailModule],
+  imports: [LocalGmailModule, ResearchModule, FitnessModule],
   controllers: [SkillsController],
   providers: [SkillsService],
   exports: [SkillsService],

@@ -9,6 +9,8 @@ import { LocalNotificationsModule } from './notifications/notifications.module';
 import { LocalGmailModule } from './gmail/gmail.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { PulseModule } from './pulse/pulse.service';
+import { ResearchModule } from './research/research.module';
+import { FitnessModule } from './fitness/fitness.module';
 
 /**
  * backend-local — the personal agent on your laptop.
@@ -28,6 +30,8 @@ import { PulseModule } from './pulse/pulse.service';
     PresenceModule,
     LocalNotificationsModule,
     LocalGmailModule,
+    ResearchModule,
+    FitnessModule,
     SchedulerModule,
     PulseModule,
   ],

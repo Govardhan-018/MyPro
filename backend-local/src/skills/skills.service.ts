@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { SupabaseService } from '../common/supabase.service';
 import { AuditService } from '../common/audit.service';
+import { ResearchService } from '../research/research.service';
+import { StravaClientService } from '../fitness/strava-client.service';
+import type { EffortBudget } from '../agent/effort';
 import type { AuthUser } from '../common/auth.guard';
 import { SKILLS } from './definitions';
 import type { InvocationReceipt, Skill, SkillContext } from './types';
@@ -29,6 +32,16 @@ const toJsonSchema = zodToJsonSchema as unknown as (
   options?: unknown,
 ) => Record<string, unknown>;
 
+/** Just the host, for a receipt that reads like a sentence. */
+function hostOf(url?: string): string {
+  if (!url) return 'a page';
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return 'a page';
+  }
+}
+
 /** Derived once at load — the registry is static. */
 const TOOL_SCHEMAS: ReadonlyMap<string, Record<string, unknown>> = new Map(
   SKILLS.map((s) => [
@@ -45,6 +58,8 @@ export class SkillsService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly audit: AuditService,
+    private readonly research: ResearchService,
+    private readonly fitness: StravaClientService,
   ) {}
 
   /**
@@ -71,7 +86,7 @@ export class SkillsService {
     user: AuthUser,
     name: string,
     rawArgs: unknown,
-    context: { conversationId?: string; timezone: string },
+    context: { conversationId?: string; timezone: string; budget?: EffortBudget },
   ): Promise<ExecutionOutcome> {
     const started = Date.now();
     const skill = this.byName.get(name);
@@ -145,6 +160,9 @@ export class SkillsService {
         admin: this.supabase.admin,
         now: new Date(),
         timezone: context.timezone,
+        research: this.research,
+        fitness: this.fitness,
+        budget: context.budget,
       };
       const result = await skill.run(parsed.data, ctx);
       const receipt = await this.record(user, skill, args, {
@@ -289,6 +307,24 @@ export class SkillsService {
         return `Created schedule "${title ?? ''}"`.trim();
       case 'delete_schedule':
         return 'Removed a schedule';
+      case 'web_search':
+        return `Searched the web for "${pick(args, 'query') ?? ''}"`.trim();
+      case 'news_search':
+        return `Looked for news on "${pick(args, 'query') ?? pick(args, 'topic') ?? ''}"`.trim();
+      case 'fetch_page':
+        return `Read ${hostOf(pick(args, 'url'))}`;
+      case 'sports_fixtures':
+        return `Checked fixtures for ${pick(args, 'team') ?? 'a team'}`;
+      case 'get_weather':
+        return `Checked the weather in ${pick(args, 'place') ?? 'their area'}`;
+      case 'list_activities':
+        return 'Looked at your training history';
+      case 'follow_interest':
+        return `Now following ${pick(args, 'entity') ?? 'that'}`;
+      case 'update_interest':
+        return `Updated ${pick(args, 'entity') ?? 'an interest'}`;
+      case 'list_interests':
+        return 'Checked what it follows for you';
       case 'send_email':
         return `Send email to ${pick(args, 'to') ?? 'recipient'} — "${pick(args, 'subject') ?? ''}"`;
       default:

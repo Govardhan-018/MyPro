@@ -8,7 +8,15 @@
  * never silently dropped — "silence is a valid, recorded output".
  */
 
-export type SignalType = 'commitment' | 'task' | 'email' | 'silence' | 'evening' | 'weekly';
+export type SignalType =
+  | 'commitment'
+  | 'task'
+  | 'email'
+  | 'silence'
+  | 'evening'
+  | 'weekly'
+  /** Something they asked to be kept updated on actually happened (20.6). */
+  | 'interest';
 
 export interface Candidate {
   signalType: SignalType;

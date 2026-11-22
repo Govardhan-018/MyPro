@@ -77,6 +77,10 @@ import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
 import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
+import { CharacterPanel, characterInitial, type PersonaDraft } from "./components/assistant/CharacterPanel";
+import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
+import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
+import { WatchingPanel } from "./components/assistant/WatchingPanel";
 import { MobileNavSheet } from "./components/MobileNavSheet";
 import { useCollections } from "./lib/useCollections";
 import { isApiConfigured } from "./lib/env";
@@ -87,7 +91,9 @@ import {
   AgentOfflineError,
   api,
   forgetAgentBase,
+  type AgentTurnSummary,
   type AssistantSettingsRow,
+  type EffortMode,
   type PendingActionRow,
   type ReceiptRow,
 } from "./lib/api";
@@ -1879,6 +1885,8 @@ type ChatMessage = {
   text: string;
   time: string;
   receipts?: ReceiptRow[];
+  /** What the agent planned and what verification made of it (Phase 19). */
+  agent?: AgentTurnSummary;
 };
 
 function receiptTone(status: ReceiptRow["status"]): "ok" | "bad" | "wait" {
@@ -1912,22 +1920,13 @@ function fmtTime(iso?: string | null): string {
     : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-type Persona = {
-  name?: string;
-  tone?: string;
-  style_notes?: string;
-  check_in_time?: string;
-  inactivity_hours?: number;
-  proactive_enabled?: boolean;
-};
-
 /** Persona/charter + runtime settings editor — both live on the laptop agent. */
 function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<AssistantSettingsRow | null>(null);
-  const [persona, setPersona] = useState<Persona>({});
+  const [persona, setPersona] = useState<PersonaDraft>({});
 
   useEffect(() => {
     let active = true;
@@ -1935,7 +1934,7 @@ function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
       .then(([loadedSettings, loadedPersona]) => {
         if (!active) return;
         setSettings(loadedSettings);
-        setPersona((loadedPersona ?? {}) as Persona);
+        setPersona((loadedPersona ?? {}) as PersonaDraft);
         setLoading(false);
       })
       .catch((caught) => {
@@ -1996,7 +1995,7 @@ function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
         aria-label="Assistant settings"
       >
         <header className="assistant-settings-head">
-          <h2>Assistant settings</h2>
+          <h2>Your assistant</h2>
           <button className="quiet-button" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
@@ -2009,68 +2008,12 @@ function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
         ) : (
           settings && (
             <div className="assistant-settings-body">
-              <span className="settings-group-label">Persona</span>
-              <label className="settings-row">
-                <span>Name</span>
-                <input
-                  type="text"
-                  value={persona.name ?? ""}
-                  maxLength={60}
-                  onChange={(e) => setPersona((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="MyPro"
-                />
-              </label>
-              <label className="settings-row">
-                <span>Tone</span>
-                <input
-                  type="text"
-                  value={persona.tone ?? ""}
-                  maxLength={400}
-                  onChange={(e) => setPersona((p) => ({ ...p, tone: e.target.value }))}
-                  placeholder="Warm, concise, encouraging"
-                />
-              </label>
-              <label className="settings-row settings-row-stack">
-                <span>Style notes</span>
-                <textarea
-                  value={persona.style_notes ?? ""}
-                  maxLength={4000}
-                  rows={3}
-                  onChange={(e) => setPersona((p) => ({ ...p, style_notes: e.target.value }))}
-                  placeholder="How should it talk to you? What should it avoid?"
-                />
-              </label>
-              <label className="settings-row">
-                <span>Daily check-in</span>
-                <input
-                  type="time"
-                  value={(persona.check_in_time ?? "").slice(0, 5)}
-                  onChange={(e) => setPersona((p) => ({ ...p, check_in_time: e.target.value }))}
-                />
-              </label>
-              <label className="settings-row">
-                <span>Nudge after (hours idle)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={168}
-                  value={persona.inactivity_hours ?? ""}
-                  onChange={(e) =>
-                    setPersona((p) => ({
-                      ...p,
-                      inactivity_hours: e.target.value ? Number(e.target.value) : undefined,
-                    }))
-                  }
-                />
-              </label>
-              <label className="settings-row settings-toggle-row">
-                <span>Proactive check-ins</span>
-                <input
-                  type="checkbox"
-                  checked={persona.proactive_enabled ?? false}
-                  onChange={(e) => setPersona((p) => ({ ...p, proactive_enabled: e.target.checked }))}
-                />
-              </label>
+              <CharacterPanel persona={persona} onPersona={setPersona} />
+
+              <WatchingPanel />
+
+              <span className="settings-group-label">What it can do</span>
+              <CapabilityReadout />
 
               <span className="settings-group-label">Conversation</span>
               <div className="settings-row settings-row-stack">
@@ -2157,6 +2100,14 @@ function AssistantView() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  /**
+   * Effort for the NEXT message only. Null means "whatever my character
+   * settings say", which is the normal case — this is for the one question
+   * that deserves more thought than usual, or less.
+   */
+  const [turnMode, setTurnMode] = useState<EffortMode | null>(null);
+  /** The character's name, so the chat calls it what the user named it. */
+  const [characterName, setCharacterName] = useState("MyPro");
   const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
   const [pending, setPending] = useState<PendingActionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -2191,6 +2142,15 @@ function AssistantView() {
               time: fmtTime(m.created_at),
             })),
         );
+      })
+      .catch(() => {});
+
+    // Who it is. Cosmetic, so a failure just leaves the default name.
+    api.assistant
+      .persona()
+      .then((loaded) => {
+        const name = (loaded as { name?: string } | null)?.name?.trim();
+        if (active && name) setCharacterName(name);
       })
       .catch(() => {});
 
@@ -2243,7 +2203,8 @@ function AssistantView() {
     }
 
     try {
-      const result = await api.assistant.send(clean);
+      // `turnMode` is a one-message override; null means "use my setting".
+      const result = await api.assistant.send(clean, turnMode ?? undefined);
       setAgentOnline(true);
       setMessages((current) => [
         ...current,
@@ -2253,6 +2214,7 @@ function AssistantView() {
           text: result.message.content ?? "",
           time: fmtTime(result.message.created_at),
           receipts: result.receipts,
+          agent: result.agent,
         },
       ]);
       // A turn may have queued an outward action for approval.
@@ -2304,9 +2266,31 @@ function AssistantView() {
             <span className="mode-spark">
               <Sparkles size={14} />
             </span>{" "}
-            MyPro Personal <ChevronDown size={14} />
+            {characterName} <ChevronDown size={14} />
           </div>
           <div className="assistant-top-right">
+            {configured && (
+              <div className="effort-picker" role="group" aria-label="Effort for the next message">
+                {(["light", "default", "deep"] as EffortMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`effort-chip${(turnMode ?? "default") === mode ? " is-active" : ""}`}
+                    aria-pressed={(turnMode ?? "default") === mode}
+                    title={
+                      mode === "light"
+                        ? "One quick pass — cheapest"
+                        : mode === "default"
+                          ? "Plans and checks its work"
+                          : "More steps, more memory, more sources"
+                    }
+                    onClick={() => setTurnMode(mode)}
+                  >
+                    {mode === "default" ? "Normal" : mode === "light" ? "Light" : "Deep"}
+                  </button>
+                ))}
+              </div>
+            )}
             {configured && (
               <span
                 className={`agent-status ${agentOnline === null ? "unknown" : agentOnline ? "online" : "offline"}`}
@@ -2358,10 +2342,11 @@ function AssistantView() {
               {messages.map((m) => (
                 <div key={m.id} className={`message ${m.from}`}>
                   <div className="message-avatar">
-                    {m.from === "ai" ? <Sparkles size={15} /> : "AK"}
+                    {m.from === "ai" ? characterInitial(characterName) : "AK"}
                   </div>
                   <div className="message-bubble">
                     <p>{m.from === "ai" ? <AnimatedReply text={m.text} /> : m.text}</p>
+                    <AgentPlanCard agent={m.agent} />
                     {m.receipts && m.receipts.length > 0 && (
                       <div className="receipt-cards">
                         {m.receipts.map((r) => (
@@ -2375,11 +2360,9 @@ function AssistantView() {
               ))}
               {isThinking && (
                 <div className="message ai loading-message">
-                  <div className="message-avatar">
-                    <Sparkles size={15} />
-                  </div>
+                  <div className="message-avatar">{characterInitial(characterName)}</div>
                   <div className="message-bubble thinking-bubble">
-                    <span>MyPro is thinking</span>
+                    <span>{characterName} is thinking</span>
                     <div className="typing-dots" aria-label="Loading response">
                       <i />
                       <i />

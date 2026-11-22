@@ -91,6 +91,36 @@ export interface AssistantSettingsRow {
   model: string | null;
   temperature: number;
   allow_auto_send_email: boolean;
+  /** How hard the agent thinks. Optional: absent until migration 0012 lands. */
+  effort_mode?: EffortMode;
+}
+
+/**
+ * Light is one cheap pass, Default is the everyday companion, Deep plans
+ * explicitly and reads more of your history. Budgets live on the agent
+ * (`backend-local/src/agent/effort.ts`); this is just the dial.
+ */
+export type EffortMode = 'light' | 'default' | 'deep';
+
+/**
+ * What the agent set out to do this turn, and what the receipt trail says
+ * actually happened. `status` is settled against `skill_invocations`, never
+ * against the model's own account — so `verified` means verified.
+ */
+export interface AgentPlanStepSummary {
+  id: string;
+  goal: string;
+  capability: string;
+  status: 'pending' | 'verified' | 'queued' | 'failed' | 'not_attempted';
+}
+
+export interface AgentTurnSummary {
+  mode: EffortMode;
+  /** The capabilities offered to the model this turn, strongest first. */
+  capabilities: string[];
+  model_calls: number;
+  /** Null when the request did not warrant an agenda. */
+  plan: { intent: string; steps: AgentPlanStepSummary[] } | null;
 }
 
 /** A thing the companion actually did, rendered as a card in the chat. */
@@ -104,9 +134,110 @@ export interface ReceiptRow {
   error?: string;
 }
 
+/**
+ * Something the companion watches for you (Phase 20.6).
+ *
+ * Distinct from a remembered fact: memory records that something is true
+ * about you, an interest is a standing instruction to go and look.
+ */
+export interface InterestRow {
+  id: string;
+  entity: string;
+  category: 'team' | 'player' | 'company' | 'technology' | 'person' | 'topic' | 'other';
+  aliases: string[];
+  /** 1 mildly curious … 5 tell me quickly. */
+  interest_level: number;
+  importance_threshold: number;
+  /** push interrupts, chat waits in the thread, none just collects. */
+  notify: 'push' | 'chat' | 'none';
+  check_every_hours: number;
+  active: boolean;
+  last_checked_at: string | null;
+  created_at: string;
+}
+
+/** What one check turned up — the "why am I being told this?" trail. */
+export interface InterestFindingRow {
+  id: string;
+  interest_id: string;
+  title: string;
+  url: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  importance: number | null;
+  outcome: 'delivered' | 'suppressed' | 'stored';
+  reason: string | null;
+  created_at: string;
+}
+
+export interface StravaStatus {
+  /** False when the server has no Strava app configured at all. */
+  configured: boolean;
+  account: {
+    id: string;
+    athlete_name: string | null;
+    scopes: string | null;
+    created_at: string;
+    last_synced_at: string | null;
+  } | null;
+}
+
+/** One research kind and which external services would answer it right now. */
+export interface ResearchProviderRow {
+  /** search | news | sports | extract | weather */
+  kind: string;
+  /** Tried left to right; a failure falls through to the next. */
+  active: { id: string; free: boolean; note: string }[];
+  /** Installed but switched off, usually for want of a key. */
+  inactive: string[];
+}
+
+/** `GET /assistant/capabilities` — the registry readout, derived from code. */
+export interface AgentCapabilityReadout {
+  effort: {
+    current: EffortMode;
+    modes: readonly EffortMode[];
+    /** The active budget. Shape follows the agent; treat as advisory. */
+    budget: Record<string, unknown>;
+  };
+  /** Absent on an agent older than Phase 20. */
+  research_providers?: ResearchProviderRow[];
+  capabilities: {
+    name: string;
+    version: string;
+    category: string;
+    description: string;
+    permission: 'read' | 'write' | 'outward';
+    requires_grant: string | null;
+    enabled: boolean;
+  }[];
+}
+
+/** `GET /assistant/plans` — one planned turn and how each step landed. */
+export interface AgentPlanRow {
+  id: string;
+  request: string;
+  intent: string | null;
+  mode: EffortMode;
+  status: 'running' | 'completed' | 'partial' | 'failed';
+  step_count: number;
+  created_at: string;
+  completed_at: string | null;
+  steps: {
+    step_key: string;
+    ordinal: number;
+    goal: string;
+    capability: string;
+    status: AgentPlanStepSummary['status'];
+    detail: string | null;
+  }[];
+}
+
 export interface SendResult {
   message: AssistantMessageRow;
   receipts: ReceiptRow[];
+  /** Added in Phase 19. Absent from older agents, so always optional. */
+  agent?: AgentTurnSummary;
 }
 
 export interface PendingActionRow {

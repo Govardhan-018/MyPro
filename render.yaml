@@ -74,6 +74,34 @@ services:
       # Must match the console exactly, including the /api/v1 prefix.
       - key: GOOGLE_REDIRECT_URI
         sync: false
-      # Where the OAuth callback returns the browser.
+      # Where the OAuth callback returns the browser. Also reported by the
+      # keep-alive ping as this node's address.
       - key: APP_URL
         sync: false
+
+      # Strava (Phase 20.5) — optional, read-only training history.
+      # Create an app at https://www.strava.com/settings/api. The redirect
+      # URI must be exactly <this service>/api/v1/strava/callback.
+      - key: STRAVA_CLIENT_ID
+        sync: false
+      - key: STRAVA_CLIENT_SECRET
+        sync: false
+      - key: STRAVA_REDIRECT_URI
+        sync: false
+
+# ---------------------------------------------------------------------
+# Staying awake
+#
+# Render's free web service sleeps after ~15 minutes with no inbound
+# request. Nothing here can prevent that — the fix lives in Supabase:
+# `supabase/migrations/0015_keepalive.sql` schedules pg_cron to POST to
+# /api/v1/internal/keepalive every 10 minutes through pg_net, with the
+# shared secret read from the Vault.
+#
+# Two things to know before relying on it:
+#   - Free instance hours are finite (~750/month at the time of writing).
+#     One service kept awake around the clock is ~730, so this works for
+#     exactly one service and leaves no room for a second.
+#   - The ping is not the scheduler. SCHEDULER_ENABLED stays "false" here;
+#     the clock runs on the laptop. Two schedulers would double-send.
+# ---------------------------------------------------------------------
