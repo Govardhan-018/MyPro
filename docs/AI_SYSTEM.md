@@ -26,12 +26,13 @@ not exist, so you do not reason as though they do.
 | Fact | Value |
 |---|---|
 | Deployable | `backend-local/` — NestJS 11, the "LOCAL" corner |
-| Runs on | the user's laptop, exposed through a Cloudflare quick tunnel |
-| Why there | it is the only machine holding `GROQ_API_KEY`; the model never runs anywhere else |
+| Runs on | its own Render service (`mypro-agent`), or a laptop behind a Cloudflare quick tunnel for dev |
+| Why separate | it began life laptop-only, because `GROQ_API_KEY` lived on one machine. Deploying it to Render gives that up deliberately — see `docs/DEPLOY_AGENT_TO_RENDER.md` |
 | Process entry | `src/main.ts` → `src/app.module.ts` |
 | Global route prefix | `api/v1` (`app.setGlobalPrefix`) |
 | Port | `PORT`, default **8787** |
-| Address discovery | `PresenceService` upserts `node_status` every **30s** with `PUBLIC_BASE_URL`; consumers treat >~90s as offline. The tunnel URL is random per start and **never hardcoded** |
+| Address discovery | `PresenceService` upserts `node_status` every **30s** with `PUBLIC_BASE_URL`; consumers treat >~90s as offline. Fixed on Render, random per start behind a tunnel — **never hardcoded** either way |
+| Staying awake | on Render free it sleeps after ~15 min idle, which would stop the clock; Supabase Cron pings `/internal/keepalive` every 10 min (`0016`) |
 | Reachability | web/app call `/assistant/*` here directly; everything else goes to `backend-render` |
 | Degradation | laptop asleep → UI greys out the assistant, render falls back to non-AI output |
 
@@ -877,7 +878,7 @@ optional field is preprocessed to treat empty as absent.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
-| `GROQ_API_KEY` | **yes** | — | the model; never leaves this machine |
+| `GROQ_API_KEY` | **yes** | — | the model. Laptop-only until the agent moved to Render; now wherever the agent runs |
 | `ASSISTANT_MODEL` | no | `openai/gpt-oss-120b` | env-configurable because Groq models vanish |
 | `ASSISTANT_ROUTER_MODEL` | no | — | cheaper model for capability routing; blank → the turn's model |
 | `ASSISTANT_PLANNER_MODEL` | no | — | cheaper model for planning; blank → the turn's model |
@@ -925,6 +926,13 @@ charter, free text, goes straight into the prompt), `check_in_time` (default
 ---
 
 ## 18. Security model
+
+**Where the secrets are.** The agent holds `GROQ_API_KEY`, the Supabase
+secret key and the Web Push private key. It does **not** hold
+`TOKEN_ENCRYPTION_KEY` or any OAuth token: Gmail and Strava credentials stay
+on `mypro-core`, and the agent asks it to send mail and to read training
+history. That separation survived the move off the laptop and is worth
+keeping — it is why a compromised agent still cannot read the mailbox.
 
 **Two database clients, deliberately separated** (`common/supabase.service.ts`):
 

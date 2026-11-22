@@ -1,5 +1,11 @@
-# Render blueprint — deploys backend-render as a single web service.
-# Render → New → Blueprint → select this repo.
+# Render blueprint — two web services.
+#
+#   mypro-core   backend-render   always-on CRUD, OAuth, notifications
+#   mypro-agent  backend-local    the assistant: model, skills, the clock
+#
+# Render → New → Blueprint → select this repo. See
+# docs/DEPLOY_AGENT_TO_RENDER.md for the full walkthrough, and read the
+# free-tier note at the bottom of this file BEFORE deploying both.
 #
 # Values are inlined here ONLY where they are public by design:
 #   SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and SUPABASE_JWKS_URL are shipped
@@ -89,19 +95,120 @@ services:
       - key: STRAVA_REDIRECT_URI
         sync: false
 
+  # -------------------------------------------------------------------
+  # The agent. Everything the assistant is: the model, the 37 skills, the
+  # agent core, research, and the clock (drain loop, Pulse, refreshes).
+  #
+  # Moving this off the laptop means GROQ_API_KEY and the Web Push private
+  # key now live on Render. That is a real change in posture — until now
+  # the model key never left one machine — made in exchange for an agent
+  # that answers when the laptop is shut. Both are set by hand below.
+  # -------------------------------------------------------------------
+  - type: web
+    name: mypro-agent
+    runtime: node
+    rootDir: backend-local
+    buildCommand: npm install && npm run build
+    startCommand: node dist/main.js
+    healthCheckPath: /api/v1/healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Public Supabase config — same project as the core.
+      - key: SUPABASE_URL
+        value: https://kssucdvrfzbdkyzovmjo.supabase.co
+      - key: SUPABASE_PUBLISHABLE_KEY
+        value: sb_publishable_fSwoeDUEFGyiaJLWPZXKKA_DvkvUAUc
+
+      # Secrets — set in the Render dashboard.
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # MUST be byte-identical to mypro-core's value.
+      - key: INTERNAL_SERVICE_TOKEN
+        sync: false
+      # The model key. Previously laptop-only; now it lives here.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ASSISTANT_MODEL
+        value: openai/gpt-oss-120b
+
+      # Your Vercel origin(s), comma separated. The web app calls this
+      # service directly for /assistant/* — without the origin here, every
+      # assistant request fails CORS.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # This service's own public origin, heartbeated into node_status so
+      # the web app can find it. No /api/v1 suffix — the client appends it.
+      # Render fills this from the service's real hostname, so it survives
+      # a rename and needs no redeploy.
+      - key: PUBLIC_BASE_URL
+        fromService:
+          type: web
+          name: mypro-agent
+          property: hostport
+          # Rendered as host:port; prefix it with https:// in the dashboard
+          # if Render does not. Verify the value after the first deploy:
+          #   select base_url from node_status where node = 'local';
+
+      # The core's API root, for the two things only it can do: sending
+      # mail (it holds the Gmail tokens) and reading Strava.
+      - key: RENDER_API_URL
+        fromService:
+          type: web
+          name: mypro-core
+          property: host
+          # Append /api/v1 in the dashboard: https://<host>/api/v1
+
+      # THE CLOCK LIVES HERE. mypro-core keeps SCHEDULER_ENABLED=false.
+      # Two schedulers race for the same rows and double-send everything.
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: SCHEDULER_STALE_MINUTES
+        value: "120"
+
+      # Web Push (Phase 6.2). This service sends, so it needs both halves.
+      # The PUBLIC key also goes to mypro-core and the frontend.
+      - key: WEB_PUSH_PUBLIC_KEY
+        sync: false
+      - key: WEB_PUSH_PRIVATE_KEY
+        sync: false
+      - key: WEB_PUSH_SUBJECT
+        sync: false
+
+      # Research providers (Phase 20) — all optional. With none of them set
+      # research still works on the free keyless providers. A Guardian key
+      # is the one worth adding: free, instant, ~12,000 calls/day.
+      - key: GUARDIAN_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+      - key: NEWS_RSS_FEEDS
+        sync: false
+
 # ---------------------------------------------------------------------
-# Staying awake
+# Staying awake, and the free-tier arithmetic
 #
-# Render's free web service sleeps after ~15 minutes with no inbound
-# request. Nothing here can prevent that — the fix lives in Supabase:
-# `supabase/migrations/0015_keepalive.sql` schedules pg_cron to POST to
-# /api/v1/internal/keepalive every 10 minutes through pg_net, with the
-# shared secret read from the Vault.
+# Render's free web services sleep after ~15 minutes with no inbound
+# request. For the core that only costs a cold start; for the agent it
+# means the drain loop and the Pulse stop, so the 8am brief never fires.
+# Supabase does the waking: pg_cron + pg_net POST /internal/keepalive
+# every 10 minutes (supabase/migrations/0015 and 0016).
 #
-# Two things to know before relying on it:
-#   - Free instance hours are finite (~750/month at the time of writing).
-#     One service kept awake around the clock is ~730, so this works for
-#     exactly one service and leaves no room for a second.
-#   - The ping is not the scheduler. SCHEDULER_ENABLED stays "false" here;
-#     the clock runs on the laptop. Two schedulers would double-send.
+# ⚠️ You almost certainly cannot keep BOTH awake. Free instance hours are
+# pooled per account (~750/month at the time of writing — check your own
+# dashboard, this number moves). One service resident around the clock is
+# ~730 of them. So:
+#
+#   - mypro-agent is the one that is kept awake. It owns the clock.
+#   - mypro-core is left to sleep and wakes on demand, which costs a
+#     ~30s cold start on the first screen after a quiet period.
+#
+# That is why 0016 schedules the agent ping and unschedules the core one.
+# If you ever move to a paid instance, re-enable the core ping and stop
+# worrying about this entirely.
 # ---------------------------------------------------------------------

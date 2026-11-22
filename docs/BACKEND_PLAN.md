@@ -25,10 +25,12 @@ A single intelligent personal space: **Calendar · Library/Reader · Knowledge �
 >   0007 deferred run status · 0008 pending-action result · 0009 commitments ·
 >   0010 narrative memory · 0011 companion layers · **0012 agent core**
 >
-> Staying awake: Supabase Cron + pg_net POST render's `/internal/keepalive`
-> every 10 minutes (`0015_keepalive.sql`), which is what keeps the free
-> instance resident. It is a ping, not a scheduler tick — `SCHEDULER_ENABLED`
-> stays false on render, and the clock remains on the laptop.
+> Staying awake: Supabase Cron + pg_net POST `/internal/keepalive` every 10
+> minutes (`0015`, repointed by `0016`). It is a ping, not a scheduler tick.
+> Once the agent runs on Render as `mypro-agent`, **it** is the service kept
+> awake, because it owns the clock; `mypro-core` sleeps and wakes on demand.
+> Free instance hours are pooled, so only one can stay resident. See
+> `docs/DEPLOY_AGENT_TO_RENDER.md`.
 >
 > Offline story: laptop closes → heartbeat stale in ~90s → UI greys the
 > assistant. Scheduled work simply waits for the laptop and is skipped if it

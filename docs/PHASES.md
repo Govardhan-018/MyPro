@@ -652,6 +652,13 @@ migration `0013` applied. Contract: `docs/RESEARCH_PROVIDERS.md`.
   it is a ping, not a tick. Outcomes land in `service_pings`, settled
   asynchronously, pruned at 14 days. Caveat: free instance hours are finite
   (~750/month), so this keeps exactly one service awake and no more.
+- ✅ **20.9 The agent can leave the laptop.** `backend-local` deploys as a
+  second Render service (`mypro-agent`) from the same blueprint: health
+  check, `.node-version`, a guarded `/internal/keepalive`, and `0016` to
+  point the cron at it instead of the core. The trade is explicit — the
+  model key and the Web Push private key leave the machine, and pooled free
+  hours mean exactly one service stays awake, so the core sleeps.
+  Walkthrough: `docs/DEPLOY_AGENT_TO_RENDER.md`.
 - ✅ **20.7 Live-tested.** Routing, planning and verification run against the
   real model; weather, search, page extraction, fixtures and RSS news against
   real providers. Four defects found and fixed this way — see the risks below.

@@ -6,7 +6,7 @@ Personal assistant platform. One repo, three deployables:
 |---|---|---|
 | `frontend/` | React 19 + Vite + Tailwind v4 web app | Vercel (dev server locally) |
 | `backend-render/` | Always-on core API: CRUD, scheduler, notifications (NestJS) | Render |
-| `backend-local/` | Personal agent: assistant chat + LLM, Supabase access, heartbeat (NestJS) | The user's laptop |
+| `backend-local/` | Personal agent: assistant chat + LLM, agent core, research, the clock (NestJS) | Render (`mypro-agent`), or the laptop for dev |
 | `supabase/` | Postgres migrations (4NF schema + RLS + health consent gate) | Supabase cloud |
 
 Routing rule: the web/app call **backend-render** for everything except
@@ -14,15 +14,20 @@ Routing rule: the web/app call **backend-render** for everything except
 offline (heartbeat stale ~90s), the UI greys out the assistant and render
 degrades AI-dependent scheduled jobs to plain messages.
 
-**The laptop's address is dynamic.** `start-agent.bat` opens a Cloudflare
-quick tunnel, captures the random `*.trycloudflare.com` URL and passes it as
-`PUBLIC_BASE_URL`; the agent heartbeats it into `node_status`, and both render
+**The agent's address is discovered, never hardcoded.** It heartbeats its own
+`PUBLIC_BASE_URL` into `node_status` every 30s, and both render
 (`AgentClient.resolveBase`) and the web app (`resolveAgentBase` in `api.ts`)
-read it from there. Never hardcode the tunnel URL anywhere.
+read it from there. On Render that is a fixed `https://mypro-agent.onrender.com`;
+in local dev `start-agent.bat` opens a Cloudflare quick tunnel and fills in the
+random `*.trycloudflare.com` URL. Either way, nothing hardcodes it.
+
+**Only one node may run the clock.** `SCHEDULER_ENABLED` is true on whichever
+agent is live and false everywhere else — two drain the same rows and
+double-send. See `docs/DEPLOY_AGENT_TO_RENDER.md`.
 
 Secrets live only in each deployable's `.env` (`.env.example` holds
-placeholders **only** and is committed — never put real values in it). The
-model key (Groq) exists only on the laptop. Supabase uses
+placeholders **only** and is committed — never put real values in it), or in
+the Render dashboard for a deployed service. Supabase uses
 the current key format: `sb_publishable_…` + `sb_secret_…`, with client JWTs
 verified against the project's JWKS endpoint.
 
