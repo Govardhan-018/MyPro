@@ -110,6 +110,30 @@ export interface WeatherReport {
   fetched_at: string;
 }
 
+/**
+ * The outcome of a fixtures lookup.
+ *
+ * Deliberately not just an array. "No fixtures" and "no such team" are
+ * completely different answers for the user, and collapsing them into an
+ * empty list is how the agent came to say "there are no upcoming matches
+ * listed for Ronaldo" — stated as fact, when in truth the name had never
+ * been resolved to anything. A miss has to carry what was tried.
+ */
+export interface SportsResult {
+  fixtures: FixtureDoc[];
+  /** What the name was taken to mean, or null when nothing matched. */
+  resolved: {
+    kind: 'team' | 'player';
+    /** The canonical name the provider knows it by. */
+    name: string;
+    /** The team whose fixtures these are — a player's current club. */
+    team: string;
+    sport?: string;
+  } | null;
+  /** Each lookup attempted, for an honest "I looked for X and Y". */
+  tried: string[];
+}
+
 export interface SportsQuery {
   /** Free text team name, e.g. 'India'. */
   team?: string;
@@ -146,7 +170,7 @@ export interface NewsProvider extends ResearchProvider {
 
 export interface SportsProvider extends ResearchProvider {
   readonly kind: 'sports';
-  fixtures(query: SportsQuery): Promise<FixtureDoc[]>;
+  fixtures(query: SportsQuery): Promise<SportsResult>;
 }
 
 export interface ExtractProvider extends ResearchProvider {

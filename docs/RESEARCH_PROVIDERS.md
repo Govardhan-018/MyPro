@@ -95,6 +95,17 @@ been caught by a typecheck or a unit test.
 - **Wikimedia throttles clients it cannot identify.** The provider sends
   `Api-User-Agent` and backs off to one request per two seconds; setting
   `RESEARCH_USER_AGENT` to something with a contact in it helps further.
+- **A lookup that misses must say what it looked for.** Fixtures now return
+  `{ fixtures, resolved, tried }` rather than a bare array, because "no
+  matches scheduled" and "I could not find that name" are different answers
+  and collapsing them produced a confident falsehood: *"there are no
+  upcoming matches listed for Ronaldo"*, when the name had never resolved to
+  anything. Resolution is a general ladder — team, then team-plus-sport,
+  then person — driven entirely by what the provider returns.
+- **Never catch a provider error into an empty result.** The same sentence
+  had a second cause: every lookup was wrapped in `.catch(() => [])`, so a
+  429 was indistinguishable from a name that does not exist. Let it throw;
+  the chain records the failure and the caller can be honest about it.
 - **The cache outlives the fix.** Keys are the question, not the code, so a
   corrected provider still serves its old answer until the TTL expires. Set
   `RESEARCH_CACHE_TTL_MINUTES=0` while debugging a provider.

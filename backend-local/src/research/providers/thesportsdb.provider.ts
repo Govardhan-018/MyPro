@@ -1,6 +1,11 @@
 import { env } from '../../config/env';
 import type { ResearchHttpService } from '../http.service';
-import type { FixtureDoc, SportsProvider, SportsQuery } from '../provider.types';
+import type {
+  FixtureDoc,
+  SportsProvider,
+  SportsQuery,
+  SportsResult,
+} from '../provider.types';
 
 /**
  * TheSportsDB — fixtures and results across sports, cricket included.
@@ -15,6 +20,12 @@ import type { FixtureDoc, SportsProvider, SportsQuery } from '../provider.types'
  * `time_unknown` rather than being silently presented as midnight — a
  * calendar event at 00:00 that claims to be a match is worse than no event.
  */
+/**
+ * The free key is throttled, and a 429 here is worse than slow: it used to
+ * arrive as an empty list and be read as "no such team".
+ */
+const HOST_GAP_MS = 1_500;
+
 export class TheSportsDbProvider implements SportsProvider {
   readonly id = 'thesportsdb';
   readonly kind = 'sports' as const;
@@ -39,21 +50,22 @@ export class TheSportsDbProvider implements SportsProvider {
     return `https://www.thesportsdb.com/api/v1/json/${encodeURIComponent(key)}`;
   }
 
-  async fixtures(query: SportsQuery): Promise<FixtureDoc[]> {
-    if (!query.team) return [];
+  async fixtures(query: SportsQuery): Promise<SportsResult> {
+    const tried: string[] = [];
+    if (!query.team) return { fixtures: [], resolved: null, tried };
 
-    const team = await this.findTeam(query.team, query.sport);
-    if (!team?.idTeam) return [];
+    const resolved = await this.resolve(query.team, query.sport, tried);
+    if (!resolved) return { fixtures: [], resolved: null, tried };
 
     const [next, last] = await Promise.all([
-      this.events(`${this.base()}/eventsnext.php`, team.idTeam),
-      this.events(`${this.base()}/eventslast.php`, team.idTeam),
+      this.events(`${this.base()}/eventsnext.php`, resolved.teamId),
+      this.events(`${this.base()}/eventslast.php`, resolved.teamId),
     ]);
 
     const from = query.from ? Date.parse(query.from) : undefined;
     const to = query.to ? Date.parse(query.to) : undefined;
 
-    return [...next, ...last]
+    const fixtures = [...next, ...last]
       .filter((fixture) => {
         if (!fixture.starts_at) return !from && !to;
         const at = Date.parse(fixture.starts_at);
@@ -63,81 +75,105 @@ export class TheSportsDbProvider implements SportsProvider {
       })
       .sort((a, b) => (a.starts_at ?? '').localeCompare(b.starts_at ?? ''))
       .slice(0, query.limit);
+
+    return {
+      fixtures,
+      resolved: {
+        kind: resolved.kind,
+        name: resolved.name,
+        team: resolved.team,
+        sport: resolved.sport,
+      },
+      tried,
+    };
   }
 
   /**
-   * Resolve a team name to an id.
+   * Turn a name into a team whose fixtures can be read.
    *
-   * The trap: `searchteams.php?t=India` returns the **football** team and
-   * nothing else, because TheSportsDB names national sides by sport — the
-   * cricket team is "India Cricket", the rugby side "India Rugby". Asking
-   * for India's cricket fixtures therefore returned nothing at all until
-   * this retried with the sport appended, which is the naming convention
-   * rather than a guess.
+   * A general ladder, not a list of special cases — every step is driven by
+   * what the provider returns, so it works for any name the catalogue knows:
+   *
+   *   1. the name as a team
+   *   2. the name plus the sport, because national sides are catalogued that
+   *      way ("<country> <sport>"), so a bare country name resolves to
+   *      whichever sport happens to be listed first
+   *   3. the name as a *person*, taking the club id straight off the player
+   *      record — the record's own team NAME often does not match any team
+   *      search, so following the id is both more reliable and one call
+   *      cheaper
+   *
+   * Every attempt is recorded in `tried`, so a miss can say what it looked
+   * for instead of asserting that no matches exist.
    */
-  private async findTeam(
+  private async resolve(
     name: string,
-    sport?: string,
-  ): Promise<{ idTeam?: string; strTeam?: string; strSport?: string } | undefined> {
-    const search = async (term: string) => {
-      const res = await this.http
-        .fetchJson<{ teams?: { idTeam?: string; strTeam?: string; strSport?: string }[] }>(
-          `${this.base()}/searchteams.php`,
-          { query: { t: term }, accept: 'application/json' },
-        )
-        .catch(() => ({ teams: [] }));
-      return res.teams ?? [];
+    sport: string | undefined,
+    tried: string[],
+  ): Promise<
+    { kind: 'team' | 'player'; name: string; team: string; teamId: string; sport?: string } | undefined
+  > {
+    const wanted = sport?.toLowerCase();
+    const pick = <T extends { strSport?: string }>(list: T[]): T | undefined =>
+      (wanted ? list.find((x) => x.strSport?.toLowerCase() === wanted) : undefined) ?? list[0];
+
+    const teams = async (term: string) => {
+      tried.push(`team "${term}"`);
+      // Deliberately NOT caught. A throttled provider that returns an empty
+      // list is indistinguishable from a name that does not exist, and the
+      // agent then tells the user there is no such team. Let it throw: the
+      // chain records the failure and the skill reports a lookup problem.
+      const res = await this.http.fetchJson<{ teams?: SportsDbTeam[] }>(
+        `${this.base()}/searchteams.php`,
+        { query: { t: term }, accept: 'application/json', minHostGapMs: HOST_GAP_MS },
+      );
+      const all = res.teams ?? [];
+      // With a sport given, only a team in that sport counts — otherwise a
+      // shared name silently resolves to the wrong sport entirely.
+      return wanted ? all.filter((t) => t.strSport?.toLowerCase() === wanted) : all;
     };
 
-    const wanted = sport?.toLowerCase();
-    const inSport = (list: { strSport?: string }[]) =>
-      wanted ? list.find((t) => t.strSport?.toLowerCase() === wanted) : list[0];
-
-    const direct = inSport(await search(name));
-    if (direct) return direct;
-
-    // National sides are named by sport: "India" is the football team, the
-    // cricket side is "India Cricket".
-    if (sport) {
-      const bySport = inSport(await search(`${name} ${sport}`));
-      if (bySport) return bySport;
+    const direct = pick(await teams(name));
+    if (direct?.idTeam) {
+      return {
+        kind: 'team',
+        name: direct.strTeam ?? name,
+        team: direct.strTeam ?? name,
+        teamId: direct.idTeam,
+        sport: direct.strSport,
+      };
     }
 
-    // Still nothing? It may be a person. "When is Ronaldo's next match" is
-    // a perfectly ordinary question that a team search can never answer,
-    // and answering "no upcoming matches" to it is worse than useless —
-    // it reads as fact rather than as a failed lookup.
-    return this.teamOfPlayer(name, sport);
-  }
+    if (sport) {
+      const qualified = pick(await teams(`${name} ${sport}`));
+      if (qualified?.idTeam) {
+        return {
+          kind: 'team',
+          name: qualified.strTeam ?? name,
+          team: qualified.strTeam ?? name,
+          teamId: qualified.idTeam,
+          sport: qualified.strSport,
+        };
+      }
+    }
 
-  /** The club a player currently plays for, via TheSportsDB's player search. */
-  private async teamOfPlayer(
-    name: string,
-    sport?: string,
-  ): Promise<{ idTeam?: string; strTeam?: string; strSport?: string } | undefined> {
-    const res = await this.http
-      .fetchJson<{
-        player?: { strPlayer?: string; strTeam?: string; strSport?: string; idTeam?: string }[];
-      }>(`${this.base()}/searchplayers.php`, { query: { p: name }, accept: 'application/json' })
-      .catch(() => ({ player: null }));
+    tried.push(`player "${name}"`);
+    const res = await this.http.fetchJson<{ player?: SportsDbPlayer[] }>(
+      `${this.base()}/searchplayers.php`,
+      { query: { p: name }, accept: 'application/json', minHostGapMs: HOST_GAP_MS },
+    );
 
     const players = res.player ?? [];
-    const wanted = sport?.toLowerCase();
-    const player =
-      (wanted ? players.find((p) => p.strSport?.toLowerCase() === wanted) : players[0]) ??
-      players[0];
-    if (!player?.strTeam) return undefined;
+    const player = pick(wanted ? players.filter((p) => p.strSport?.toLowerCase() === wanted) : players);
+    if (!player?.idTeam) return undefined;
 
-    // The player record carries the team name; resolve it to an id the
-    // events endpoints will accept.
-    const teams = await this.http
-      .fetchJson<{ teams?: { idTeam?: string; strTeam?: string; strSport?: string }[] }>(
-        `${this.base()}/searchteams.php`,
-        { query: { t: player.strTeam }, accept: 'application/json' },
-      )
-      .catch(() => ({ teams: [] }));
-
-    return (teams.teams ?? [])[0];
+    return {
+      kind: 'player',
+      name: player.strPlayer ?? name,
+      team: player.strTeam ?? 'their club',
+      teamId: player.idTeam,
+      sport: player.strSport,
+    };
   }
 
   private async events(url: string, teamId: string): Promise<FixtureDoc[]> {
@@ -165,8 +201,7 @@ export class TheSportsDbProvider implements SportsProvider {
           intAwayScore?: string | null;
         }[];
         results?: unknown;
-      }>(url, { query: { id: teamId }, accept: 'application/json' })
-      .catch((): EventsResponse => ({ events: [] }));
+      }>(url, { query: { id: teamId }, accept: 'application/json', minHostGapMs: HOST_GAP_MS });
 
     const rows = (data.events ??
       (Array.isArray(data.results) ? data.results : [])) as SportsDbEvent[];
@@ -198,6 +233,22 @@ export class TheSportsDbProvider implements SportsProvider {
         };
       });
   }
+}
+
+/** The subset of TheSportsDB's team and player shapes we read. */
+interface SportsDbTeam {
+  idTeam?: string;
+  strTeam?: string;
+  strSport?: string;
+  strLeague?: string;
+}
+
+interface SportsDbPlayer {
+  idPlayer?: string;
+  strPlayer?: string;
+  strSport?: string;
+  strTeam?: string;
+  idTeam?: string;
 }
 
 /** The subset of TheSportsDB's event shape we read. */

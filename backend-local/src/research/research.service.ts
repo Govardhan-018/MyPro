@@ -5,9 +5,9 @@ import { ResearchCacheService } from './cache.service';
 import { FetchRefused } from './http.service';
 import type {
   ExtractResult,
-  FixtureDoc,
   ProviderKind,
   SourceDoc,
+  SportsResult,
   WeatherReport,
 } from './provider.types';
 
@@ -32,8 +32,7 @@ export interface SearchOutcome {
   cached: boolean;
 }
 
-export interface FixtureOutcome {
-  fixtures: FixtureDoc[];
+export interface FixtureOutcome extends SportsResult {
   provider: string;
   cached: boolean;
 }
@@ -151,8 +150,8 @@ export class ResearchService {
     });
 
     return this.run('sports', key, params.userId, this.registry.sportsChain(), async (p) => {
-      const fixtures = await p.fixtures({ ...params, limit });
-      return { fixtures, provider: p.id, cached: false };
+      const result = await p.fixtures({ ...params, limit });
+      return { ...result, provider: p.id, cached: false };
     });
   }
 

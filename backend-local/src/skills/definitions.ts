@@ -976,10 +976,35 @@ const sportsFixtures = defineSkill({
       userId: ctx.user.id,
     });
 
+    // Three different answers, and the model must not blur them: the name
+    // was not recognised, the name was recognised but has nothing scheduled
+    // in the window, or here are the fixtures. Saying "no upcoming matches"
+    // when nothing was ever resolved states a falsehood as fact.
+    if (!outcome.resolved) {
+      return {
+        found: false,
+        searched_for: args.team,
+        lookups_tried: outcome.tried,
+        provider: outcome.provider,
+        note:
+          `Nothing matched "${args.team}". Do NOT say they have no matches — say you could ` +
+          `not find them. Then try once more: a person's full name, a club rather than a ` +
+          `person, or the sport if you did not give one.`,
+      };
+    }
+
     return {
+      found: true,
+      resolved: outcome.resolved,
+      resolution_note:
+        outcome.resolved.kind === 'player'
+          ? `"${args.team}" is a player; these are ${outcome.resolved.team}'s fixtures. Say so.`
+          : undefined,
       provider: outcome.provider,
       from_cache: outcome.cached,
       timezone_note: 'starts_at is UTC. Convert to the user timezone before telling them a time.',
+      fixture_count: outcome.fixtures.length,
+      window: { from: args.from ?? ctx.now.toISOString(), to: args.to },
       fixtures: outcome.fixtures,
     };
   },
