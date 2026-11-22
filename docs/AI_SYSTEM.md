@@ -115,7 +115,19 @@ out of the Nest build and `tsc --noEmit`. Vitest, config is `.mts`.
 
 The single point of vendor contact. Nothing else imports `groq-sdk`.
 
-**Provider:** Groq via `groq-sdk@^1.6.0`. Groq speaks the OpenAI
+**Providers: two.** Which one serves a call is a prefix on the model name —
+`gemini:gemini-flash-lite-latest`, or no prefix for Groq. They fail in
+opposite directions, which is the entire reason both exist: Groq answers in
+~0.7s but allows 8,000 tokens a minute free, while Gemini Flash Lite allows
+250,000 a minute and 500 requests a day but takes 3–9s and is often
+congested. `LLM_FALLBACK_MODEL` is tried once when the primary fails.
+
+⚠️ **Gemini 3 returns a `thoughtSignature` with every `functionCall` and
+rejects the next request if it does not come back.** So a model turn is
+replayed from `raw` verbatim, never reconstructed. The `raw` field existed
+for this on the Groq side already; on Gemini it is not optional.
+
+**Groq:** via `groq-sdk@^1.6.0`. Groq speaks the OpenAI
 chat-completions dialect, so tools are plain JSON Schema and tool results are
 matched back by `tool_call_id`.
 
@@ -992,8 +1004,11 @@ lying, only from acting.
 
 ## 19. Invariants for anyone changing this
 
-1. **`llm.service.ts` is the only vendor-aware file.** Keep provider details
-   out of everything else.
+1. **The `llm/` folder is the only vendor-aware code.** `llm.service.ts`
+   owns retries, the fallback and the user-facing errors; one file per
+   vendor holds its dialect (`gemini.provider.ts`, and the Groq path still
+   inline). Nothing outside that folder names a vendor — a model is a
+   string, optionally prefixed `gemini:` or `groq:`.
 2. **Never hardcode a model name, a URL or a secret.** Env only. The tunnel
    URL is read from `node_status` per run, never cached across runs.
 3. **`schedules/recurrence.ts` exists twice — change one, change both.** The

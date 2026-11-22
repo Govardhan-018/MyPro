@@ -134,10 +134,27 @@ services:
       # MUST be byte-identical to mypro-core's value.
       - key: INTERNAL_SERVICE_TOKEN
         sync: false
-      # The model key. Previously laptop-only; now it lives here.
+      # The model keys. Previously laptop-only; now they live here.
+      # Two vendors on purpose: Groq is fast but 8,000 tokens/minute free,
+      # Gemini Flash Lite is 250,000/minute and 500 requests/day but slower
+      # and often congested. Each covers the other's failure mode.
       - key: GROQ_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # Chat carries the tool results and the memory, so it wants the big
+      # token budget. A model may be prefixed with its vendor; no prefix
+      # means Groq. Never a Gemini *Flash* model here — 20 requests/day.
       - key: ASSISTANT_MODEL
+        value: gemini:gemini-flash-lite-latest
+      # Routing and planning are small and fast; Groq suits them, and it
+      # keeps the Gemini daily budget for the conversation itself.
+      - key: ASSISTANT_ROUTER_MODEL
+        value: openai/gpt-oss-120b
+      - key: ASSISTANT_PLANNER_MODEL
+        value: openai/gpt-oss-120b
+      # One shot at the other vendor when the first fails after its retries.
+      - key: LLM_FALLBACK_MODEL
         value: openai/gpt-oss-120b
 
       # Your Vercel origin(s), comma separated. The web app calls this

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import Groq from 'groq-sdk';
 import { env } from '../config/env';
+import { GeminiProvider } from './gemini.provider';
 
 /* ------------------------------------------------------------------ */
 /* Provider-neutral conversation shape                                  */
@@ -36,6 +37,25 @@ export interface LlmResult {
   toolCalls: LlmToolCall[];
   /** Pass back as `raw` on the model turn so history replays exactly. */
   rawParts: unknown;
+}
+
+/**
+ * Which vendor serves a model, written as a prefix on the model name:
+ *
+ *     gemini:gemini-flash-lite-latest
+ *     groq:openai/gpt-oss-120b
+ *
+ * No prefix means Groq, so every existing value keeps working untouched.
+ * The prefix lives on the model string rather than in its own env var so
+ * that each role — chat, routing, planning, the fallback — can sit on a
+ * different vendor without four more settings to keep in step.
+ */
+export type Vendor = 'groq' | 'gemini';
+
+export function parseModel(spec: string): { vendor: Vendor; model: string } {
+  const match = /^(groq|gemini):(.+)$/i.exec(spec.trim());
+  if (!match) return { vendor: 'groq', model: spec.trim() };
+  return { vendor: match[1].toLowerCase() as Vendor, model: match[2].trim() };
 }
 
 /** Hard ceiling on a single model call, so a busy model cannot wedge a request. */
@@ -75,6 +95,7 @@ type ChatMessage = Groq.Chat.Completions.ChatCompletionMessageParam;
 export class LlmService {
   private readonly logger = new Logger(LlmService.name);
   private client: Groq | null = null;
+  private readonly gemini = new GeminiProvider();
 
   /** Built on first use so the process can start without the key present. */
   private groq(): Groq {
@@ -112,8 +133,99 @@ export class LlmService {
     messages: LlmMessage[];
     tools?: LlmTool[];
   }): Promise<LlmResult> {
-    const model = params.model || env().ASSISTANT_MODEL;
+    const primary = parseModel(params.model || env().ASSISTANT_MODEL);
 
+    try {
+      return await this.withRetries(primary, params);
+    } catch (err) {
+      // One shot at the other vendor. Gemini's free tier answers 503 "high
+      // demand" often enough that a single-provider agent is down with it,
+      // and Groq's 8k TPM fails in the opposite direction — so whichever is
+      // primary, the other is a genuinely different failure mode.
+      const fallback = env().LLM_FALLBACK_MODEL;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!fallback || isTooLarge(message)) throw err;
+
+      const spec = parseModel(fallback);
+      if (spec.vendor === primary.vendor && spec.model === primary.model) throw err;
+
+      this.logger.warn(`falling back to ${spec.vendor}:${spec.model}`);
+      try {
+        return await this.withRetries(spec, params);
+      } catch {
+        // Report the primary's failure: it is the one the user configured.
+        throw err;
+      }
+    }
+  }
+
+  /** The retry loop, shared by every vendor. */
+  private async withRetries(
+    target: { vendor: Vendor; model: string },
+    params: {
+      temperature?: number;
+      maxTokens?: number;
+      reasoningEffort?: 'low' | 'medium' | 'high';
+      system: string;
+      messages: LlmMessage[];
+      tools?: LlmTool[];
+    },
+  ): Promise<LlmResult> {
+    let lastError = '';
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return target.vendor === 'gemini'
+          ? await this.gemini.generate({
+              model: target.model,
+              system: params.system,
+              messages: params.messages,
+              tools: params.tools,
+              temperature: params.temperature,
+              maxTokens: params.maxTokens,
+            })
+          : await this.groqGenerate(target.model, params);
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        if (!isTransient(lastError) || attempt === MAX_ATTEMPTS) break;
+        this.logger.warn(
+          `${target.vendor} busy (attempt ${attempt}/${MAX_ATTEMPTS}), retrying`,
+        );
+        await sleep(RETRY_BASE_MS * attempt);
+      }
+    }
+
+    this.logger.error(`${target.vendor} call failed: ${lastError}`);
+
+    if (isTooLarge(lastError)) {
+      // Worth its own message: this one is a configuration problem, not
+      // weather. Either the effort budgets are too generous for the tier,
+      // or something put an unexpectedly large result into the context.
+      throw new BadRequestException(
+        'That turn was too big for the model to accept. Try Light mode, or a ' +
+          'shorter question — and if it keeps happening, the effort budgets in ' +
+          'agent/effort.ts are above what this tier allows.',
+      );
+    }
+
+    throw new BadRequestException(
+      isTransient(lastError)
+        ? 'The model is busy right now — try again in a moment'
+        : 'Assistant is unavailable right now',
+    );
+  }
+
+  /** The Groq path, unchanged apart from being behind the dispatcher. */
+  private async groqGenerate(
+    model: string,
+    params: {
+      temperature?: number;
+      maxTokens?: number;
+      reasoningEffort?: 'low' | 'medium' | 'high';
+      system: string;
+      messages: LlmMessage[];
+      tools?: LlmTool[];
+    },
+  ): Promise<LlmResult> {
     const messages: ChatMessage[] = [{ role: 'system', content: params.system }];
     for (const m of params.messages) {
       if (m.role === 'user') {
@@ -159,42 +271,13 @@ export class LlmService {
       },
     }));
 
-    let lastError = '';
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        return await this.attempt(
-          model,
-          messages,
-          tools,
-          params.temperature,
-          params.maxTokens,
-          params.reasoningEffort,
-        );
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        if (!isTransient(lastError) || attempt === MAX_ATTEMPTS) break;
-        this.logger.warn(`model busy (attempt ${attempt}/${MAX_ATTEMPTS}), retrying`);
-        await sleep(RETRY_BASE_MS * attempt);
-      }
-    }
-
-    this.logger.error(`model call failed: ${lastError}`);
-
-    if (isTooLarge(lastError)) {
-      // Worth its own message: this one is a configuration problem, not
-      // weather. Either the effort budgets are too generous for the tier,
-      // or something put an unexpectedly large result into the context.
-      throw new BadRequestException(
-        'That turn was too big for the model to accept. Try Light mode, or a ' +
-          'shorter question — and if it keeps happening, the effort budgets in ' +
-          'agent/effort.ts are above what this tier allows.',
-      );
-    }
-
-    throw new BadRequestException(
-      isTransient(lastError)
-        ? 'The model is busy right now — try again in a moment'
-        : 'Assistant is unavailable right now',
+    return this.attempt(
+      model,
+      messages,
+      tools,
+      params.temperature,
+      params.maxTokens,
+      params.reasoningEffort,
     );
   }
 

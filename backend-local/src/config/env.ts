@@ -55,8 +55,31 @@ const schema = z.object({
    */
   PUBLIC_BASE_URL: optionalUrl(),
 
-  /** Groq (console.groq.com). Never leaves this machine. */
+  /** Groq (console.groq.com). */
   GROQ_API_KEY: z.string().min(10),
+  /**
+   * Google AI Studio (aistudio.google.com/apikey). Optional second vendor.
+   *
+   * Worth having because the two fail in opposite ways: Groq's free tier is
+   * 8,000 tokens per minute, which one multi-step turn can exhaust, while
+   * Gemini Flash Lite is 250,000 TPM and 500 requests a day but answers 503
+   * "high demand" under load. Either can cover the other.
+   */
+  GEMINI_API_KEY: optionalText(),
+  /**
+   * Tried once when the configured model fails after its retries, in the
+   * same `vendor:model` form. Point it at the OTHER vendor or it buys
+   * nothing. Blank disables the fallback.
+   */
+  LLM_FALLBACK_MODEL: optionalText(),
+  /** Wall-clock ceiling on a single model call. */
+  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * The chat model, optionally prefixed with its vendor:
+   *   openai/gpt-oss-120b              (Groq, the default)
+   *   gemini:gemini-flash-lite-latest  (Gemini)
+   * An unprefixed value means Groq, so existing deployments are unaffected.
+   */
   ASSISTANT_MODEL: z.string().default('openai/gpt-oss-120b'),
   /**
    * Optional cheaper models for the two classification-shaped calls in the
