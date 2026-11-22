@@ -37,6 +37,12 @@ this repo → apply. It reads `render.yaml` and creates `mypro-agent` with
 If `mypro-core` already exists from an earlier blueprint, Render will adopt it
 rather than duplicating it.
 
+> **If the build fails with `sh: 1: nest: not found`** — `NODE_ENV=production`
+> is set on the service, and npm reads that as `omit=dev`, so `npm install`
+> skips `@nestjs/cli` and there is no `nest` binary to build with. The
+> blueprint's build command says `npm install --include=dev` for exactly this
+> reason; if you typed the command into the dashboard by hand, add that flag.
+
 ## 2. Set the secrets
 
 In the Render dashboard, on **mypro-agent**:

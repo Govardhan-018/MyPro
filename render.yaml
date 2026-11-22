@@ -21,7 +21,10 @@ services:
     name: mypro-core
     runtime: node
     rootDir: backend-render
-    buildCommand: npm install && npm run build
+    # --include=dev is load-bearing. NODE_ENV=production is set below and
+    # npm reads it as omit=dev, so a plain `npm install` skips
+    # @nestjs/cli and the build dies with "sh: 1: nest: not found".
+    buildCommand: npm install --include=dev && npm run build
     startCommand: node dist/main.js
     healthCheckPath: /api/v1/healthz
     autoDeploy: true
@@ -108,7 +111,10 @@ services:
     name: mypro-agent
     runtime: node
     rootDir: backend-local
-    buildCommand: npm install && npm run build
+    # --include=dev is load-bearing. NODE_ENV=production is set below and
+    # npm reads it as omit=dev, so a plain `npm install` skips
+    # @nestjs/cli and the build dies with "sh: 1: nest: not found".
+    buildCommand: npm install --include=dev && npm run build
     startCommand: node dist/main.js
     healthCheckPath: /api/v1/healthz
     autoDeploy: true
