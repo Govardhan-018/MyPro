@@ -50,12 +50,39 @@ export interface LlmResult {
  * that each role — chat, routing, planning, the fallback — can sit on a
  * different vendor without four more settings to keep in step.
  */
-export type Vendor = 'groq' | 'gemini';
+export type Vendor = 'groq' | 'gemini' | 'cohere' | 'sambanova';
+
+/**
+ * Three of the four speak the OpenAI chat-completions dialect, so they share
+ * one code path and differ only in where to send it and which key to use.
+ * Gemini has its own dialect and its own file.
+ */
+const OPENAI_COMPATIBLE: Record<string, { baseURL: string; key: () => string | undefined }> = {
+  // Groq keeps its SDK — it is proven here and handles the vendor's quirks.
+  // The others are called with plain fetch, because the SDK appends Groq's
+  // own `/openai/v1` to whatever base URL it is given, which turns another
+  // vendor's endpoint into a 404. One wire format, two transports.
+  cohere: { baseURL: 'https://api.cohere.ai/compatibility/v1', key: () => env().COHERE_API_KEY },
+  sambanova: { baseURL: 'https://api.sambanova.ai/v1', key: () => env().SAMBANOVA_API_KEY },
+};
 
 export function parseModel(spec: string): { vendor: Vendor; model: string } {
-  const match = /^(groq|gemini):(.+)$/i.exec(spec.trim());
+  const match = /^(groq|gemini|cohere|sambanova):(.+)$/i.exec(spec.trim());
   if (!match) return { vendor: 'groq', model: spec.trim() };
   return { vendor: match[1].toLowerCase() as Vendor, model: match[2].trim() };
+}
+
+/**
+ * The fallback chain: comma-separated `vendor:model` entries, tried in order
+ * after the configured model has exhausted its retries. Four vendors with
+ * four different failure modes is only useful if more than one can be named.
+ */
+export function parseFallbacks(spec: string | undefined): { vendor: Vendor; model: string }[] {
+  return (spec ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map(parseModel);
 }
 
 /** Hard ceiling on a single model call, so a busy model cannot wedge a request. */
@@ -138,24 +165,22 @@ export class LlmService {
     try {
       return await this.withRetries(primary, params);
     } catch (err) {
-      // One shot at the other vendor. Gemini's free tier answers 503 "high
-      // demand" often enough that a single-provider agent is down with it,
-      // and Groq's 8k TPM fails in the opposite direction — so whichever is
-      // primary, the other is a genuinely different failure mode.
-      const fallback = env().LLM_FALLBACK_MODEL;
+      // Each vendor fails differently — Groq runs out of tokens per minute,
+      // Gemini answers 503 under load, Cohere has a monthly cap, SambaNova
+      // asks for a card. A chain is only worth having because of that.
       const message = err instanceof Error ? err.message : String(err);
-      if (!fallback || isTooLarge(message)) throw err;
+      if (isTooLarge(message)) throw err; // no other model will take it either
 
-      const spec = parseModel(fallback);
-      if (spec.vendor === primary.vendor && spec.model === primary.model) throw err;
-
-      this.logger.warn(`falling back to ${spec.vendor}:${spec.model}`);
-      try {
-        return await this.withRetries(spec, params);
-      } catch {
-        // Report the primary's failure: it is the one the user configured.
-        throw err;
+      for (const spec of parseFallbacks(env().LLM_FALLBACK_MODEL)) {
+        if (spec.vendor === primary.vendor && spec.model === primary.model) continue;
+        this.logger.warn(`falling back to ${spec.vendor}:${spec.model}`);
+        try {
+          return await this.withRetries(spec, params);
+        } catch {
+          // Try the next one; the primary's error is what gets reported.
+        }
       }
+      throw err;
     }
   }
 
@@ -183,7 +208,7 @@ export class LlmService {
               temperature: params.temperature,
               maxTokens: params.maxTokens,
             })
-          : await this.groqGenerate(target.model, params);
+          : await this.compatibleGenerate(target.vendor, target.model, params);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         if (!isTransient(lastError) || attempt === MAX_ATTEMPTS) break;
@@ -214,8 +239,13 @@ export class LlmService {
     );
   }
 
-  /** The Groq path, unchanged apart from being behind the dispatcher. */
-  private async groqGenerate(
+  /**
+   * The OpenAI-compatible path: Groq, Cohere and SambaNova. The wire format
+   * is identical, so the only per-vendor differences are the base URL, the
+   * key, and which optional parameters are safe to send.
+   */
+  private async compatibleGenerate(
+    vendor: Vendor,
     model: string,
     params: {
       temperature?: number;
@@ -272,16 +302,20 @@ export class LlmService {
     }));
 
     return this.attempt(
+      vendor,
       model,
       messages,
       tools,
       params.temperature,
       params.maxTokens,
-      params.reasoningEffort,
+      // Only Groq takes this. Cohere and SambaNova reject unknown fields,
+      // and an unrecognised parameter is a 400, not a silent no-op.
+      vendor === 'groq' ? params.reasoningEffort : undefined,
     );
   }
 
   private async attempt(
+    vendor: Vendor,
     model: string,
     messages: ChatMessage[],
     tools: { type: 'function'; function: Record<string, unknown> }[],
@@ -289,19 +323,30 @@ export class LlmService {
     maxTokens?: number,
     reasoningEffort?: 'low' | 'medium' | 'high',
   ): Promise<LlmResult> {
-    const res = await this.groq().chat.completions.create({
+    const body = {
       model,
       messages,
       temperature: temperature ?? 1,
       max_tokens: maxTokens && maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS,
-      // Groq accepts this on its reasoning models and ignores it elsewhere.
+      // Groq accepts this on its reasoning models. The others reject
+      // unknown fields outright, so it is filtered out before here.
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      ...(tools.length
-        ? { tools: tools as unknown as Groq.Chat.Completions.ChatCompletionTool[], tool_choice: 'auto' as const }
-        : {}),
-    });
+      ...(tools.length ? { tools, tool_choice: 'auto' as const } : {}),
+    };
 
-    const message = res.choices?.[0]?.message;
+    const res =
+      vendor === 'groq'
+        ? await this.groq().chat.completions.create(
+            body as unknown as Parameters<Groq['chat']['completions']['create']>[0],
+          )
+        : await this.compatibleFetch(vendor, body);
+
+    const message = (res as { choices?: { message?: ChatMessage }[] }).choices?.[0]?.message as
+      | {
+          content?: string | null;
+          tool_calls?: { id: string; function?: { name?: string; arguments?: string } }[];
+        }
+      | undefined;
     const text = (message?.content ?? '').trim();
 
     const toolCalls: LlmToolCall[] = (message?.tool_calls ?? []).flatMap((call) => {
@@ -318,5 +363,37 @@ export class LlmService {
     });
 
     return { text, toolCalls, rawParts: message };
+  }
+
+  /**
+   * An OpenAI-compatible vendor that is not Groq. Plain fetch, because the
+   * SDK's base URL handling is Groq-shaped (see OPENAI_COMPATIBLE above).
+   *
+   * The HTTP status goes into the thrown message so the shared transient
+   * and too-large tests read it the same way they read the SDK's errors.
+   */
+  private async compatibleFetch(vendor: Vendor, body: unknown): Promise<unknown> {
+    const config = OPENAI_COMPATIBLE[vendor];
+    const apiKey = config?.key();
+    if (!config || !apiKey) {
+      throw new BadRequestException(`No API key configured for ${vendor}`);
+    }
+
+    const res = await fetch(`${config.baseURL}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(env().LLM_REQUEST_TIMEOUT_MS),
+    });
+
+    const parsed = (await res.json().catch(() => ({}))) as {
+      error?: { message?: string } | string;
+    };
+    if (!res.ok) {
+      const detail =
+        typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message ?? 'request failed');
+      throw new Error(`${res.status} ${detail}`);
+    }
+    return parsed;
   }
 }

@@ -115,12 +115,21 @@ out of the Nest build and `tsc --noEmit`. Vitest, config is `.mts`.
 
 The single point of vendor contact. Nothing else imports `groq-sdk`.
 
-**Providers: two.** Which one serves a call is a prefix on the model name —
+**Providers: four.** Which one serves a call is a prefix on the model name —
 `gemini:gemini-flash-lite-latest`, or no prefix for Groq. They fail in
 opposite directions, which is the entire reason both exist: Groq answers in
 ~0.7s but allows 8,000 tokens a minute free, while Gemini Flash Lite allows
 250,000 a minute and 500 requests a day but takes 3–9s and is often
-congested. `LLM_FALLBACK_MODEL` is tried once when the primary fails.
+congested. Cohere and SambaNova are also supported — both speak the OpenAI dialect, so
+they share one code path with Groq and differ only in base URL and key.
+Measured: Cohere ~0.5–1.7s with working tool calls (trial keys are
+monthly-capped); SambaNova answers 402 on the free plan and needs billing.
+`LLM_FALLBACK_MODEL` is a comma-separated chain, tried in order when the
+primary fails — worth having precisely because the four fail differently.
+
+One transport detail: the Groq SDK appends its own `/openai/v1` to whatever
+base URL it is given, so the other compatible vendors are called with plain
+`fetch`. Same wire format, two transports.
 
 ⚠️ **Gemini 3 returns a `thoughtSignature` with every `functionCall` and
 rejects the next request if it does not come back.** So a model turn is

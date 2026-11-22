@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseModel } from '../src/llm/llm.service';
+import { parseFallbacks, parseModel } from '../src/llm/llm.service';
 import { toGeminiContents } from '../src/llm/gemini.provider';
 import type { LlmMessage } from '../src/llm/llm.service';
 
@@ -36,11 +36,31 @@ describe('parseModel', () => {
     expect(parseModel('meta-llama/llama-4').model).toBe('meta-llama/llama-4');
   });
 
+  it('knows the OpenAI-compatible vendors too', () => {
+    expect(parseModel('cohere:command-a-03-2025').vendor).toBe('cohere');
+    expect(parseModel('sambanova:gemma-4-31B-it').vendor).toBe('sambanova');
+  });
+
   it('is case-insensitive and tolerates whitespace', () => {
     expect(parseModel('  GEMINI:gemini-flash-lite-latest  ')).toEqual({
       vendor: 'gemini',
       model: 'gemini-flash-lite-latest',
     });
+  });
+});
+
+describe('parseFallbacks', () => {
+  it('reads a comma-separated chain in order', () => {
+    expect(parseFallbacks('cohere:command-a-03-2025, openai/gpt-oss-120b')).toEqual([
+      { vendor: 'cohere', model: 'command-a-03-2025' },
+      { vendor: 'groq', model: 'openai/gpt-oss-120b' },
+    ]);
+  });
+
+  it('is empty when unset, so no fallback is attempted', () => {
+    expect(parseFallbacks(undefined)).toEqual([]);
+    expect(parseFallbacks('')).toEqual([]);
+    expect(parseFallbacks(' , , ')).toEqual([]);
   });
 });
 

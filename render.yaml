@@ -142,6 +142,12 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      # Optional extra vendors, both OpenAI-compatible. Cohere is the
+      # fastest measured and does tool calling; SambaNova needs billing.
+      - key: COHERE_API_KEY
+        sync: false
+      - key: SAMBANOVA_API_KEY
+        sync: false
       # Chat carries the tool results and the memory, so it wants the big
       # token budget. A model may be prefixed with its vendor; no prefix
       # means Groq. Never a Gemini *Flash* model here — 20 requests/day.
@@ -153,9 +159,10 @@ services:
         value: openai/gpt-oss-120b
       - key: ASSISTANT_PLANNER_MODEL
         value: openai/gpt-oss-120b
-      # One shot at the other vendor when the first fails after its retries.
+      # Tried in order when the chat model fails after its retries. Worth
+      # having because each vendor fails differently.
       - key: LLM_FALLBACK_MODEL
-        value: openai/gpt-oss-120b
+        value: cohere:command-a-03-2025,openai/gpt-oss-120b
 
       # Your Vercel origin(s), comma separated. The web app calls this
       # service directly for /assistant/* — without the origin here, every

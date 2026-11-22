@@ -67,6 +67,20 @@ const schema = z.object({
    */
   GEMINI_API_KEY: optionalText(),
   /**
+   * Cohere (dashboard.cohere.com/api-keys). OpenAI-compatible endpoint, and
+   * the fastest of the four measured here — ~0.5s with working tool calls.
+   * A trial key is free but monthly-capped, so it earns its place as a
+   * fallback rather than as the everyday chat model.
+   */
+  COHERE_API_KEY: optionalText(),
+  /**
+   * SambaNova (cloud.sambanova.ai). Also OpenAI-compatible, but on the free
+   * plan most of its catalogue answers 402 "payment method required" — only
+   * the Gemma model served without one. No tool calling, so it is useful
+   * for routing and planning and nothing else.
+   */
+  SAMBANOVA_API_KEY: optionalText(),
+  /**
    * Tried once when the configured model fails after its retries, in the
    * same `vendor:model` form. Point it at the OTHER vendor or it buys
    * nothing. Blank disables the fallback.
