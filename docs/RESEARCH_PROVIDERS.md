@@ -54,9 +54,21 @@ WeatherProvider  forecast(query: WeatherQuery): Promise<WeatherReport>
 TheSportsDB and Open-Meteo. A key promotes a better provider; it is never
 required.
 
-**Get a Guardian key anyway.** It is free, instant and ~12,000 calls/day, and
-news is the one chain whose keyless options are genuinely weak: GDELT
-rate-limits hard, and RSS only knows what is in the feeds you nominated.
+**Get one search key and one news key.** The keyless floor exists so nothing
+is ever completely dead; it is not a search engine. On the first live run
+from Render, Wikipedia — the only configured search provider — answered 429
+to everything, because Wikimedia rate-limits by IP and a shared cloud IP is
+usually already spent. The agent reported the failure honestly and answered
+nothing, which is correct behaviour and still a bad answer.
+
+| Get | Why | Free tier |
+|---|---|---|
+| **Brave Search** | real web search, independent index | ~2,000 queries/month |
+| **Tavily** | search shaped for LLM use, cleaner snippets | ~1,000 credits/month |
+| **Guardian** | dated news articles with real publishers | ~12,000 calls/day |
+
+One search key and the Guardian key cover everything the agent asks for.
+Both take about a minute and neither needs a card.
 
 ### Learned by actually calling them
 
@@ -73,6 +85,16 @@ been caught by a typecheck or a unit test.
   a 429 that takes ten seconds to arrive, so it reads as a timeout. It asks
   the HTTP layer for a wider gap (`minHostGapMs: 5500`) and sits last in the
   chain.
+- **A chain that fails completely is remembered as down for 10 minutes.**
+  Told only "search failed", the model tried again four times in one turn,
+  each a fresh 429 against a service that had already refused, each burning
+  a step of the turn's budget. Retrying a rate limit cannot clear it, so now
+  the second call returns immediately with "do not retry this turn". A
+  success anywhere in the chain clears the memo, and the cache is still
+  served while the chain is down.
+- **Wikimedia throttles clients it cannot identify.** The provider sends
+  `Api-User-Agent` and backs off to one request per two seconds; setting
+  `RESEARCH_USER_AGENT` to something with a contact in it helps further.
 - **The cache outlives the fix.** Keys are the question, not the code, so a
   corrected provider still serves its old answer until the TTL expires. Set
   `RESEARCH_CACHE_TTL_MINUTES=0` while debugging a provider.

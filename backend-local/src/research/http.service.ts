@@ -77,9 +77,19 @@ export class ResearchHttpService {
   /** host → when we last finished a request there. */
   private readonly lastHit = new Map<string, number>();
 
-  /** The identity we present. Deliberately generic: never the user's details. */
-  private userAgent(): string {
-    return env().RESEARCH_USER_AGENT || 'MyProBot/1.0 (personal assistant; respects robots.txt)';
+  /**
+   * The identity we present.
+   *
+   * Deliberately generic by default — it must never carry the user's name or
+   * address. But several services (Wikimedia most visibly) throttle clients
+   * they cannot identify, so `RESEARCH_USER_AGENT` exists for anyone willing
+   * to put a contact in it. That is the user's call, not ours.
+   */
+  userAgent(): string {
+    return (
+      env().RESEARCH_USER_AGENT ||
+      'MyProBot/1.0 (personal assistant; single user; respects robots.txt)'
+    );
   }
 
   async fetchText(rawUrl: string, options: FetchOptions = {}): Promise<FetchResult> {

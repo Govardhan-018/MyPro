@@ -2,10 +2,17 @@ import type { ResearchHttpService } from '../http.service';
 import type { SearchProvider, SearchQuery, SourceDoc } from '../provider.types';
 
 /**
- * Wikipedia — free, keyless, no quota, and the last provider in the search
- * chain. It cannot answer "what happened today", but it reliably answers
- * "what is X", which is a large share of what gets asked, and it means the
- * chain is never completely dead with no keys configured at all.
+ * Wikipedia — free, keyless, and the last provider in the search chain. It
+ * cannot answer "what happened today", but it reliably answers "what is X",
+ * and it means the chain is never completely dead with no keys at all.
+ *
+ * ⚠️ **It is a floor, not a search engine.** Wikimedia rate-limits by IP and
+ * user agent, and a shared cloud IP (Render, say) is often already deep into
+ * someone else's budget — the first live run on Render got nothing but 429s.
+ * Their user-agent policy asks for a descriptive agent with a contact, which
+ * is what `RESEARCH_USER_AGENT` is for; setting it measurably reduces the
+ * throttling. The real fix is a Brave or Tavily key ahead of this in the
+ * chain, which is why both sit above it by default.
  */
 export class WikipediaProvider implements SearchProvider {
   readonly id = 'wikipedia';
@@ -35,6 +42,15 @@ export class WikipediaProvider implements SearchProvider {
         formatversion: 2,
       },
       accept: 'application/json',
+      headers: {
+        // Wikimedia reads this in preference to User-Agent and throttles
+        // anonymous-looking clients hardest. Same value either way, but
+        // sending both is what their policy asks for.
+        'Api-User-Agent': this.http.userAgent(),
+      },
+      // Their limits are per-IP and we share one with every other free
+      // service on the host, so go gently.
+      minHostGapMs: 2_000,
     });
 
     const fetched = new Date().toISOString();

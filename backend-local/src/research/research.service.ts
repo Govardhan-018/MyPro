@@ -48,9 +48,23 @@ export interface BriefOutcome {
 
 class NoProvider extends Error {}
 
+/**
+ * How long a completely failed chain stays failed.
+ *
+ * Without this, a model that is told "search failed" simply tries again —
+ * four times in one turn, in the first live run, each one a fresh 429 from a
+ * provider that had already said no. Retrying a rate limit is the one thing
+ * guaranteed not to clear it, and it burns the turn's step budget doing it.
+ * Short enough that a transient blip recovers on the next question.
+ */
+const CHAIN_FAILURE_TTL_MS = 10 * 60_000;
+
 @Injectable()
 export class ResearchService {
   private readonly logger = new Logger(ResearchService.name);
+
+  /** kind -> when the whole chain last failed, and why. In memory only. */
+  private readonly chainDown = new Map<ProviderKind, { at: number; reason: string }>();
 
   constructor(
     private readonly registry: ProviderRegistry,
@@ -258,6 +272,12 @@ export class ResearchService {
       );
     }
 
+    // A chain that just failed completely is not retried: see
+    // CHAIN_FAILURE_TTL_MS. The cache is still consulted first, because a
+    // cached answer is valid whether or not the providers are reachable.
+    const down = this.chainDown.get(kind);
+    const stillDown = down && Date.now() - down.at < CHAIN_FAILURE_TTL_MS;
+
     const cached = await this.cache.get<T>(cacheKey);
     if (cached) {
       void this.cache.record({
@@ -271,12 +291,21 @@ export class ResearchService {
       return { ...cached, cached: true };
     }
 
+    if (stillDown && down) {
+      throw new Error(
+        `${kind} is unavailable: ${down.reason}. ` +
+          `Do not retry this turn — it will fail the same way. Tell the user ` +
+          `plainly that you could not look it up, and answer with what you have.`,
+      );
+    }
+
     const failures: string[] = [];
 
     for (const provider of chain) {
       const started = Date.now();
       try {
         const result = await attempt(provider);
+        this.chainDown.delete(kind);
         await this.cache.record({
           provider: provider.id,
           kind,
@@ -295,6 +324,7 @@ export class ResearchService {
       } catch (err) {
         const reason = err instanceof FetchRefused ? `${err.reason}: ${err.message}` : shortMessage(err);
         failures.push(`${provider.id} (${reason})`);
+        // A success anywhere in the chain clears the memo; see below.
         this.logger.warn(`${kind} provider ${provider.id} failed — ${reason}`);
         await this.cache.record({
           provider: provider.id,
@@ -307,7 +337,13 @@ export class ResearchService {
       }
     }
 
-    throw new Error(`Every ${kind} provider failed: ${failures.join('; ')}`);
+    const reason = failures.join('; ');
+    this.chainDown.set(kind, { at: Date.now(), reason });
+    throw new Error(
+      `Every ${kind} provider failed: ${reason}. ` +
+        `Do not retry this turn — the same call will fail again. Say plainly ` +
+        `that you could not look it up, and answer with what you already have.`,
+    );
   }
 }
 
