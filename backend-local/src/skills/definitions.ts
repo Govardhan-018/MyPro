@@ -947,13 +947,19 @@ const fetchPage = defineSkill({
 const sportsFixtures = defineSkill({
   name: 'sports_fixtures',
   description:
-    "A team's upcoming fixtures and recent results, with kickoff times in UTC. Works for " +
-    'cricket, football and other major sports. Use before adding matches to their calendar. ' +
+    "Upcoming fixtures and recent results for a team OR a player, with kickoff times in UTC. " +
+    'Works for cricket, football and other major sports. Use before adding matches to their ' +
+    'calendar. Give the sport when a name is ambiguous ("India" is a football team and a ' +
+    'cricket team). ' +
     'Where a fixture has no confirmed start time, time_unknown is true — say so rather than ' +
     'booking it at midnight.',
   sideEffect: 'read',
   schema: z.object({
-    team: z.string().min(2).max(80).describe('team name, e.g. "India"'),
+    team: z
+      .string()
+      .min(2)
+      .max(80)
+      .describe('a team, e.g. "India" — or a player, e.g. "Virat Kohli", whose team is looked up'),
     sport: z.string().min(3).max(40).optional().describe('e.g. "Cricket" — disambiguates a shared name'),
     from: iso.optional().describe('defaults to now'),
     to: iso.optional().describe('defaults to 30 days ahead'),

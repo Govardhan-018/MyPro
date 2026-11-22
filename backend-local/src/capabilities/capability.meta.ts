@@ -30,8 +30,9 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     name: 'list_events',
     version: '1.0.0',
     category: 'calendar',
-    keywords: ['calendar', 'schedule', 'event', 'events', 'booked', 'busy', 'free', 'meeting',
-      'appointment', 'diary', 'agenda', 'clash', 'conflict', 'already have'],
+    keywords: ['calendar', 'calender', 'schedule', 'event', 'events', 'booked', 'busy',
+      'free', 'meeting', 'appointment', 'diary', 'agenda', 'clash', 'conflict',
+      'already have'],
     dependencies: ['get_now'],
     enabled: true,
   }),
@@ -41,9 +42,13 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     category: 'calendar',
     // 'add to my calendar' alone missed "add THEM to my calendar", which is
     // exactly how a person phrases it after asking for a list of things.
-    keywords: ['calendar', 'add to my calendar', 'to my calendar', 'in my calendar',
-      'to the calendar', 'add them', 'add it', 'add these', 'book', 'schedule', 'put in',
-      'put them', 'block out', 'event', 'meeting', 'appointment', 'remind me at', 'pencil in'],
+    // 'calender' is here on purpose: it is the common misspelling, and a
+    // capability the router cannot reach is one the agent will claim not to
+    // have. The lie guard in capability.routing.ts is the real backstop.
+    keywords: ['calendar', 'calender', 'add to my calendar', 'to my calendar',
+      'in my calendar', 'to the calendar', 'add them', 'add it', 'add these', 'book',
+      'schedule', 'put in', 'put them', 'block out', 'event', 'meeting', 'appointment',
+      'reminder', 'remind me', 'remind me at', 'pencil in'],
     dependencies: ['get_now', 'list_events'],
     enabled: true,
   }),
@@ -289,9 +294,12 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     name: 'web_search',
     version: '1.0.0',
     category: 'research',
+    // 'latest' deliberately belongs to news_search, not here: "the latest on
+    // X" is a news question, and answering it from an encyclopaedia produces
+    // a page of all-time statistics and no news, which is what happened.
     keywords: ['search', 'look up', 'google', 'find out', 'what is', 'who is', 'how do i',
       'how to', 'online', 'web', 'research', 'compare', 'reviews', 'price', 'best',
-      'recommend', 'latest', 'current'],
+      'recommend', 'current'],
     dependencies: ['fetch_page'],
     enabled: true,
   }),
@@ -299,8 +307,9 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     name: 'news_search',
     version: '1.0.0',
     category: 'news',
-    keywords: ['news', 'headlines', 'happening', 'happened', 'update on', 'story',
-      'announced', 'reported', 'latest on', 'what is going on'],
+    keywords: ['news', 'latest', 'headlines', 'happening', 'happened', 'update on',
+      'story', 'announced', 'reported', 'latest on', 'recent', 'what is going on',
+      'what is new', 'any update'],
     enabled: true,
   }),
   fetch_page: meta({

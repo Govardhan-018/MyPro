@@ -39,7 +39,15 @@ const createEvent = cap({
 const listEmails = cap({ name: 'list_emails', category: 'email', keywords: ['email', 'inbox'] });
 const disabled = cap({ name: 'retired', keywords: ['calendar'], enabled: false });
 
-const all = [now, listEvents, createEvent, listEmails, disabled];
+const createTask = cap({
+  name: 'create_task',
+  category: 'tasks',
+  keywords: ['add a task'],
+  permission: 'write',
+});
+const getWeather = cap({ name: 'get_weather', category: 'weather', keywords: ['weather'] });
+
+const all = [now, listEvents, createEvent, listEmails, disabled, createTask, getWeather];
 
 describe('scoreCapability', () => {
   it('scores a phrase above a bare word', () => {
@@ -99,6 +107,47 @@ describe('selectCapabilities', () => {
     const result = selectCapabilities('hey', all, { limit: 2 });
     expect(result.selected).toHaveLength(2);
     expect(result.selected[0]).toBe('get_now');
+  });
+
+  it('offers the rest of a category once any of it matches', () => {
+    // Asking to read the calendar is one sentence away from asking to
+    // change it, and categories are small enough to offer whole.
+    const result = selectCapabilities('what is on my calendar', all, { limit: 10 });
+    expect(result.selected).toContain('list_events');
+    expect(result.selected).toContain('create_event');
+  });
+
+  /**
+   * The lie guard, from a real failure: "put a reminder on tomorrow morning
+   * for run in calender" matched nothing that writes, because `calender` is
+   * misspelled — and the agent replied "I can't create calendar reminders,
+   * so you'll need to add this manually." It can. Routing had simply not
+   * given it the tool.
+   *
+   * No keyword list fixes a typo. Noticing that an action was asked for and
+   * nothing offered can act does.
+   */
+  it('always offers a way to act when the request asks for an action', () => {
+    const result = selectCapabilities(
+      'put a reminder on tomorowwo morning for run in calender',
+      all,
+      { limit: 10 },
+    );
+    expect(result.selected.some((n) => ['create_event', 'create_task'].includes(n))).toBe(true);
+  });
+
+  it('does the same for a request whose only match is a read elsewhere', () => {
+    const result = selectCapabilities('check the weather and put it somewhere', all, {
+      limit: 10,
+    });
+    expect(result.selected).toContain('get_weather');
+    expect(result.selected.some((n) => ['create_event', 'create_task'].includes(n))).toBe(true);
+  });
+
+  it('does not force writes onto a question that only asks something', () => {
+    const result = selectCapabilities('what is the weather', all, { limit: 10 });
+    expect(result.selected).toContain('get_weather');
+    expect(result.selected).not.toContain('create_task');
   });
 
   it('handles a multi-task request by selecting across categories', () => {

@@ -95,9 +95,49 @@ export class TheSportsDbProvider implements SportsProvider {
 
     const direct = inSport(await search(name));
     if (direct) return direct;
-    if (!sport) return undefined;
 
-    return inSport(await search(`${name} ${sport}`));
+    // National sides are named by sport: "India" is the football team, the
+    // cricket side is "India Cricket".
+    if (sport) {
+      const bySport = inSport(await search(`${name} ${sport}`));
+      if (bySport) return bySport;
+    }
+
+    // Still nothing? It may be a person. "When is Ronaldo's next match" is
+    // a perfectly ordinary question that a team search can never answer,
+    // and answering "no upcoming matches" to it is worse than useless —
+    // it reads as fact rather than as a failed lookup.
+    return this.teamOfPlayer(name, sport);
+  }
+
+  /** The club a player currently plays for, via TheSportsDB's player search. */
+  private async teamOfPlayer(
+    name: string,
+    sport?: string,
+  ): Promise<{ idTeam?: string; strTeam?: string; strSport?: string } | undefined> {
+    const res = await this.http
+      .fetchJson<{
+        player?: { strPlayer?: string; strTeam?: string; strSport?: string; idTeam?: string }[];
+      }>(`${this.base()}/searchplayers.php`, { query: { p: name }, accept: 'application/json' })
+      .catch(() => ({ player: null }));
+
+    const players = res.player ?? [];
+    const wanted = sport?.toLowerCase();
+    const player =
+      (wanted ? players.find((p) => p.strSport?.toLowerCase() === wanted) : players[0]) ??
+      players[0];
+    if (!player?.strTeam) return undefined;
+
+    // The player record carries the team name; resolve it to an id the
+    // events endpoints will accept.
+    const teams = await this.http
+      .fetchJson<{ teams?: { idTeam?: string; strTeam?: string; strSport?: string }[] }>(
+        `${this.base()}/searchteams.php`,
+        { query: { t: player.strTeam }, accept: 'application/json' },
+      )
+      .catch(() => ({ teams: [] }));
+
+    return (teams.teams ?? [])[0];
   }
 
   private async events(url: string, teamId: string): Promise<FixtureDoc[]> {

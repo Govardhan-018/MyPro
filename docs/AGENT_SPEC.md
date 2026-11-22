@@ -112,6 +112,19 @@ routable, never unreachable.
   so they rank below anything the request actually named
 - `ambiguous` is set when fewer than `minConfident` (1) capabilities matched
 
+Two widening rules sit on top of the keyword pass, both learned from real
+failures:
+
+- **Siblings.** If a request touches a category at all, the rest of that
+  category's verbs are offered. Reading a calendar is one sentence away from
+  changing it, and categories are small.
+- **The lie guard.** If the request asks for an *action* and nothing offered
+  can perform one, the creating capabilities are added. This exists because
+  "put a reminder … in calender" matched no calendar capability — the word
+  is misspelled — and the agent replied *"I can't create calendar reminders,
+  so you'll need to add this manually."* It can. No keyword list fixes a
+  typo; noticing the shape of the request does.
+
 **An ambiguous request widens the set rather than narrowing it** — it offers
 everything within the mode's cap, which is exactly what the system did before.
 Routing can only ever lose tokens, never capabilities.

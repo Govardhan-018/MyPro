@@ -36,7 +36,26 @@ export interface SelectionOptions {
 const PHRASE_WEIGHT = 2;
 const WORD_WEIGHT = 1;
 const DEPENDENCY_FLOOR = 0.4;
+const SIBLING_FLOOR = 0.3;
+const ACTIONABLE_FLOOR = 0.2;
 const ALWAYS_SCORE = 1000;
+
+/**
+ * Verbs that mean "do something", not "tell me something".
+ *
+ * Kept deliberately short: these only ever *widen* the offered set, and the
+ * cost of a false positive is one extra tool schema.
+ */
+const ACTION_VERBS = [
+  'add', 'put', 'create', 'make', 'book', 'schedule', 'remind', 'reminder',
+  'set up', 'save', 'note down', 'log', 'track', 'plan',
+];
+
+/**
+ * The capabilities that actually create something. Offered whenever the
+ * request asks for an action and routing found no way to perform one.
+ */
+const CREATORS = ['create_event', 'create_task', 'create_schedule', 'remember'];
 
 /** Escape a keyword for use inside a RegExp. */
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -92,6 +111,46 @@ export function selectCapabilities(
       const depCapability = byName.get(dep);
       if (!depCapability?.enabled) continue;
       scores[dep] = Math.max(scores[dep] ?? 0, DEPENDENCY_FLOOR);
+    }
+  }
+
+  // Siblings. If the request touches a category at all, offer the rest of
+  // that category's verbs: someone asking to read their calendar is one
+  // sentence away from asking to change it, and categories are small.
+  const matchedCategories = new Set(
+    Object.keys(scores)
+      .map((name) => byName.get(name)?.category)
+      .filter((c): c is Capability['category'] => Boolean(c) && c !== 'time'),
+  );
+  for (const capability of capabilities) {
+    if (!capability.enabled || scores[capability.name] !== undefined) continue;
+    if (matchedCategories.has(capability.category)) {
+      scores[capability.name] = SIBLING_FLOOR;
+    }
+  }
+
+  /*
+   * The lie guard.
+   *
+   * A request that asks for something to be *done*, routed to nothing that
+   * can do anything, produces the worst failure this system has: the agent
+   * reports that it lacks a capability it actually has. That happened for
+   * real — "put a reminder ... in calender" never matched `create_event`
+   * because the word was misspelled, and the reply was "I can't create
+   * calendar reminders, so you'll need to add this manually."
+   *
+   * No keyword list fixes a typo. What fixes it is noticing the shape of
+   * the request: if it asks for an action and nothing offered can act,
+   * widen until something can.
+   */
+  const wantsAction = ACTION_VERBS.some((verb) => ` ${text.toLowerCase()} `.includes(` ${verb}`));
+  const canAct = Object.keys(scores).some(
+    (name) => (byName.get(name)?.permission ?? 'read') !== 'read',
+  );
+  if (wantsAction && !canAct) {
+    for (const name of CREATORS) {
+      const capability = byName.get(name);
+      if (capability?.enabled) scores[name] = Math.max(scores[name] ?? 0, ACTIONABLE_FLOOR);
     }
   }
 
