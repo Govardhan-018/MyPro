@@ -243,6 +243,26 @@ no episodes, no threads**. It is a plain completion, not a companion turn.
 
 ---
 
+### 4.1 What a reply contains
+
+A reply is prose **plus cards**. The prose is the model's; the cards are
+built on the agent from what the tools actually returned
+(`agent/display-blocks.ts`), so a link shown was genuinely fetched and a
+date shown came from the provider.
+
+This is deliberately not "ask the model for JSON". The data is already
+structured when it arrives from a provider — asking a model to retype it
+spends tokens to make it less reliable, and a parse failure would cost the
+whole reply. Three kinds exist today: `sources` (search, news, a fetched
+page), `fixtures`, `weather`. Everything else stays prose, which is the
+right default for a confirmation or a short list.
+
+The model is told what is on screen (`blocksNote`) and instructed not to
+list or paraphrase it, so the paragraph is a takeaway rather than a
+transcript. Blocks are stored on `assistant_messages.blocks` (migration
+`0017`), written best-effort: without the column the agent still answers and
+the cards are simply live-only.
+
 ## 5. The request path, end to end
 
 `AssistantService.send(user, content)`:

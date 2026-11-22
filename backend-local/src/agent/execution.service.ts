@@ -5,6 +5,7 @@ import type { AuthUser } from '../common/auth.guard';
 import type { InvocationReceipt, SideEffect } from '../skills/types';
 import type { EffortBudget } from './effort';
 import { estimateTokens, fitMessages, toolTokens } from './token-budget';
+import { blocksNote, buildBlocks, type DisplayBlock, type ToolOutput } from './display-blocks';
 
 export interface ExecutionRequest {
   user: AuthUser;
@@ -29,6 +30,10 @@ export interface ExecutionResult {
   exhausted: boolean;
   /** The conversation as executed, so a final pass can be appended to it. */
   history: LlmMessage[];
+  /** Renderable cards built from the tool results, not from the prose. */
+  blocks: DisplayBlock[];
+  /** The system prompt as it ended up, including the "already on screen" note. */
+  system: string;
 }
 
 /**
@@ -61,9 +66,13 @@ export class ExecutionService {
     const { budget } = request;
     const messages: LlmMessage[] = [...request.messages];
     const receipts: InvocationReceipt[] = [];
+    const outputs: ToolOutput[] = [];
 
     const schemaTokens = toolTokens(request.tools);
-    const systemTokens = estimateTokens(request.system);
+    // The system prompt grows once tools have run: the model is told what
+    // the screen is already showing so it stops retyping it.
+    let system = request.system;
+    let systemTokens = estimateTokens(system);
 
     for (let step = 0; step < budget.maxToolSteps; step++) {
       // Nothing counted tokens before this; a single page of extracted
@@ -84,13 +93,21 @@ export class ExecutionService {
         model: request.model,
         temperature: request.temperature,
         maxTokens: budget.maxOutputTokens,
-        system: request.system,
+        system,
         messages: fitted.messages,
         tools: request.tools,
       });
 
       if (!res.toolCalls.length) {
-        return { text: res.text, receipts, steps: step + 1, exhausted: false, history: messages };
+        return {
+          text: res.text,
+          receipts,
+          steps: step + 1,
+          exhausted: false,
+          history: messages,
+          blocks: buildBlocks(outputs),
+          system,
+        };
       }
 
       messages.push({
@@ -109,7 +126,21 @@ export class ExecutionService {
         ? await this.parallel(calls, request)
         : await this.sequential(calls, request);
 
-      for (const entry of results) receipts.push(entry.receipt);
+      for (const entry of results) {
+        receipts.push(entry.receipt);
+        outputs.push({ name: entry.name, content: entry.content });
+      }
+
+      // Recomputed each step: the next call is the one that might write the
+      // final answer, and by then the cards are known.
+      const note = blocksNote(buildBlocks(outputs));
+      if (note) {
+        system = `${request.system}
+
+${note}`;
+        systemTokens = estimateTokens(system);
+      }
+
       messages.push({
         role: 'tool',
         responses: results.map((entry) => ({
@@ -121,7 +152,15 @@ export class ExecutionService {
     }
 
     this.logger.warn(`step budget (${budget.maxToolSteps}) exhausted in ${budget.mode} mode`);
-    return { text: '', receipts, steps: budget.maxToolSteps, exhausted: true, history: messages };
+    return {
+      text: '',
+      receipts,
+      steps: budget.maxToolSteps,
+      exhausted: true,
+      history: messages,
+      blocks: buildBlocks(outputs),
+      system,
+    };
   }
 
   /**

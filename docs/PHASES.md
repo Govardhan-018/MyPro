@@ -541,6 +541,25 @@ migrations `0009`–`0011` applied and the agent rebuilt — see §6).
   close-out (19:00–22:00) and the **Sunday letter** (Sun 17:00–21:00). *(Catch-up
   collapse on wake is not special-cased beyond the drain loop's staleness rule.)*
 
+### ✅ Phase 21 — A reply you can read *(built; needs migration 0017)*
+**Goal: stop answering with a wall of prose.** Asked for cricket news, the
+agent replied with one unbroken paragraph containing a team's all-time Test,
+ODI and T20 records — every number of it from a tool result, flattened into
+a sentence because a sentence was the only output available.
+
+- ✅ **21.1** `agent/display-blocks.ts` builds cards from the turn's tool
+  results: sources with links and dates, fixtures with teams and venues,
+  forecasts. Built from what the tools returned, **never from the model's
+  prose**, so a card cannot cite a source that was never fetched and a
+  parse failure cannot cost the reply.
+- ✅ **21.2** The model is told what the screen is already showing and to
+  give the takeaway instead of repeating it — otherwise the same headlines
+  appear twice, once as cards and once paraphrased above them.
+- ✅ **21.3** Rendered in the web chat, and persisted on
+  `assistant_messages.blocks` (`0017`) so a reload keeps them. Written
+  best-effort: without the column the agent still answers.
+- ⬜ **21.4** Android renders none of it.
+
 ### ⬜ Phase 17 — The seam
 **Goal: the corners stop being tabs.** Until here they are excellent
 neighbours; this is what makes it one tool.

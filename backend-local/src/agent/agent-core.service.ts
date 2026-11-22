@@ -12,6 +12,7 @@ import { decidePlan } from './plan-trigger';
 import { budgetFor, type EffortMode } from './effort';
 import { fullyDelivered, reconcile, verificationNote } from './verification';
 import type { AgentPlan, StepOutcome } from './plan.types';
+import type { DisplayBlock } from './display-blocks';
 
 export interface AgentRun {
   text: string;
@@ -24,6 +25,8 @@ export interface AgentRun {
   capabilities: string[];
   /** Model round trips spent, planner and router included. */
   modelCalls: number;
+  /** Cards built from the tool results, for the app to render. */
+  blocks: DisplayBlock[];
 }
 
 /**
@@ -152,7 +155,9 @@ export class AgentCoreService {
         text = await this.execution.finalAnswer({
           model: params.model,
           temperature: params.temperature,
-          system,
+          // run.system, not `system`: it carries the "already on screen"
+          // note, without which the closing pass retypes every card.
+          system: run.system,
           history: run.history,
           note,
           budget,
@@ -180,6 +185,7 @@ export class AgentCoreService {
     return {
       text,
       receipts: run.receipts,
+      blocks: run.blocks,
       mode: params.mode,
       plan,
       outcomes,

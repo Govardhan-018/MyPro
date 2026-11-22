@@ -81,6 +81,7 @@ import { CharacterPanel, characterInitial, type PersonaDraft } from "./component
 import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
 import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
 import { WatchingPanel } from "./components/assistant/WatchingPanel";
+import { ResultBlocks } from "./components/assistant/ResultBlocks";
 import { MobileNavSheet } from "./components/MobileNavSheet";
 import { useCollections } from "./lib/useCollections";
 import { isApiConfigured } from "./lib/env";
@@ -92,6 +93,7 @@ import {
   api,
   forgetAgentBase,
   type AgentTurnSummary,
+  type DisplayBlock,
   type AssistantSettingsRow,
   type EffortMode,
   type PendingActionRow,
@@ -1887,6 +1889,8 @@ type ChatMessage = {
   receipts?: ReceiptRow[];
   /** What the agent planned and what verification made of it (Phase 19). */
   agent?: AgentTurnSummary;
+  /** Cards built from the turn's tool results, rendered under the reply. */
+  blocks?: DisplayBlock[] | null;
 };
 
 function receiptTone(status: ReceiptRow["status"]): "ok" | "bad" | "wait" {
@@ -2140,6 +2144,7 @@ function AssistantView() {
               from: m.role === "assistant" ? "ai" : "user",
               text: m.content ?? "",
               time: fmtTime(m.created_at),
+              blocks: m.blocks,
             })),
         );
       })
@@ -2215,6 +2220,7 @@ function AssistantView() {
           time: fmtTime(result.message.created_at),
           receipts: result.receipts,
           agent: result.agent,
+          blocks: result.agent?.blocks,
         },
       ]);
       // A turn may have queued an outward action for approval.
@@ -2346,6 +2352,7 @@ function AssistantView() {
                   </div>
                   <div className="message-bubble">
                     <p>{m.from === "ai" ? <AnimatedReply text={m.text} /> : m.text}</p>
+                    <ResultBlocks blocks={m.blocks} />
                     <AgentPlanCard agent={m.agent} />
                     {m.receipts && m.receipts.length > 0 && (
                       <div className="receipt-cards">

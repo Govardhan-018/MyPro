@@ -7668,3 +7668,142 @@ button {
     flex: 1 1 100%;
   }
 }
+
+/* ===================================================================
+   Result cards (Phase 21). The structured half of a reply: sources,
+   fixtures, forecasts — built from tool results, never from prose, so
+   a link here was genuinely fetched.
+   =================================================================== */
+.result-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+.result-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+.result-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+}
+.result-card-head > strong {
+  margin-left: auto;
+  color: #fff;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- sources ---- */
+.result-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.result-sources > li {
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.result-sources a {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
+}
+.result-sources a:hover .source-title {
+  text-decoration: underline;
+}
+.source-title {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.source-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11px;
+}
+.source-snippet {
+  margin: 5px 0 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* ---- fixtures ---- */
+.result-fixtures,
+.result-weather {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.result-fixtures > li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 11px;
+}
+.result-fixtures > li + li,
+.result-weather > li + li {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.fixture-teams {
+  font-size: 13px;
+}
+.fixture-teams > i {
+  color: rgba(255, 255, 255, 0.35);
+  font-style: normal;
+  padding: 0 2px;
+}
+.fixture-meta {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- weather ---- */
+.result-weather > li {
+  display: grid;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 11px;
+  grid-template-columns: 42px 72px minmax(0, 1fr);
+}
+.weather-day {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11.5px;
+}
+.weather-range {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.weather-range > i {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11.5px;
+  font-style: normal;
+}
+.weather-summary {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

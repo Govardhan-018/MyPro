@@ -24,6 +24,7 @@ export type {
   SendResult,
   EffortMode,
   AgentTurnSummary,
+  DisplayBlock,
   AgentPlanStepSummary,
   AgentCapabilityReadout,
   AgentPlanRow,

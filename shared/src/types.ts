@@ -80,6 +80,8 @@ export interface CommitmentRow {
 }
 
 export interface AssistantMessageRow {
+  /** Present on stored assistant turns once migration 0017 is applied. */
+  blocks?: DisplayBlock[] | null;
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string | null;
@@ -114,6 +116,54 @@ export interface AgentPlanStepSummary {
   status: 'pending' | 'verified' | 'queued' | 'failed' | 'not_attempted';
 }
 
+/**
+ * A card rendered under a reply. Built on the agent from what the tools
+ * actually returned, never from the model's prose — so a source shown here
+ * was genuinely fetched, and a date shown here came from the provider.
+ */
+export type DisplayBlock =
+  | {
+      kind: 'sources';
+      from: string;
+      items: {
+        title: string;
+        url: string;
+        publisher?: string;
+        published_at?: string;
+        snippet?: string;
+      }[];
+    }
+  | {
+      kind: 'fixtures';
+      from: string;
+      resolved?: { kind: string; name: string; team: string; sport?: string };
+      items: {
+        home: string;
+        away: string;
+        starts_at?: string;
+        /** No confirmed kickoff — never render midnight as a time. */
+        time_unknown?: boolean;
+        venue?: string;
+        status?: string;
+        score?: string;
+        league?: string;
+      }[];
+    }
+  | {
+      kind: 'weather';
+      from: string;
+      place: string;
+      timezone?: string;
+      now?: { temperature_c?: number; summary?: string; wind_kph?: number };
+      days: {
+        date: string;
+        min_c?: number;
+        max_c?: number;
+        precipitation_chance?: number;
+        summary?: string;
+      }[];
+    };
+
 export interface AgentTurnSummary {
   mode: EffortMode;
   /** The capabilities offered to the model this turn, strongest first. */
@@ -121,6 +171,8 @@ export interface AgentTurnSummary {
   model_calls: number;
   /** Null when the request did not warrant an agenda. */
   plan: { intent: string; steps: AgentPlanStepSummary[] } | null;
+  /** Cards to render under the reply. Empty for a plain conversational turn. */
+  blocks?: DisplayBlock[];
 }
 
 /** A thing the companion actually did, rendered as a card in the chat. */
