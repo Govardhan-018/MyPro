@@ -1,0 +1,189 @@
+/*
+ * MyPro design tokens (UI upgrade).
+ *
+ * Additive on purpose: the app's historical theme tokens (`--graphite`,
+ * `--soft`, `--accent`, …) are all `#ffffff` and drive the existing monochrome
+ * / Color-Mode system. We do NOT redefine those here — that would change the
+ * whole app and fight the Color-Mode toggle. Instead we add a graded scale and
+ * the genuinely new colours (content tints, semantics) under new names, and
+ * derive accent shades from the live `--accent` with color-mix so they track
+ * Monochrome ↔ Color Mode automatically.
+ */
+:root {
+  /* Surfaces — graded, dark-mode friendly. --bg stays the app's true black. */
+  --bg: #000000;
+  --surface-1: #111116; /* cards */
+  --surface-2: #18181f; /* raised: sheets, inputs */
+  --surface-3: #22222b; /* hover / pressed */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+
+  /* Text */
+  --text-1: #f4f4f6;
+  --text-2: #a8a8b3;
+  --text-3: #6e6e7a; /* meta only, never body */
+
+  /* Accent shades, derived from the live --accent so Color Mode still owns it. */
+  --accent-press: color-mix(in srgb, var(--accent) 78%, #000000);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+
+  /* Semantics (new) */
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+
+  /* Content-type tints (new): tags, 3px card edge, icon + ring colour. */
+  --t-book: #f59e0b;
+  --t-podcast: #22d3ee;
+  --t-article: #60a5fa;
+  --t-highlight: #c084fc;
+  --t-quote: #2dd4bf;
+  --t-note: #a3e635;
+  --t-health: #fb7185;
+  --t-event: #818cf8;
+
+  /* Radius */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-full: 999px;
+
+  /* Elevation — border + subtle glow, not heavy shadow. */
+  --e1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --e2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --e-accent: 0 8px 32px color-mix(in srgb, var(--accent) 25%, transparent);
+
+  /* Motion */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --dur-reward: 700ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Fonts */
+  --font-serif: "Newsreader", "Source Serif 4", Georgia, serif;
+}
+
+/* ── Type scale ─────────────────────────────────────────────────────────────
+ * Classes so a screen opts in without a one-off rule each time. px / lh / wght
+ * per the spec; stats use tabular numerals. */
+.ds-display {
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.ds-title {
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+}
+.ds-headline {
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+}
+.ds-body {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 400;
+}
+.ds-callout {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.ds-caption {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+.ds-overline {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ds-serif {
+  font-family: var(--font-serif);
+}
+.ds-tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Shimmer (skeletons) ─────────────────────────────────────────────────────
+ * A slow left→right sweep (never an opacity pulse). One keyframe + one duration
+ * everywhere keeps the sweeps near-synced. Reduced motion stills it. */
+@keyframes ds-shimmer {
+  from {
+    background-position: -150% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+.ds-shimmer {
+  background-color: var(--surface-2);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ds-shimmer 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-shimmer {
+    animation: none;
+  }
+}
+
+/* ── Progress ribbing ────────────────────────────────────────────────────────
+ * Diagonal ribbing that moves backward (right→left) on a determinate bar
+ * (CHI 2010: backward-decelerating ribbing reads ~11% shorter). */
+@keyframes ds-ribbing {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: -28px 0;
+  }
+}
+.ds-ribbing {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 0 2px,
+    transparent 2px 10px
+  );
+  background-size: 28px 28px;
+  animation: ds-ribbing 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-ribbing {
+    animation: none;
+  }
+}
+
+/* ── Error shake (form validation) ───────────────────────────────────────────
+ * A short horizontal shake on invalid submit — transform only. */
+@keyframes ds-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+.login-shake {
+  animation: ds-shake 0.24s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-shake {
+    animation: none;
+  }
+}

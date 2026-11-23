@@ -12,7 +12,6 @@ import {
 import type { LottieHandle } from "lottie-react";
 import {
   AlarmClock,
-  Apple,
   Archive,
   ArrowLeft,
   Bell,
@@ -99,7 +98,7 @@ import {
   type PendingActionRow,
   type ReceiptRow,
 } from "./lib/api";
-import { signInWithOAuth, signInWithPassword, signOut, signUpWithPassword } from "./lib/supabase";
+import { signInWithPassword, signOut, signUpWithPassword } from "./lib/supabase";
 import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
@@ -300,7 +299,6 @@ function Welcome({
   colorMode: boolean;
   onToggleColor: () => void;
 }) {
-  const [emailMode, setEmailMode] = useState(false);
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -354,20 +352,6 @@ function Welcome({
     onEnter();
   };
 
-  const continueWithProvider = async (provider: "google" | "apple", label: string) => {
-    if (!configured) return runPrototype(label);
-    setAuthState("loading");
-    setFeedback(`Redirecting to ${label}…`);
-    try {
-      // Redirects away to the provider and back; the session is then picked up
-      // on return by the auth listener, which swaps in the app shell.
-      await signInWithOAuth(provider);
-    } catch (error) {
-      setAuthState("error");
-      setFeedback(error instanceof Error ? error.message : `Could not continue with ${label}.`);
-    }
-  };
-
   const submitEmail = async () => {
     if (!email.includes("@") || password.length < minPassword) {
       setAuthState("error");
@@ -402,7 +386,6 @@ function Welcome({
 
   const openAccountMode = (mode: "signin" | "signup") => {
     setAccountMode(mode);
-    setEmailMode(true);
     setAuthState("idle");
     setFeedback("");
   };
@@ -474,33 +457,7 @@ function Welcome({
             {feedback && <p>{feedback}</p>}
           </div>
 
-          <button
-            className="auth-button auth-primary"
-            onClick={() => continueWithProvider("apple", "Apple")}
-            disabled={authState === "loading"}
-          >
-            <Apple size={19} fill="currentColor" /> Continue with Apple
-          </button>
-          <button
-            className="auth-button"
-            onClick={() => continueWithProvider("google", "Google")}
-            disabled={authState === "loading"}
-          >
-            <span className="google-mark">G</span> Continue with Google
-          </button>
-
-          <div className="login-separator">
-            <span />
-            or
-            <span />
-          </div>
-
-          {!emailMode ? (
-            <button className="auth-button" onClick={() => setEmailMode(true)}>
-              <Mail size={18} /> Continue with Email
-            </button>
-          ) : (
-            <div className="email-auth-form">
+          <div className={`email-auth-form ${authState === "error" ? "login-shake" : ""}`}>
               <label>
                 <span>Email address</span>
                 <input
@@ -560,7 +517,6 @@ function Welcome({
                     : "Sign in"}
               </button>
             </div>
-          )}
 
           <div className="account-switch">
             {accountMode === "signup" ? (

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { initShell } from "./lib/shell";
 import "./index.css";
+import "./styles/tokens.css";
 import "./reading-listening.css";
 
 // Adapt presentation when running inside the native shell (sets the .in-shell
