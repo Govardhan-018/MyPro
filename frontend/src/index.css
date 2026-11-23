@@ -1252,76 +1252,87 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 .assistant-top-right {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.agent-status {
+
+/* A clean identity on the left: a mark, the name, and a status dot — no fake
+   dropdown, no verbose pill. Effort is the only control; it sits on the right. */
+.assistant-identity {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 10.5px;
-  white-space: nowrap;
+  gap: 9px;
+  min-width: 0;
 }
-.agent-status i {
-  width: 6px;
-  height: 6px;
+.assistant-identity-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.color-mode .assistant-identity-mark {
+  color: var(--accent);
+}
+.assistant-identity-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.35);
 }
-.agent-status.online {
-  color: rgba(255, 255, 255, 0.85);
-}
-.agent-status.online i {
+.agent-dot.online {
   background: #ffffff;
 }
-.agent-status.unknown i {
+.agent-dot.offline {
+  background: rgba(255, 255, 255, 0.5);
+}
+.agent-dot.unknown {
   animation: agent-pulse 1.4s ease-in-out infinite;
 }
+.color-mode .agent-dot.online {
+  background: #34d399;
+}
+.color-mode .agent-dot.offline {
+  background: #f59e0b;
+}
+.chat-new {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.chat-new:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+/* The header status dot reuses this pulse. */
 @keyframes agent-pulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.85; }
-}
-.color-mode .agent-status.online i {
-  background: #34d399;
-}
-.color-mode .agent-status.offline i {
-  background: #f59e0b;
-}
-.assistant-menu {
-  position: relative;
-}
-.assistant-menu-pop {
-  position: absolute;
-  top: 110%;
-  right: 0;
-  z-index: 20;
-  background: #121212;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 6px;
-  min-width: 180px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-}
-.assistant-menu-pop button {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.85);
-  text-align: left;
-  padding: 9px 11px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.assistant-menu-pop button:hover {
-  background: rgba(255, 255, 255, 0.07);
 }
 
 /* Receipt cards — what the companion did, under its reply */
@@ -1602,26 +1613,6 @@ button {
   color: #f8a3a3;
 }
 
-.mode-select {
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.65);
-  padding: 7px 10px 7px 7px;
-  border-radius: 11px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--secondary);
-  font-size: 9px;
-}
-.mode-spark {
-  width: 25px;
-  height: 25px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  color: var(--deep);
-  background: #ffffff;
-}
 .quiet-button {
   border: 0;
   background: transparent;
@@ -1833,7 +1824,7 @@ button {
   display: block;
   margin-top: 6px;
   color: rgba(255, 255, 255, 0.42);
-  font-size: 7px;
+  font-size: 10px;
 }
 .message.user .message-bubble {
   color: #ffffff;
@@ -3031,8 +3022,7 @@ button {
 }
 .dark-app .icon-button,
 .dark-app .secondary-button,
-.dark-app .composer-field,
-.dark-app .mode-select {
+.dark-app .composer-field {
   background: rgba(255, 255, 255, 0.05);
   color: var(--secondary);
 }
@@ -3423,7 +3413,6 @@ button {
   border-color: rgba(182, 154, 245, 0.38);
   background: rgba(182, 154, 245, 0.05);
 }
-.color-mode .mode-spark,
 .color-mode .message.ai svg {
   color: #b69af5;
 }
@@ -3949,7 +3938,6 @@ button {
 .health-documents button,
 .health-form-section-title > span,
 .health-upload,
-.mode-spark,
 .message.ai svg,
 .message-avatar,
 .message-bubble,
@@ -5393,8 +5381,19 @@ button {
     height: 100%;
   }
   .assistant-top {
-    height: 56px;
-    padding: 0 16px;
+    height: 58px;
+    padding: 0 14px;
+  }
+  .assistant-identity-name {
+    font-size: 15.5px;
+  }
+  .assistant-top-right {
+    gap: 8px;
+  }
+  .chat-new {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
   }
   .assistant-center {
     width: calc(100% - 32px);
@@ -7254,14 +7253,7 @@ button {
 }
 
 @media (max-width: 760px) {
-  /* The assistant's two main controls measured 19px and 34px square. */
-  .assistant-menu > .quiet-button {
-    display: grid;
-    width: 44px;
-    height: 44px;
-    place-items: center;
-    margin-right: -8px;
-  }
+  /* Keep the send control a comfortable 44px touch target. */
   .composer-tools .send-button {
     width: 44px;
     height: 44px;
@@ -7420,10 +7412,14 @@ button {
   color: #fff;
 }
 @media (max-width: 760px) {
-  /* It is the only place effort is chosen, so it stays — just tighter. */
+  /* The only control in the header, so make it comfortable to read and tap. */
+  .effort-picker {
+    gap: 3px;
+    padding: 3px;
+  }
   .effort-chip {
-    padding: 4px 8px;
-    font-size: 10.5px;
+    padding: 7px 12px;
+    font-size: 12px;
   }
 }
 

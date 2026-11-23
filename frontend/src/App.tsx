@@ -77,7 +77,7 @@ import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
 import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
-import { CharacterPanel, characterInitial, type PersonaDraft } from "./components/assistant/CharacterPanel";
+import { characterInitial } from "./components/assistant/CharacterPanel";
 import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
 import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
 import { WatchingPanel } from "./components/assistant/WatchingPanel";
@@ -1924,179 +1924,6 @@ function fmtTime(iso?: string | null): string {
     : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/** Persona/charter + runtime settings editor — both live on the laptop agent. */
-function AssistantSettingsPanel({ onClose }: { onClose: () => void }) {
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [settings, setSettings] = useState<AssistantSettingsRow | null>(null);
-  const [persona, setPersona] = useState<PersonaDraft>({});
-
-  useEffect(() => {
-    let active = true;
-    Promise.all([api.assistant.settings(), api.assistant.persona()])
-      .then(([loadedSettings, loadedPersona]) => {
-        if (!active) return;
-        setSettings(loadedSettings);
-        setPersona((loadedPersona ?? {}) as PersonaDraft);
-        setLoading(false);
-      })
-      .catch((caught) => {
-        if (!active) return;
-        setError(
-          caught instanceof AgentOfflineError
-            ? "Wake your laptop to edit the assistant."
-            : caught instanceof Error
-              ? caught.message
-              : "Could not load assistant settings.",
-        );
-        setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const save = async () => {
-    if (!settings) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await api.assistant.updateSettings({
-        context_message_limit: settings.context_message_limit,
-        temperature: settings.temperature,
-        allow_auto_send_email: settings.allow_auto_send_email,
-        ...(settings.model && settings.model.trim().length >= 3
-          ? { model: settings.model.trim() }
-          : {}),
-      });
-
-      const personaPatch: Record<string, unknown> = {
-        tone: persona.tone ?? "",
-        style_notes: persona.style_notes ?? "",
-      };
-      if (persona.name?.trim()) personaPatch.name = persona.name.trim();
-      if (persona.check_in_time) personaPatch.check_in_time = persona.check_in_time;
-      if (typeof persona.inactivity_hours === "number")
-        personaPatch.inactivity_hours = persona.inactivity_hours;
-      if (typeof persona.proactive_enabled === "boolean")
-        personaPatch.proactive_enabled = persona.proactive_enabled;
-      await api.assistant.updatePersona(personaPatch);
-
-      onClose();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not save.");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="assistant-settings-overlay" onClick={onClose}>
-      <div
-        className="assistant-settings-modal"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-label="Assistant settings"
-      >
-        <header className="assistant-settings-head">
-          <h2>Your assistant</h2>
-          <button className="quiet-button" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
-        </header>
-
-        {loading ? (
-          <div className="assistant-settings-loading">Loading…</div>
-        ) : error && !settings ? (
-          <div className="assistant-settings-loading">{error}</div>
-        ) : (
-          settings && (
-            <div className="assistant-settings-body">
-              <CharacterPanel persona={persona} onPersona={setPersona} />
-
-              <WatchingPanel />
-
-              <span className="settings-group-label">What it can do</span>
-              <CapabilityReadout />
-
-              <span className="settings-group-label">Conversation</span>
-              <div className="settings-row settings-row-stack">
-                <span>
-                  Context window — {settings.context_message_limit} message
-                  {settings.context_message_limit === 1 ? "" : "s"} replayed
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={200}
-                  step={2}
-                  value={settings.context_message_limit}
-                  onChange={(e) =>
-                    setSettings((s) =>
-                      s ? { ...s, context_message_limit: Number(e.target.value) } : s,
-                    )
-                  }
-                />
-              </div>
-              <div className="settings-row settings-row-stack">
-                <span>Temperature — {settings.temperature.toFixed(1)}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={2}
-                  step={0.1}
-                  value={settings.temperature}
-                  onChange={(e) =>
-                    setSettings((s) => (s ? { ...s, temperature: Number(e.target.value) } : s))
-                  }
-                />
-              </div>
-              <label className="settings-row">
-                <span>Model (optional)</span>
-                <input
-                  type="text"
-                  value={settings.model ?? ""}
-                  onChange={(e) =>
-                    setSettings((s) => (s ? { ...s, model: e.target.value } : s))
-                  }
-                  placeholder="Uses the agent default"
-                />
-              </label>
-              <label className="settings-row settings-toggle-row">
-                <span>Let it send email without asking</span>
-                <input
-                  type="checkbox"
-                  checked={settings.allow_auto_send_email}
-                  onChange={(e) =>
-                    setSettings((s) =>
-                      s ? { ...s, allow_auto_send_email: e.target.checked } : s,
-                    )
-                  }
-                />
-              </label>
-
-              {error && <p className="composer-error">{error}</p>}
-            </div>
-          )
-        )}
-
-        <footer className="assistant-settings-foot">
-          <button className="settings-cancel" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="settings-save"
-            onClick={save}
-            disabled={loading || saving || !settings}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </footer>
-      </div>
-    </div>
-  );
-}
-
 function AssistantView() {
   // Real agent chat when the backend is configured; otherwise the original
   // local prototype flow so the design stays demoable without a laptop.
@@ -2115,8 +1942,6 @@ function AssistantView() {
   const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
   const [pending, setPending] = useState<PendingActionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const conversationRef = useRef<HTMLDivElement>(null);
   const request = useSimulatedRequest();
 
@@ -2250,7 +2075,6 @@ function AssistantView() {
   };
 
   const clearConversation = async () => {
-    setMenuOpen(false);
     if (configured) {
       try {
         await api.assistant.clear("wipe");
@@ -2268,11 +2092,30 @@ function AssistantView() {
     <div className="assistant-view">
       <main className="assistant-main">
         <div className="assistant-top">
-          <div className="mode-select">
-            <span className="mode-spark">
-              <Sparkles size={14} />
-            </span>{" "}
-            {characterName} <ChevronDown size={14} />
+          <div className="assistant-identity">
+            <span className="assistant-identity-mark">
+              <Sparkles size={15} />
+            </span>
+            <span className="assistant-identity-name">{characterName}</span>
+            {configured && (
+              <span
+                className={`agent-dot ${agentOnline === null ? "unknown" : agentOnline ? "online" : "offline"}`}
+                title={
+                  agentOnline === null
+                    ? "Connecting to your agent"
+                    : agentOnline
+                      ? "Agent online"
+                      : "Agent asleep — wake your laptop"
+                }
+                aria-label={
+                  agentOnline === null
+                    ? "Connecting"
+                    : agentOnline
+                      ? "Agent online"
+                      : "Agent asleep"
+                }
+              />
+            )}
           </div>
           <div className="assistant-top-right">
             {configured && (
@@ -2297,42 +2140,17 @@ function AssistantView() {
                 ))}
               </div>
             )}
-            {configured && (
-              <span
-                className={`agent-status ${agentOnline === null ? "unknown" : agentOnline ? "online" : "offline"}`}
-              >
-                <i />
-                {agentOnline === null
-                  ? "Connecting"
-                  : agentOnline
-                    ? "Agent online"
-                    : "Agent asleep"}
-              </span>
-            )}
-            <div className="assistant-menu">
+            {messages.length > 0 && (
               <button
-                className="quiet-button"
-                onClick={() => setMenuOpen((open) => !open)}
-                aria-label="Conversation options"
+                type="button"
+                className="chat-new"
+                onClick={clearConversation}
+                aria-label="New conversation"
+                title="New conversation"
               >
-                <Ellipsis size={19} />
+                <Plus size={18} />
               </button>
-              {menuOpen && (
-                <div className="assistant-menu-pop">
-                  {configured && (
-                    <button
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setSettingsOpen(true);
-                      }}
-                    >
-                      Assistant settings
-                    </button>
-                  )}
-                  <button onClick={clearConversation}>Clear conversation</button>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         </div>
         <div className={`assistant-center ${messages.length > 0 ? "chatting" : ""}`}>
@@ -2442,9 +2260,6 @@ function AssistantView() {
             <p>Private, and under your control.</p>
           )}
         </div>
-        {configured && settingsOpen && (
-          <AssistantSettingsPanel onClose={() => setSettingsOpen(false)} />
-        )}
       </main>
     </div>
   );
