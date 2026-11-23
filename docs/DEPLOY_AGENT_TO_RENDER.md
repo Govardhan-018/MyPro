@@ -82,18 +82,16 @@ Supabase only needs to know one URL, and the node that is already awake does
 the next hop itself (`CoreKeepAliveService`, which runs only on the node with
 `SCHEDULER_ENABLED=true`, so a laptop in dev never pings production).
 
-In the Supabase SQL editor, add the agent's URL to the Vault:
+Run `supabase/migrations/0015_keepalive.sql`, then `0016`, then `0018`.
+**There is nothing to configure** — 0018 reads the agent's address out of
+`node_status`, which the agent publishes itself, and the ping is an
+unauthenticated GET to the liveness endpoint.
 
-```sql
-select vault.create_secret(
-  'https://myproagent.onrender.com/api/v1/internal/keepalive',
-  'agent_keepalive_url',
-  'MyPro agent keep-alive endpoint');
-```
-
-Then run `supabase/migrations/0016_keepalive_agent.sql`. It schedules the
-agent ping every 10 minutes and retires the Supabase-side core ping, which
-the agent now does instead.
+> This is what `0018` fixes. The original version wanted two hand-made Vault
+> secrets, one of them got missed, and the result was ten months of perfect
+> cron runs that called nothing: every row in `service_pings` read `failed`,
+> the agent slept, and a health check took 27 seconds because it was a cold
+> start. A setup step that is easy to miss will be missed.
 
 Check it after twenty minutes:
 
@@ -130,6 +128,19 @@ curl -X POST https://myproagent.onrender.com/api/v1/internal/keepalive -H "x-int
 ```
 
 `{"status":"ok","scheduler":true}` means the drain loop is alive.
+
+**If it keeps going to sleep**, the keep-alive is the thing to look at, not
+the health check — Render's health check runs at deploy time and does not
+keep a free instance awake. Only inbound traffic does, and the cron is what
+supplies it:
+
+```sql
+select service, outcome, status_code, detail, created_at
+  from service_pings order by created_at desc limit 10;
+```
+
+Every row `ok` means it is working. Every row `failed` with no status code
+means the ping never left Supabase, and `detail` says why.
 
 ## 6. Local development afterwards
 

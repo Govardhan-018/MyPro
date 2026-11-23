@@ -32,7 +32,7 @@ not exist, so you do not reason as though they do.
 | Global route prefix | `api/v1` (`app.setGlobalPrefix`) |
 | Port | `PORT`, default **8787** |
 | Address discovery | `PresenceService` upserts `node_status` every **30s** with `PUBLIC_BASE_URL`; consumers treat >~90s as offline. Fixed on Render, random per start behind a tunnel — **never hardcoded** either way |
-| Staying awake | on Render free it sleeps after ~15 min idle, which would stop the clock; Supabase Cron pings `/internal/keepalive` every 10 min (`0016`) |
+| Staying awake | on Render free it sleeps after ~15 min idle, which would stop the clock; Supabase Cron GETs `/internal/keepalive` every 10 min (`0018`), finding the address in `node_status` — nothing to configure. Render's own health check does **not** keep a free instance awake; only inbound traffic does |
 | Reachability | web/app call `/assistant/*` here directly; everything else goes to `backend-render` |
 | Degradation | laptop asleep → UI greys out the assistant, render falls back to non-AI output |
 
