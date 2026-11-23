@@ -4,7 +4,7 @@ import {
 import { z } from 'zod';
 import { SupabaseService } from '../common/supabase.service';
 import { AuthGuard, CurrentUser, type AuthUser } from '../common/auth.guard';
-import { many, none, one } from '../common/crud';
+import { many, none, one, orIlike } from '../common/crud';
 
 const itemType = z.enum(['book', 'podcast', 'article', 'note']);
 
@@ -75,7 +75,7 @@ export class LibraryService {
     let q = db.from('library_items').select(SELECT).order('accessed_at', { ascending: false, nullsFirst: false });
     if (filters.type) q = q.eq('type', filters.type);
     if (filters.status) q = q.eq('status', filters.status);
-    if (filters.q) q = q.or(`title.ilike.%${filters.q}%,creator.ilike.%${filters.q}%`);
+    if (filters.q) q = q.or(orIlike(filters.q, ['title', 'creator']));
     return many(await q);
   }
 

@@ -17,6 +17,23 @@ function check<T>(res: { data: T | null; error: { message: string } | null }): T
   return (res.data ?? null) as T;
 }
 
+/**
+ * Build a safe PostgREST `or(...)` filter matching a free-text query against
+ * several columns with ILIKE.
+ *
+ * The query is embedded in PostgREST's comma-delimited `or=(…)` grammar, where
+ * a comma separates conditions and parentheses group them. A raw user query
+ * like `a, b (c)` therefore silently split the filter into broken fragments —
+ * "that book, the one" matched nothing and never errored. Double-quoting the
+ * pattern makes those characters literal; only the quote and backslash then
+ * need escaping. The `%`/`_` LIKE wildcards are left as-is deliberately — they
+ * only ever widen a search, never break it.
+ */
+export function orIlike(query: string, columns: string[]): string {
+  const pattern = query.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return columns.map((c) => `${c}.ilike."%${pattern}%"`).join(',');
+}
+
 /* ------------------------------------------------------------------ */
 /* system                                                              */
 /* ------------------------------------------------------------------ */
@@ -460,7 +477,7 @@ const searchLibrary = defineSkill({
       .limit(40);
     if (args.type) q = q.eq('type', args.type);
     if (args.status) q = q.eq('status', args.status);
-    if (args.query) q = q.or(`title.ilike.%${args.query}%,creator.ilike.%${args.query}%`);
+    if (args.query) q = q.or(orIlike(args.query, ['title', 'creator']));
     return check(await q);
   },
 });
@@ -535,7 +552,7 @@ const searchKnowledge = defineSkill({
       .limit(args.limit ?? 20);
     if (args.kind) q = q.eq('kind', args.kind);
     if (args.query) {
-      q = q.or(`title.ilike.%${args.query}%,body.ilike.%${args.query}%,anchor_text.ilike.%${args.query}%`);
+      q = q.or(orIlike(args.query, ['title', 'body', 'anchor_text']));
     }
     return check(await q);
   },
@@ -769,9 +786,7 @@ const searchEmails = defineSkill({
       await ctx.db
         .from('email_messages')
         .select('id, from_addr, subject, snippet, internal_date')
-        .or(
-          `subject.ilike.%${args.query}%,from_addr.ilike.%${args.query}%,snippet.ilike.%${args.query}%`,
-        )
+        .or(orIlike(args.query, ['subject', 'from_addr', 'snippet']))
         .order('internal_date', { ascending: false })
         .limit(args.limit ?? 20),
     );
