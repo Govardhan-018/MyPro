@@ -37,4 +37,11 @@ export interface Platform {
   fetch?: typeof fetch;
   /** Where the auth session is persisted (web: localStorage; RN: AsyncStorage). */
   storage?: AuthStorage;
+  /**
+   * How this client keeps the session fresh. `'self'` (default) refreshes
+   * through Render; `'follower'` never refreshes and only adopts sessions
+   * posted to it — the native WebView shell, where the hosted web app owns the
+   * single refresh loop. See `AuthOptions.refreshMode`.
+   */
+  refreshMode?: 'self' | 'follower';
 }

@@ -11,9 +11,14 @@ import { AuthGuard, CurrentUser, type AuthUser } from '../common/auth.guard';
 import { InternalAuthGuard } from '../common/internal-auth.guard';
 import { many, none } from '../common/crud';
 import { env } from '../config/env';
-import { GoogleOAuthService } from './google-oauth.service';
+import { GoogleOAuthService, scopesGrantSend, type GmailAccessLevel } from './google-oauth.service';
 import { GmailApiService, GmailReauthRequired } from './gmail-api.service';
 import { GmailSyncService } from './gmail-sync.service';
+
+const connectInput = z.object({
+  /** How much access to request for this mailbox. Defaults to read-only. */
+  mode: z.enum(['read', 'send']).default('read'),
+});
 
 const sendInput = z.object({
   user_id: z.string().uuid(),
@@ -49,7 +54,7 @@ export class GmailService {
     return many(
       await db
         .from('gmail_accounts')
-        .select('id, email, sync_state, sync_error, history_id, created_at')
+        .select('id, email, scopes, sync_state, sync_error, history_id, created_at')
         .order('created_at'),
     );
   }
@@ -59,15 +64,21 @@ export class GmailService {
     return { configured: this.oauth.configured() };
   }
 
-  /** Step one of connecting a mailbox: where to send the browser. */
-  connectUrl(user: AuthUser) {
+  /**
+   * Step one of connecting a mailbox: where to send the browser.
+   *
+   * `mode` decides the scopes requested — `'read'` for read-only, `'send'` for
+   * read + send. The user picks this per mailbox in Settings, so one account
+   * can be summarise-only while another is allowed to reply.
+   */
+  connectUrl(user: AuthUser, mode: GmailAccessLevel = 'read') {
     if (!this.oauth.configured()) {
       throw new BadRequestException(
         'Google OAuth is not configured on the server. Set GOOGLE_CLIENT_ID, ' +
           'GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI.',
       );
     }
-    return { url: this.oauth.authUrl(user.id) };
+    return { url: this.oauth.authUrl(user.id, mode) };
   }
 
   /**
@@ -169,7 +180,7 @@ export class GmailService {
     const query = this.supabase.admin
       .from('gmail_accounts')
       .select(
-        'id, user_id, email, access_token_enc, refresh_token_enc, token_expires_at, history_id',
+        'id, user_id, email, scopes, access_token_enc, refresh_token_enc, token_expires_at, history_id',
       )
       .eq('user_id', input.user_id);
 
@@ -182,7 +193,19 @@ export class GmailService {
       throw new BadRequestException('No Gmail account is connected — connect one in Settings.');
     }
 
-    const account = data as Parameters<GmailApiService['accessTokenFor']>[0] & { email: string };
+    const account = data as Parameters<GmailApiService['accessTokenFor']>[0] & {
+      email: string;
+      scopes: string | null;
+    };
+
+    // A read-only mailbox cannot send. Refuse clearly rather than letting Google
+    // reject it with an opaque 403 — the fix is to reconnect with send access.
+    if (!scopesGrantSend(account.scopes)) {
+      throw new BadRequestException(
+        `${account.email} is connected read-only. Reconnect it in Settings with ` +
+          '"Read & send" access to let MyPro send mail from it.',
+      );
+    }
 
     try {
       const token = await this.api.accessTokenFor(account);
@@ -262,8 +285,9 @@ export class GmailController {
 
   @Post('connect')
   @UseGuards(AuthGuard)
-  connect(@CurrentUser() user: AuthUser) {
-    return this.gmail.connectUrl(user);
+  connect(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { mode } = connectInput.parse(body ?? {});
+    return this.gmail.connectUrl(user, mode);
   }
 
   @Delete('accounts/:id')

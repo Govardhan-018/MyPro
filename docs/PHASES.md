@@ -172,6 +172,11 @@ second copy of the most dangerous credential in the system.
   `unique (user_id, email)`, so a second mailbox is just another row). The
   callback carries an **HMAC-signed, 10-minute `state`**: it arrives from
   Google with no session, so that signature is the whole CSRF defence.
+  **Per-account access level (Nov 2026):** connect takes `mode` (`read` |
+  `send`); a read-only mailbox requests only `gmail.readonly`, and the send path
+  is **gated** on the stored scope (`scopesGrantSend`) so it refuses clearly
+  rather than failing at Google. The Settings chooser and a per-mailbox access
+  tag show which is which.
 - ✅ **7.3** Tokens encrypted with AES-256-GCM
   (`common/crypto.service.ts`). Stored as Postgres **bytea hex literals**;
   writing base64 there stores the characters of the encoding and decrypts to
@@ -285,6 +290,15 @@ The work moved to the laptop and the *timing* moved to the phone.
   logs which half owns the clock at boot. **Never run both** — they race for
   the same rows and double-send.
 - ✅ **11.5** Phase 6.4's fan-out moved across with the loop.
+
+- ✅ **11.6** (Nov 2026) **Calendar events are notifications too.**
+  `/schedules/upcoming` now also expands calendar events — **1h before + at the
+  start + any custom `event_reminders`** (all-day → at-start only) — so the same
+  local-notification path reminds you of events, not just scheduled jobs. Two
+  Android channels (`reminders`, `briefs`) so categories mute independently, and
+  a tap opens the exact thing: the event on its day (`#calendar?event=…`), the
+  brief in the assistant. The shared mapping is `shared/src/notify.ts`; push is
+  reconciled onto the same channels/routes in `backend-local` push + `ShellApp`.
 
 Keep the phone **dumb**: it displays, captures and fires notifications. It
 does not become a second worker — Android throttles background work.
@@ -621,8 +635,12 @@ neighbours; this is what makes it one tool.
   events
 
 ### ⬜ Phase 18 — Make it last
-- **18.1** Retention and export — trim `assistant_messages` and
-  `schedule_runs` on the same drain loop; one-click export of everything
+- 🟡 **18.1** Retention and export. **Retention done** (`0019_retention.sql`): a
+  daily pg_cron job `prune_old_history()` deletes aged rows from the log/history
+  tables (audit, schedule_runs, notifications, skill_invocations, interventions,
+  research_usage, interest_findings, email_messages, assistant_messages) and
+  sweeps expired `research_cache` — live user content is never touched. Apply by
+  hand. **Still to do:** one-click export of everything.
 - **18.2** **The theme tokens.** `--graphite`, `--medium`, `--soft`,
   `--accent`, `--deep` and `--secondary` are all `#ffffff`, used ~97 times.
   That single decision has already produced four separate invisible-element

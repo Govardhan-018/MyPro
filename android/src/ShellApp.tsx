@@ -20,13 +20,8 @@ import {
 import { Text } from './components/Typography';
 import { client } from './lib/client';
 import { armUpcoming, registerForPush } from './lib/notifications';
-import {
-  INJECTED_BEFORE,
-  WEB_URL,
-  isWebConfigured,
-  toDeepLinkView,
-  type DeepLinkView,
-} from './lib/shell';
+import { hashFromDeeplink } from '@mypro/shared';
+import { INJECTED_BEFORE, WEB_URL, isWebConfigured } from './lib/shell';
 
 /**
  * The Android app, as a thin native shell around the deployed web app
@@ -68,19 +63,21 @@ function Shell() {
   const [reloadKey, setReloadKey] = useState(0);
   const canGoBack = useRef(false);
   /** A deep-link requested before the page was ready; applied once it loads. */
-  const pendingDeepLink = useRef<DeepLinkView | null>(null);
+  const pendingDeepLink = useRef<string | null>(null);
 
-  /** Send the web to a section by driving the hash its router already reads. */
-  const openView = useCallback((view: DeepLinkView) => {
+  /**
+   * Drive the web to a route by setting the hash its router reads. `hash` is
+   * the exact string the notification carried (e.g. '' for Today, 'calendar?
+   * event=…' for an event), built by the shared `notificationHash`. It is
+   * JSON-stringified into the injected JS so an event id or ISO instant can
+   * never break out of the assignment.
+   */
+  const openHash = useCallback((hash: string) => {
     if (!loaded) {
-      pendingDeepLink.current = view;
+      pendingDeepLink.current = hash;
       return;
     }
-    const js =
-      view === 'today'
-        ? `window.location.hash = ''; true;`
-        : `window.location.hash = '${view}'; true;`;
-    webRef.current?.injectJavaScript(js);
+    webRef.current?.injectJavaScript(`window.location.hash = ${JSON.stringify(hash)}; true;`);
   }, [loaded]);
 
   /**
@@ -121,21 +118,23 @@ function Shell() {
     return () => sub.remove();
   }, []);
 
-  // Notification taps → the section the notification was about. One handles the
-  // tap that launched the app (cold start), the other taps while it is open.
+  // Notification taps → the exact route the notification was about. One handles
+  // the tap that launched the app (cold start), the other taps while it is
+  // open. The route string was computed when the notification was armed (shared
+  // `notificationHash`) and stored on it, so here we just open it.
   const handledLaunch = useRef<string | null>(null);
   useEffect(() => {
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       const id = response?.notification.request.identifier ?? null;
       if (!id || handledLaunch.current === id) return;
       handledLaunch.current = id;
-      openView(toDeepLinkView(response?.notification.request.content.data?.deeplink));
+      openHash(hashOf(response));
     });
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      openView(toDeepLinkView(response.notification.request.content.data?.deeplink));
+      openHash(hashOf(response));
     });
     return () => sub.remove();
-  }, [openView]);
+  }, [openHash]);
 
   // The Android back button walks WebView history before leaving the app.
   useEffect(() => {
@@ -157,16 +156,12 @@ function Shell() {
   const onLoadEnd = useCallback(() => {
     setLoaded(true);
     setFailed(false);
-    if (pendingDeepLink.current) {
-      const view = pendingDeepLink.current;
+    if (pendingDeepLink.current !== null) {
+      const hash = pendingDeepLink.current;
       pendingDeepLink.current = null;
       // `loaded` is about to flip true; drive the hash directly rather than
-      // through `openView`, whose `loaded` is still the previous render's.
-      const js =
-        view === 'today'
-          ? `window.location.hash = ''; true;`
-          : `window.location.hash = '${view}'; true;`;
-      webRef.current?.injectJavaScript(js);
+      // through `openHash`, whose `loaded` is still the previous render's.
+      webRef.current?.injectJavaScript(`window.location.hash = ${JSON.stringify(hash)}; true;`);
     }
   }, []);
 
@@ -248,6 +243,24 @@ function Shell() {
       ) : null}
     </View>
   );
+}
+
+/**
+ * The in-app route a notification response should open.
+ *
+ *  - **Local** notifications (the clock) carry a ready-made `hash`, built by the
+ *    shared `notificationHash` when they were armed — down to a calendar event.
+ *  - **Push** notifications (Expo, sent by the laptop) carry a `deeplink` path
+ *    such as `/assistant`; the shared `hashFromDeeplink` maps it to a hash.
+ *
+ * Anything without either opens Today (the empty hash).
+ */
+function hashOf(response: Notifications.NotificationResponse | null): string {
+  const data = response?.notification.request.content.data as
+    | { hash?: unknown; deeplink?: unknown }
+    | undefined;
+  if (typeof data?.hash === 'string') return data.hash;
+  return hashFromDeeplink(typeof data?.deeplink === 'string' ? data.deeplink : null);
 }
 
 /** The origin of a URL, or '' if it cannot be parsed. */

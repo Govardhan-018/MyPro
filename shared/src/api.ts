@@ -6,6 +6,7 @@ import type {
   AnnotationKind,
   AnnotationRow,
   GmailAccountRow,
+  GmailAccessLevel,
   AssistantMessageRow,
   AssistantSettingsRow,
   CommitmentRow,
@@ -259,6 +260,11 @@ export function createApi(
       updateEvent: (id: string, body: Record<string, unknown>) =>
         patch(`/calendar/events/${id}`, body),
       deleteEvent: (id: string) => del(`/calendar/events/${id}`),
+      /** Mark an event done (server enforces the on-the-day, 12h window). */
+      completeEvent: (id: string) =>
+        post<Record<string, unknown>>(`/calendar/events/${id}/complete`, {}),
+      /** Clear a completion. */
+      uncompleteEvent: (id: string) => del(`/calendar/events/${id}/complete`),
       categories: () => get<Record<string, unknown>[]>('/calendar/categories'),
       createCategory: (name: string, tone?: string) =>
         post('/calendar/categories', { name, tone }),
@@ -335,9 +341,11 @@ export function createApi(
       /**
        * Returns Google's consent URL. The caller navigates to it; Google
        * redirects back to render, which returns the browser to the app with
-       * `?gmail=connected`.
+       * `?gmail=connected`. `mode` chooses the access requested for this
+       * mailbox — `'read'` (read-only) or `'send'` (read + send).
        */
-      connect: () => post<{ url: string }>('/gmail/connect'),
+      connect: (mode: GmailAccessLevel = 'read') =>
+        post<{ url: string }>('/gmail/connect', { mode }),
       removeAccount: (id: string) => del(`/gmail/accounts/${id}`),
       /**
        * Sync now. Request-driven on purpose — render is allowed to sleep, so

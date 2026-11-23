@@ -14,7 +14,11 @@ import { createApi } from './api';
 
 export function createClient(platform: Platform) {
   const env = normalizeEnv(platform.env);
-  const auth = createAuth(env, { storage: platform.storage, fetch: platform.fetch });
+  const auth = createAuth(env, {
+    storage: platform.storage,
+    fetch: platform.fetch,
+    refreshMode: platform.refreshMode,
+  });
   const { api, forgetAgentBase } = createApi(env, auth, platform.fetch);
   return { env, auth, api, forgetAgentBase };
 }
@@ -70,18 +74,28 @@ export {
 } from './pdf';
 export { createPdfTextRemote, type PdfTextApi } from './pdfRemote';
 export {
+  notificationChannelFor,
+  notificationHash,
+  hashFromDeeplink,
+  NOTIFICATION_VIEWS,
+  type NotificationChannel,
+  type NotificationView,
+} from './notify';
+export {
   createNotificationStream,
   type NotificationStream,
   type NotificationStreamOptions,
   type RealtimeConfig,
   type RealtimeState,
 } from './realtime';
+export { gmailScopesGrantSend } from './types';
 export type {
   AnnotationKind,
   LibraryType,
   LibraryItemRow,
   AnnotationRow,
   GmailAccountRow,
+  GmailAccessLevel,
   ScheduleOccurrence,
   ScheduleRow,
   AssistantMessageRow,

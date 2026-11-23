@@ -91,10 +91,13 @@ import {
   AgentOfflineError,
   api,
   forgetAgentBase,
+  gmailScopesGrantSend,
+  NOTIFICATION_VIEW_NAMES,
   type AgentTurnSummary,
   type DisplayBlock,
   type AssistantSettingsRow,
   type EffortMode,
+  type GmailAccessLevel,
   type PendingActionRow,
   type ReceiptRow,
 } from "./lib/api";
@@ -134,6 +137,7 @@ import {
   nowOffset,
   dateKeyOf,
   timeInputValue,
+  eventActionState,
   HOUR_LABELS,
   GRID_HEIGHT,
   DEFAULT_SCROLL_TOP,
@@ -176,25 +180,42 @@ const VIEWS: View[] = [
  */
 function viewFromHash(): View {
   if (typeof window === "undefined") return "today";
-  const raw = window.location.hash.replace(/^#\/?/, "");
+  // The hash may carry a focus query (e.g. `#calendar?event=…`), so match only
+  // the part before `?`.
+  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0];
   return (VIEWS as string[]).includes(raw) ? (raw as View) : "today";
+}
+
+/**
+ * A deep link's focus — the specific thing a notification tap wants open, not
+ * just the section. Today only Calendar uses it (open this event, on its day),
+ * but the shape is general. `token` changes on every parse so the same event
+ * tapped twice still re-triggers the effect that opens it.
+ */
+export interface DeepLinkFocus {
+  event?: string;
+  at?: string;
+  token: number;
+}
+
+function focusFromHash(token: number): DeepLinkFocus {
+  if (typeof window === "undefined") return { token };
+  const query = window.location.hash.split("?")[1] ?? "";
+  const params = new URLSearchParams(query);
+  return {
+    event: params.get("event") ?? undefined,
+    at: params.get("at") ?? undefined,
+    token,
+  };
 }
 
 /**
  * Deeplinks a notification is allowed to open. Narrow on purpose: the string
  * arrives from a push payload, and a bare whitelist is the whole validation.
+ * The list lives in `@mypro/shared` so the web and the native shell validate
+ * against exactly the same set.
  */
-const NOTIFICATION_VIEWS: readonly View[] = [
-  "today",
-  "calendar",
-  "library",
-  "knowledge",
-  "health",
-  "commitments",
-  "schedules",
-  "assistant",
-  "settings",
-];
+const NOTIFICATION_VIEWS = NOTIFICATION_VIEW_NAMES as readonly View[];
 
 // Lottie is large; load it in its own chunk so the first screen renders immediately.
 const LottieSvg = lazy(() =>
@@ -690,11 +711,12 @@ function TodayView({
   );
 }
 
-function CalendarView() {
+function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
   const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
   const [refDate, setRefDate] = useState(() => new Date());
   // The hook reloads whenever you page into another month.
-  const { events, loading, error, createEvent, updateEvent, deleteEvent } = useCalendar(refDate);
+  const { events, loading, error, createEvent, updateEvent, deleteEvent, completeEvent, uncompleteEvent } =
+    useCalendar(refDate);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -791,6 +813,70 @@ function CalendarView() {
       setFormError(caught instanceof Error ? caught.message : "Could not delete the event.");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // --- Deep link: open the event a notification was tapped on -----------------
+  // A calendar reminder's tap arrives as a focus ({ event, at }). Jump to that
+  // event's day (so useCalendar loads the month around it), then open its sheet
+  // once the data has settled — the "go to the proper place" behaviour.
+  const focusHandledToken = useRef(-1);
+  const [pendingFocusEvent, setPendingFocusEvent] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focus?.event || focus.token === focusHandledToken.current) return;
+    focusHandledToken.current = focus.token;
+    const when = focus.at ? new Date(focus.at) : null;
+    if (when && !Number.isNaN(when.getTime())) {
+      setRefDate(when);
+      setMode("Day");
+    }
+    setPendingFocusEvent(focus.event);
+  }, [focus]);
+  useEffect(() => {
+    if (!pendingFocusEvent || loading) return;
+    const match = events.find((e) => e.id === pendingFocusEvent);
+    if (match) openEdit(match);
+    // Found or not, stop after the first settled load so a deleted event does
+    // not keep the sheet trying to open forever.
+    setPendingFocusEvent(null);
+  }, [events, loading, pendingFocusEvent]);
+
+  // --- Completion ("Done") and the time-based lock on editing ----------------
+  // The event being edited, and what may be done to it right now. An event is
+  // editable only before it starts; it may be marked done once it has started,
+  // for a 12-hour window. The backend enforces both — this just shapes the UI.
+  const [completing, setCompleting] = useState(false);
+  const editingEvent = editingId ? events.find((e) => e.id === editingId) ?? null : null;
+  const actionState = editingEvent ? eventActionState(editingEvent) : null;
+  const lockedForEdit = Boolean(editingId) && actionState !== null && !actionState.editable;
+
+  const markDone = async () => {
+    if (!editingId) return;
+    setCompleting(true);
+    setFormError(null);
+    try {
+      await completeEvent(editingId);
+      setShowModal(false);
+      setEditingId(null);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Could not mark this done.");
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const unmarkDone = async () => {
+    if (!editingId) return;
+    setCompleting(true);
+    setFormError(null);
+    try {
+      await uncompleteEvent(editingId);
+      setShowModal(false);
+      setEditingId(null);
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Could not update this event.");
+    } finally {
+      setCompleting(false);
     }
   };
 
@@ -933,11 +1019,12 @@ function CalendarView() {
                       .map((ev) => (
                         <button
                           type="button"
-                          className={`week-all-day-chip calendar-${ev.tone}`}
+                          className={`week-all-day-chip calendar-${ev.tone}${ev.completedAt ? " is-done" : ""}`}
                           key={ev.id}
                           onClick={() => openEdit(ev)}
                           title={ev.title}
                         >
+                          {ev.completedAt ? <Check size={11} className="event-done-tick" /> : null}
                           {ev.title}
                         </button>
                       ))}
@@ -965,6 +1052,7 @@ function CalendarView() {
                           title={ev.title}
                           meta={eventMeta(ev)}
                           color={ev.tone}
+                          completed={Boolean(ev.completedAt)}
                           onClick={() => openEdit(ev)}
                         />
                       );
@@ -1002,7 +1090,15 @@ function CalendarView() {
           <div className="event-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-heading">
               <div>
-                <span className="section-kicker">{editingId ? "EDIT EVENT" : "QUICK ADD"}</span>
+                <span className="section-kicker">
+                  {actionState?.completed
+                    ? "COMPLETED"
+                    : editingId
+                      ? lockedForEdit
+                        ? "EVENT"
+                        : "EDIT EVENT"
+                      : "QUICK ADD"}
+                </span>
                 <h2>{editingId ? "Change this event" : "Create an event"}</h2>
               </div>
               <IconButton label="Close" onClick={closeModal}>
@@ -1015,6 +1111,7 @@ function CalendarView() {
                 value={form.title}
                 onChange={(e) => setField("title", e.target.value)}
                 placeholder="Event title"
+                disabled={lockedForEdit}
               />
             </label>
             <div className="field-grid">
@@ -1025,6 +1122,7 @@ function CalendarView() {
                   value={form.date}
                   min={dateMin}
                   onChange={(e) => setField("date", e.target.value)}
+                  disabled={lockedForEdit}
                 />
               </label>
               <label className="field-label">
@@ -1033,6 +1131,7 @@ function CalendarView() {
                   value={form.location}
                   onChange={(e) => setField("location", e.target.value)}
                   placeholder="Optional"
+                  disabled={lockedForEdit}
                 />
               </label>
             </div>
@@ -1047,6 +1146,7 @@ function CalendarView() {
                 className="field-checkbox"
                 checked={form.allDay}
                 onChange={(e) => setField("allDay", e.target.checked)}
+                disabled={lockedForEdit}
               />
               All day
             </label>
@@ -1059,6 +1159,7 @@ function CalendarView() {
                     value={form.startTime}
                     min={startMin}
                     onChange={(e) => setField("startTime", e.target.value)}
+                    disabled={lockedForEdit}
                   />
                 </label>
                 <label className="field-label">
@@ -1068,11 +1169,29 @@ function CalendarView() {
                     value={form.endTime}
                     min={form.startTime || undefined}
                     onChange={(e) => setField("endTime", e.target.value)}
+                    disabled={lockedForEdit}
                   />
                 </label>
               </div>
             )}
-            {validationMessage && (
+            {/* Why editing is off / what can be done now. */}
+            {editingId && actionState && (
+              actionState.completed ? (
+                <p className="event-state-note done">
+                  <Check size={14} /> Marked done. You can unmark it if that was a mistake.
+                </p>
+              ) : lockedForEdit ? (
+                <p className="event-state-note">
+                  This event has started, so it can no longer be edited —{" "}
+                  {actionState.canComplete
+                    ? "mark it done or delete it."
+                    : actionState.completionMissed
+                      ? "the window to mark it done has passed; you can still delete it."
+                      : "you can delete it."}
+                </p>
+              ) : null
+            )}
+            {validationMessage && !lockedForEdit && (
               <p className="composer-error" role="alert">
                 {validationMessage}
               </p>
@@ -1083,7 +1202,7 @@ function CalendarView() {
                 <button
                   className="secondary-button event-delete-button"
                   onClick={removeEvent}
-                  disabled={saving || deleting}
+                  disabled={saving || deleting || completing}
                   aria-busy={deleting}
                 >
                   {deleting ? <Spinner /> : <Trash2 size={15} />}
@@ -1093,26 +1212,49 @@ function CalendarView() {
               <button
                 className="secondary-button"
                 onClick={closeModal}
-                disabled={saving || deleting}
+                disabled={saving || deleting || completing}
               >
                 Cancel
               </button>
-              <button
-                className="primary-button"
-                onClick={save}
-                disabled={saving || deleting || formInvalid}
-                aria-busy={saving}
-              >
-                {saving ? (
-                  <>
-                    <Spinner /> Saving…
-                  </>
-                ) : editingId ? (
-                  "Save changes"
-                ) : (
-                  "Add to calendar"
-                )}
-              </button>
+              {/* Mark done / undo — only inside the 12-hour window, or to undo. */}
+              {editingId && actionState?.completed ? (
+                <button
+                  className="secondary-button event-done-button"
+                  onClick={unmarkDone}
+                  disabled={completing || deleting}
+                  aria-busy={completing}
+                >
+                  {completing ? <Spinner /> : null} Mark not done
+                </button>
+              ) : editingId && actionState?.canComplete ? (
+                <button
+                  className="primary-button event-done-button"
+                  onClick={markDone}
+                  disabled={completing || deleting}
+                  aria-busy={completing}
+                >
+                  {completing ? <Spinner /> : <Check size={15} />} Mark done
+                </button>
+              ) : null}
+              {/* Save only when the event may still be edited (always for a new one). */}
+              {!lockedForEdit && (
+                <button
+                  className="primary-button"
+                  onClick={save}
+                  disabled={saving || deleting || completing || formInvalid}
+                  aria-busy={saving}
+                >
+                  {saving ? (
+                    <>
+                      <Spinner /> Saving…
+                    </>
+                  ) : editingId ? (
+                    "Save changes"
+                  ) : (
+                    "Add to calendar"
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1238,6 +1380,7 @@ function CalendarEvent({
   title,
   meta,
   color,
+  completed,
   onClick,
 }: {
   top: number;
@@ -1245,17 +1388,21 @@ function CalendarEvent({
   title: string;
   meta: string;
   color: string;
+  completed?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
       type="button"
-      className={`calendar-event calendar-${color}`}
+      className={`calendar-event calendar-${color}${completed ? " is-done" : ""}`}
       style={{ top, height }}
       onClick={onClick}
-      title={`${title} — ${meta}`}
+      title={`${title} — ${meta}${completed ? " (done)" : ""}`}
     >
-      <strong>{title}</strong>
+      <strong>
+        {completed ? <Check size={11} className="event-done-tick" /> : null}
+        {title}
+      </strong>
       <span>{meta}</span>
     </button>
   );
@@ -1307,10 +1454,11 @@ function DayCalendar({
             {allDay.map((e) => (
               <button
                 type="button"
-                className={`week-all-day-chip calendar-${e.tone}`}
+                className={`week-all-day-chip calendar-${e.tone}${e.completedAt ? " is-done" : ""}`}
                 key={e.id}
                 onClick={() => onOpenEvent(e)}
               >
+                {e.completedAt ? <Check size={11} className="event-done-tick" /> : null}
                 {e.title}
               </button>
             ))}
@@ -1334,6 +1482,7 @@ function DayCalendar({
                 title={ev.title}
                 meta={`${eventMeta(ev)}${ev.location ? ` · ${ev.location}` : ""}`}
                 color={ev.tone}
+                completed={Boolean(ev.completedAt)}
                 onClick={() => onOpenEvent(ev)}
               />
             );
@@ -1408,7 +1557,7 @@ function MonthCalendar({
               <div className="month-day-events">
                 {dayEvents.slice(0, 2).map((event) => (
                   <div
-                    className={`month-event month-event-${event.tone}`}
+                    className={`month-event month-event-${event.tone}${event.completedAt ? " is-done" : ""}`}
                     key={event.id}
                     onClick={(clickEvent) => {
                       clickEvent.stopPropagation();
@@ -1444,11 +1593,15 @@ function MonthCalendar({
         <div className="mobile-agenda-list">
           {selectedEvents.map((event) => (
             <article
-              className={`mobile-agenda-event mobile-month-event tone-${event.tone}`}
+              className={`mobile-agenda-event mobile-month-event tone-${event.tone}${event.completedAt ? " is-done" : ""}`}
               key={event.id}
+              onClick={() => onOpenEvent(event)}
             >
               <div>
-                <strong>{event.title}</strong>
+                <strong>
+                  {event.completedAt ? <Check size={12} className="event-done-tick" /> : null}
+                  {event.title}
+                </strong>
                 <span>{eventMeta(event)}</span>
               </div>
               <ChevronRight size={16} />
@@ -4357,6 +4510,8 @@ function SettingsView({
   // owns notifications in the app. (Android upgrade §2 — not optional.)
   const push = usePush(!!userEmail && !inShell);
   const gmail = useGmail(!!userEmail);
+  // The access a new mailbox is connected with — read-only, or read + send.
+  const [mailMode, setMailMode] = useState<GmailAccessLevel>("read");
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [savedNote, setSavedNote] = useState(false);
@@ -4574,31 +4729,37 @@ function SettingsView({
               </p>
             ) : (
               <>
-                {gmail.accounts.map((account) => (
-                  <div className="settings-status-row" key={account.id}>
-                    <span
-                      className={`settings-status-dot mail-${account.sync_state}`}
-                      aria-hidden="true"
-                    />
-                    <div>
-                      <strong>{account.email}</strong>
-                      <small>
-                        {account.sync_error
-                          ? account.sync_error
-                          : account.history_id
-                            ? "Synced — new mail arrives on the next sync."
-                            : "Connected. Sync to pull in your recent mail."}
-                      </small>
+                {gmail.accounts.map((account) => {
+                  const canSend = gmailScopesGrantSend(account.scopes);
+                  return (
+                    <div className="settings-status-row" key={account.id}>
+                      <span
+                        className={`settings-status-dot mail-${account.sync_state}`}
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <strong>{account.email}</strong>
+                        <small>
+                          <span className={`mail-access-tag ${canSend ? "send" : "read"}`}>
+                            {canSend ? "Read & send" : "Read only"}
+                          </span>
+                          {account.sync_error
+                            ? ` · ${account.sync_error}`
+                            : account.history_id
+                              ? " · Synced — new mail arrives on the next sync."
+                              : " · Connected. Sync to pull in your recent mail."}
+                        </small>
+                      </div>
+                      <button
+                        className="settings-inline-action"
+                        onClick={() => void gmail.disconnect(account.id)}
+                        disabled={gmail.busy}
+                      >
+                        Disconnect
+                      </button>
                     </div>
-                    <button
-                      className="settings-inline-action"
-                      onClick={() => void gmail.disconnect(account.id)}
-                      disabled={gmail.busy}
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {!gmail.accounts.length && (
                   <p className="settings-hint">
@@ -4606,10 +4767,36 @@ function SettingsView({
                   </p>
                 )}
 
+                {/* Access level for the next mailbox. Per-account: one inbox
+                    can be read-only while another may be replied from. */}
+                <div
+                  className="mail-access-picker segmented"
+                  role="group"
+                  aria-label="Access for the mailbox you connect"
+                >
+                  {(["read", "send"] as GmailAccessLevel[]).map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      className={mailMode === level ? "selected" : ""}
+                      aria-pressed={mailMode === level}
+                      onClick={() => setMailMode(level)}
+                      disabled={gmail.busy}
+                    >
+                      {level === "read" ? "Read only" : "Read & send"}
+                    </button>
+                  ))}
+                </div>
+                <p className="settings-hint">
+                  {mailMode === "send"
+                    ? "MyPro can read your mail and, with your approval each time, send replies from it."
+                    : "MyPro can read and triage this mailbox. It can never send from a read-only mailbox."}
+                </p>
+
                 <div className="settings-panel-actions">
                   <button
                     className="primary-button"
-                    onClick={() => void gmail.connect()}
+                    onClick={() => void gmail.connect(mailMode)}
                     disabled={gmail.busy}
                   >
                     {gmail.accounts.length ? "Connect another" : "Connect Gmail"}
@@ -4931,6 +5118,9 @@ function AppShell({
   // `view` drives navigation highlights immediately; `displayedView` is the page on screen.
   const [view, setView] = useState<View>(viewFromHash);
   const [displayedView, setDisplayedView] = useState<View>(viewFromHash);
+  // The deep-link focus (e.g. which calendar event a notification tap opened),
+  // parsed from the hash on mount and refreshed on every hashchange.
+  const [deepLinkFocus, setDeepLinkFocus] = useState<DeepLinkFocus>(() => focusFromHash(0));
   const [entranceToken, setEntranceToken] = useState(0);
   const [assistantVisited, setAssistantVisited] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -5106,6 +5296,8 @@ function AppShell({
   useEffect(() => {
     const onHashChange = () => {
       const next = viewFromHash();
+      // Refresh the focus first, so the view it lands on can act on it.
+      setDeepLinkFocus((prev) => focusFromHash(prev.token + 1));
       if (next !== displayedRef.current) navigate(next);
     };
     window.addEventListener("hashchange", onHashChange);
@@ -5308,7 +5500,7 @@ function AppShell({
   const renderView = () => {
     if (displayedView === "today")
       return <TodayView navigate={navigate} items={libraryItems} onOpenMedia={openMedia} />;
-    if (displayedView === "calendar") return <CalendarView />;
+    if (displayedView === "calendar") return <CalendarView focus={deepLinkFocus} />;
     if (displayedView === "library")
       return (
         <LibraryView

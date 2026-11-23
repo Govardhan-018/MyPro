@@ -38,36 +38,6 @@ export const SHELL_VERSION = '1.0';
 export const INJECTED_BEFORE = `window.__MYPRO_SHELL__ = '${SHELL_VERSION}'; true;`;
 
 /**
- * The sections a notification is allowed to deep-link to — the same whitelist
- * the web keeps, because the string ultimately came from a notification
- * payload. Anything else falls back to Today.
- */
-const DEEP_LINK_VIEWS = [
-  'today',
-  'calendar',
-  'library',
-  'knowledge',
-  'health',
-  'commitments',
-  'schedules',
-  'assistant',
-] as const;
-
-export type DeepLinkView = (typeof DEEP_LINK_VIEWS)[number];
-
-/** Narrow an arbitrary deeplink value to a known view, defaulting to Today. */
-export function toDeepLinkView(value: unknown): DeepLinkView {
-  return (DEEP_LINK_VIEWS as readonly string[]).includes(value as string)
-    ? (value as DeepLinkView)
-    : 'today';
-}
-
-/** The web URL for a section, via the hash the web app routes on. */
-export function webUrlForView(view: DeepLinkView): string {
-  return view === 'today' ? WEB_URL : `${WEB_URL}#${view}`;
-}
-
-/**
  * Whether to run as the WebView shell (the default) or the legacy native
  * screens. The native UI stays one release behind this flag — set
  * `EXPO_PUBLIC_SHELL` to `native` / `0` / `false` / `off` to get it back —

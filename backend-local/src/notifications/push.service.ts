@@ -26,6 +26,16 @@ const EXPO_TOKEN_RE = /^Expo(nent)?PushToken\[.+\]$/;
 const PUSH_TIMEOUT_MS = 10_000;
 
 /**
+ * The Android channel a push should land on, mirroring the local clock's
+ * channels (`android/src/lib/notifications.ts`) so the user tunes one set of
+ * categories whether a notification was armed locally or pushed. A brief is its
+ * own channel; everything else is a reminder.
+ */
+function channelForKind(kind?: string): 'reminders' | 'briefs' {
+  return kind && kind.startsWith('brief') ? 'briefs' : 'reminders';
+}
+
+/**
  * One way out of the system, used by everything that has something to say.
  *
  * It writes the `notifications` row first — that row is the durable record and
@@ -236,7 +246,7 @@ export class PushService {
           title: payload.title,
           body: payload.body ?? '',
           sound: 'default',
-          channelId: 'default',
+          channelId: channelForKind(payload.kind),
           data: {
             id: notificationId,
             deeplink: payload.deeplink ?? null,

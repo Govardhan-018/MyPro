@@ -7,18 +7,43 @@ const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
 
 /**
- * Read mail, and send as the user. `gmail.send` is deliberately *not*
- * `gmail.modify`: the assistant never needs to archive, label or delete, and
- * a scope you cannot use is a scope that cannot be abused.
+ * The access a mailbox is connected with.
  *
- * Both of these are **restricted** scopes. See the trap in the module doc.
+ *  - `'read'` — read mail only (`gmail.readonly`). The assistant can summarise
+ *    and surface, never send.
+ *  - `'send'` — read **and** send as the user (`gmail.readonly` + `gmail.send`).
+ *    `gmail.send` is deliberately *not* `gmail.modify`: the assistant never
+ *    needs to archive, label or delete, and a scope you cannot use is a scope
+ *    that cannot be abused.
+ *
+ * The choice is per-mailbox and made at connect time. `gmail.readonly` and
+ * `gmail.send` are both **restricted** scopes — see the trap in the module doc.
  */
-export const GMAIL_SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'openid',
-  'email',
-];
+export type GmailAccessLevel = 'read' | 'send';
+
+const READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+const IDENTITY_SCOPES = ['openid', 'email'];
+
+/** The scopes requested for a given access level. */
+export function scopesForLevel(level: GmailAccessLevel): string[] {
+  return level === 'send'
+    ? [READONLY_SCOPE, SEND_SCOPE, ...IDENTITY_SCOPES]
+    : [READONLY_SCOPE, ...IDENTITY_SCOPES];
+}
+
+/** Whether a stored scope string actually grants send. */
+export function scopesGrantSend(scopes: string | null | undefined): boolean {
+  return (scopes ?? '').split(/\s+/).filter(Boolean).includes(SEND_SCOPE);
+}
+
+/** The access level a stored scope string represents, for display. */
+export function levelFromScopes(scopes: string | null | undefined): GmailAccessLevel {
+  return scopesGrantSend(scopes) ? 'send' : 'read';
+}
+
+/** Back-compat default (read + send), used only as a token-response fallback. */
+export const GMAIL_SCOPES = scopesForLevel('send');
 
 export interface GoogleTokens {
   accessToken: string;
@@ -71,13 +96,13 @@ export class GoogleOAuthService {
    * cannot attach their mailbox to someone else's account by crafting a
    * callback URL, which is the whole CSRF surface of an OAuth connect flow.
    */
-  authUrl(userId: string): string {
+  authUrl(userId: string, level: GmailAccessLevel = 'send'): string {
     const { clientId, redirectUri } = this.creds();
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
-      scope: GMAIL_SCOPES.join(' '),
+      scope: scopesForLevel(level).join(' '),
       // Without both of these Google returns no refresh token on a repeat
       // connect, and the mailbox dies at the first access-token expiry.
       access_type: 'offline',

@@ -7,7 +7,7 @@
  * redirect works everywhere including an installed PWA.
  */
 import { useCallback, useEffect, useState } from 'react';
-import type { GmailAccountRow } from '@mypro/shared';
+import type { GmailAccountRow, GmailAccessLevel } from '@mypro/shared';
 import { api } from './api';
 import { isApiConfigured } from './env';
 
@@ -20,7 +20,8 @@ export interface GmailState {
   error: string | null;
   /** Result of the last sync, phrased for a person. */
   note: string | null;
-  connect: () => Promise<void>;
+  /** Start the connect flow for a mailbox at the chosen access level. */
+  connect: (mode: GmailAccessLevel) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
   sync: () => Promise<void>;
   reload: () => void;
@@ -88,11 +89,11 @@ export function useGmail(enabled: boolean): GmailState {
     );
   }, [load]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (mode: GmailAccessLevel) => {
     setBusy(true);
     setError(null);
     try {
-      const { url } = await api.gmail.connect();
+      const { url } = await api.gmail.connect(mode);
       // Leaves the app. The state in that URL is short-lived and signed, so
       // it cannot be saved and replayed later.
       window.location.assign(url);

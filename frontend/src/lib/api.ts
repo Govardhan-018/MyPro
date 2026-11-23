@@ -9,13 +9,20 @@ import { client } from './client';
 export const api = client.api;
 export const forgetAgentBase = client.forgetAgentBase;
 
-export { ApiError, AgentOfflineError } from '@mypro/shared';
+export {
+  ApiError,
+  AgentOfflineError,
+  gmailScopesGrantSend,
+  NOTIFICATION_VIEWS as NOTIFICATION_VIEW_NAMES,
+} from '@mypro/shared';
 
 export type {
   AnnotationKind,
   LibraryType,
   LibraryItemRow,
   AnnotationRow,
+  GmailAccountRow,
+  GmailAccessLevel,
   ScheduleRow,
   AssistantMessageRow,
   AssistantSettingsRow,

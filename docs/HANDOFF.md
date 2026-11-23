@@ -3,85 +3,82 @@
 What the last session changed. `docs/PHASES.md` is the durable plan; this file
 is volatile. Read `AGENTS.md` too.
 
-## This session: the Android WebView shell (Phase 13.10 / ANDROID_UPGRADE)
+## This session: notifications, Gmail access levels, event completion, session durability, retention
 
-Executed `docs/ANDROID_UPGRADE.md` through the cutover (route steps 1–5). The
-phone is now a thin native shell around the deployed web app: one codebase, one
-design, nothing to drift. The native screens are untouched but demoted behind a
-flag, not deleted — that waits on a real-device check.
+Five feature areas, all typechecked (all four packages) and unit-tested; the
+frontend builds. Nothing is committed.
 
-**Typechecks pass in all four packages, the web app builds, and the Android JS
-bundles with `react-native-webview` resolving.** What has *not* happened is a
-run on a real phone (no sandbox can) — see "Before it ships" below.
+### 1. Session durability — the "logs out too quickly" fix
+`shared/src/auth.ts`: refresh no longer wipes the session on *any* failure —
+only on a real rejection (401/400/403). A network blink or a cold Render at
+token-expiry now keeps the session. Added **`refreshMode`** (`'self'` default,
+`'follower'`): the native WebView shell client is a `follower`
+(`android/src/lib/client.ts`, gated on `shellEnabled()`) so it never rotates
+the shared Supabase refresh token out from under the web app — the real cause
+of the hourly logout. Threaded through `Platform` → `createClient` → `createAuth`.
+Tests: `shared/src/auth.test.ts` (6).
 
-### What changed
-- **`android/App.tsx`** now chooses: `shellEnabled()` → `src/ShellApp.tsx`
-  (default), else the legacy UI, moved verbatim to **`src/NativeApp.tsx`** with
-  its font gate + theme/toast providers kept in `App.tsx`.
-- **`android/src/ShellApp.tsx`** (new) — a `react-native-webview` onto
-  `EXPO_PUBLIC_WEB_URL`. Native-only concerns: adopts the web-posted session
-  (`client.auth.setSession`) and arms the clock + push; re-arms on foreground;
-  notification taps drive the web's URL hash (cold-start and runtime); Android
-  back button walks WebView history; external origins (OAuth consent) open in
-  the system browser; load/error/setup states.
-- **`android/src/lib/shell.ts`** (new) — `WEB_URL`, the `__MYPRO_SHELL__`
-  marker injected before content, the deep-link whitelist, and the
-  `EXPO_PUBLIC_SHELL` flag.
-- **`frontend/src/lib/shell.ts`** (new) — the single place the web reads
-  `inShell`. Adds the `.in-shell` body class, sets `viewport-fit=cover` (shell
-  only — `index.html` still omits it on purpose), exposes `postToShell`, and
-  **bridges the session out** via `onAuthChange`. `main.tsx` calls `initShell()`
-  before paint.
-- **`frontend/src/index.css`** — one `.in-shell` block (overscroll off,
-  `touch-action: manipulation`, no tap flash/callout, no text-select on chrome;
-  the reader and inputs are left selectable).
-- **`frontend/src/App.tsx`** — `usePush` gated on `!inShell` (or notifications
-  double); a `hashchange` listener so a deep link into an already-open app
-  re-routes (also fixes browser back/forward on the view hash).
-- **`shared/src/auth.ts`** — added `setSession(session)` to the `Auth`
-  contract + impl; the bridge the shell adopts the web's session through.
-- **`android/package.json`** — `react-native-webview@13.12.5` (a native module;
-  autolinked by `expo prebuild`, so the APK pipeline needs no new step).
-- **`.github/workflows/android.yml`** — passes `EXPO_PUBLIC_WEB_URL` (secret)
-  and `EXPO_PUBLIC_SHELL` (var) into the build.
-- **`android/.env.example`** documents both new vars.
+### 2. Notifications — real, native, and they go to the right place
+- **Calendar reminders** now fire: `backend-render` `/schedules/upcoming` folds
+  in calendar events — **1h before + at start + any custom `event_reminders`**
+  (all-day → at-start only). No device change: the phone already arms whatever
+  that endpoint returns.
+- **Shared mapping** `shared/src/notify.ts`: `notificationChannelFor`,
+  `notificationHash` (tap → the exact route, down to the calendar event),
+  `hashFromDeeplink`, `NOTIFICATION_VIEWS` (one whitelist, used by web + shell).
+- **Android** `lib/notifications.ts`: two channels (`reminders`, `briefs`) with
+  the accent colour from `theme.ts` (no literal); each notification carries a
+  prebuilt `hash`. `ShellApp.tsx` taps open that hash (local) or map a push
+  `deeplink` via `hashFromDeeplink`. `backend-local` push routes to the right
+  channel by kind.
+- **Web** `App.tsx`: hash router tolerates `#calendar?event=…&at=…`; a deep link
+  opens that event's day and its sheet (`CalendarView focus`).
+- **Podcast media bar** `frontend/src/lib/useMediaSession.ts`: OS media controls
+  for the player. Caveat: the audio is a cross-origin YouTube iframe, which can
+  own the lock-screen session; the handlers still catch hardware keys.
 
-### The rule it was built under
-Every shell branch lives in `lib/shell.ts` and changes only how the app *feels*,
-never *what the user can do* — so the second app cannot grow back. Web push is
-the one correctness branch (gate it, or notifications double).
+### 3. Gmail — per-account access level
+`backend-render` connect takes `mode` (`read` | `send`); scopes requested and
+**send is gated** on the stored scope (`scopesGrantSend`). `accounts` exposes
+`scopes`. Web Settings → Mail: a Read-only / Read-&-send chooser and a per-mailbox
+access tag. `gmail_accounts.scopes` already existed — **no migration**. Tests:
+`backend-render/test/gmail-scopes.test.ts`.
 
-## Before it ships (your steps)
-1. **Set `EXPO_PUBLIC_WEB_URL`** to the Vercel app as a repository secret (CI)
-   and in `android/.env` (local). Without it the shell shows a setup screen.
-2. **Step 0 + spike on a real phone** (ANDROID_UPGRADE §3): install the APK,
-   confirm sign-in, the reader, and that a brief fires with the laptop shut.
-3. **Only then, delete the native screens** (step 6) and close Phase 13 bar
-   13.2 (offline cache). To fall back meanwhile, set `EXPO_PUBLIC_SHELL=native`.
+### 4. Calendar event completion + edit lock
+- Migration **`0020_event_completion.sql`** adds `calendar_events.completed_at`.
+- `backend-render` calendar: `POST/DELETE /calendar/events/:id/complete`.
+  **Done is allowed only on-the-day, after the start, for a 12h window**
+  (`completionWindow`); **editing is rejected once started** (`isEventEditable`)
+  — enforced server-side, not just UI. Past events still delete/complete fine.
+- Web modal: "Mark done" only in-window, inputs/Save disabled once started,
+  completed events struck-through across week/day/month. Tests:
+  `backend-render/test/event-completion.test.ts`.
 
-## Verified this session
-- `npx tsc --noEmit` clean in `android/` and `frontend/`; `shared/` clean apart
-  from two **pre-existing, environment-only** `RequestInfo` errors on untouched
-  `doFetch` code (confirmed present with my changes stashed).
-- `pnpm --dir frontend build` succeeds (needs pnpm's isolated linker locally —
-  the react 18/19 hoist conflict of Phase 13.7; CI/Vercel are unaffected).
-- `pnpm --dir shared test` — 14 passing.
-- Android Metro bundled 867 modules (all new files + `react-native-webview`);
-  the only failure was a Git-LFS *pointer stub* for a logo PNG, which CI pulls
-  for real (`lfs: true`).
-- **Not verified (needs a device):** sign-in and the reader in the WebView, a
-  brief firing with the laptop shut, deep links, the back button, and the
-  in-shell feel. All headless-impossible.
+### 5. Supabase retention (memory won't grow forever)
+Migration **`0019_retention.sql`**: a daily pg_cron job `prune_old_history()`
+deletes aged rows from logs/history (audit 365d, schedule_runs 120d,
+notifications 180d, skill_invocations 180d, interventions 180d, research_usage
+90d, interest_findings 120d, email_messages 365d, assistant_messages 365d) and
+sweeps expired `research_cache`. Live content is never touched.
+
+## Your steps (nothing here is automatic)
+1. **Apply migrations by hand** in the Supabase SQL editor: `0019_retention.sql`
+   and `0020_event_completion.sql`. (pg_cron is already enabled by 0015.)
+2. **Gmail live test** still needs the Google OAuth app (Phase 7.1) + env vars.
+3. **Closed-app push** for ad-hoc assistant messages still needs the EAS project
+   id (8.4); local calendar/schedule/brief notifications work without it.
+
+## Not done this session (the two remaining asks)
+- **Chat interface polish** (make the mobile assistant feel like ChatGPT/Claude).
+- **Offline book download** (Phase 13.2) — cache book text + annotations so the
+  reader works with no connection.
 
 ## Still true from earlier sessions
 - Web `https://mypro-by-gova.vercel.app` · Render `https://mypro-km2k.onrender.com`
   (`/api/v1`) · Supabase ref `kssucdvrfzbdkyzovmjo`.
-- Tests: Vitest — `pnpm --dir shared|frontend test`, `npm test` in each backend;
-  backend tests in `test/`.
-- Auth brokered by Render; clients hold no Supabase creds except the publishable
-  key from `GET /me/realtime`.
-- `performSupabaseUpload` in `utils/pdfStorage.ts` is still a fake progress
-  simulator — only extracted JSON syncs, never the raw PDF.
+- The phone is a thin `react-native-webview` shell (Phase 13.10); native screens
+  live behind `EXPO_PUBLIC_SHELL=native`, not yet deleted.
+- Tests: Vitest — `pnpm --dir shared|frontend test`, `npm test` in each backend.
+- Local web build needs pnpm's isolated linker (react 18/19 hoist conflict);
+  CI/Vercel unaffected.
 - Commit only when asked; use the co-author line the session's attribution gives.
-- Phase 16 (companion) is built and unit-tested but unproven live; it needs
-  migrations `0009`–`0011` applied and the agent rebuilt.

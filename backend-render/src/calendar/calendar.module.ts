@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -24,6 +25,43 @@ const createEvent = z.object({
 const patchEvent = createEvent.partial();
 
 const SELECT = '*, event_reminders(*), event_categories(name, tone)';
+
+/**
+ * How long after an event starts it may be marked done. "On the day, after the
+ * time, roughly a 12-hour window." An all-day event has no start time, so its
+ * window is the whole day it falls on.
+ */
+const DONE_WINDOW_MS = 12 * 60 * 60_000;
+const DONE_WINDOW_ALL_DAY_MS = 24 * 60 * 60_000;
+
+/** Whether `now` is inside the window in which `event` may be marked done. */
+export function completionWindow(
+  event: { starts_at: string; all_day?: boolean | null },
+  now: number = Date.now(),
+): { open: boolean; reason?: 'too_early' | 'too_late' } {
+  const start = new Date(event.starts_at).getTime();
+  if (!Number.isFinite(start)) return { open: false, reason: 'too_early' };
+  if (now < start) return { open: false, reason: 'too_early' };
+  const windowMs = event.all_day ? DONE_WINDOW_ALL_DAY_MS : DONE_WINDOW_MS;
+  if (now > start + windowMs) return { open: false, reason: 'too_late' };
+  return { open: true };
+}
+
+/**
+ * Whether an event may still be *edited*. Only before it starts — once the time
+ * has passed the event is history (you mark it done or delete it, you do not
+ * rewrite it). An all-day event stays editable through its day, since it has no
+ * start time to pass.
+ */
+export function isEventEditable(
+  event: { starts_at: string; all_day?: boolean | null },
+  now: number = Date.now(),
+): boolean {
+  const start = new Date(event.starts_at).getTime();
+  if (!Number.isFinite(start)) return true;
+  const grace = event.all_day ? DONE_WINDOW_ALL_DAY_MS : 0;
+  return now < start + grace;
+}
 
 @Injectable()
 export class CalendarService {
@@ -54,6 +92,20 @@ export class CalendarService {
 
   async update(user: AuthUser, id: string, input: z.infer<typeof patchEvent>) {
     const db = this.supabase.forUser(user.token);
+
+    // An event may only be edited before it starts. After that it is history:
+    // mark it done or delete it. The UI disables the form, and this is the same
+    // rule on the server so it holds however the request arrives.
+    const existing = (await this.get(user, id)) as {
+      starts_at: string;
+      all_day: boolean | null;
+    } | null;
+    if (existing && !isEventEditable(existing)) {
+      throw new BadRequestException(
+        'This event has already started and can no longer be edited. You can mark it done or delete it.',
+      );
+    }
+
     const { reminders, ...row } = input;
     if (Object.keys(row).length) none(await db.from('calendar_events').update(row).eq('id', id));
     if (reminders) await this.replaceReminders(user, id, reminders);
@@ -62,7 +114,48 @@ export class CalendarService {
 
   async remove(user: AuthUser, id: string) {
     const db = this.supabase.forUser(user.token);
+    // Past events delete exactly like any other — the only time rule in the
+    // calendar is the completion window below.
     return none(await db.from('calendar_events').delete().eq('id', id));
+  }
+
+  /**
+   * Mark an event done. The backend is the authority on *when* this is allowed:
+   * only once the event has started, and only for ~12 hours after (a day, for
+   * all-day events). The UI hides the button outside that window, but the rule
+   * lives here so it holds however the request arrives.
+   */
+  async complete(user: AuthUser, id: string) {
+    const db = this.supabase.forUser(user.token);
+    const event = (await this.get(user, id)) as {
+      starts_at: string;
+      all_day: boolean | null;
+    } | null;
+    if (!event) throw new BadRequestException('Event not found');
+
+    const window = completionWindow(event);
+    if (!window.open) {
+      throw new BadRequestException(
+        window.reason === 'too_early'
+          ? "You can mark this done once it has started."
+          : 'The window to mark this done has passed.',
+      );
+    }
+
+    none(
+      await db
+        .from('calendar_events')
+        .update({ completed_at: new Date().toISOString() })
+        .eq('id', id),
+    );
+    return this.get(user, id);
+  }
+
+  /** Clear a completion. Always allowed — undoing a mistake is never late. */
+  async uncomplete(user: AuthUser, id: string) {
+    const db = this.supabase.forUser(user.token);
+    none(await db.from('calendar_events').update({ completed_at: null }).eq('id', id));
+    return this.get(user, id);
   }
 
   private async replaceReminders(user: AuthUser, eventId: string, list?: z.infer<typeof reminder>[]) {
@@ -126,6 +219,18 @@ export class CalendarController {
   @Delete(':id')
   remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.calendar.remove(user, id);
+  }
+
+  /** Mark done (guarded by the completion window in the service). */
+  @Post(':id/complete')
+  complete(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.calendar.complete(user, id);
+  }
+
+  /** Clear a completion. */
+  @Delete(':id/complete')
+  uncomplete(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.calendar.uncomplete(user, id);
   }
 }
 

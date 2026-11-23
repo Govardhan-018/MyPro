@@ -1236,6 +1236,50 @@ button {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 7px;
+  flex-wrap: wrap;
+}
+
+/* The line explaining why an event is locked for editing / can be marked done. */
+.event-state-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 2px 0 0;
+}
+.event-state-note.done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* "Mark done" sits between Cancel and Save; keep it from being clipped on a phone. */
+.event-done-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* A completed event, wherever it renders: dimmed, with a check and a strike. */
+.event-done-tick {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 4px;
+  opacity: 0.85;
+}
+.calendar-event.is-done,
+.week-all-day-chip.is-done,
+.month-event.is-done,
+.mobile-agenda-event.is-done {
+  opacity: 0.55;
+}
+.calendar-event.is-done strong,
+.week-all-day-chip.is-done,
+.month-event.is-done span,
+.mobile-agenda-event.is-done strong {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 .saved-state {
   padding: 30px 0 10px;
@@ -7005,6 +7049,27 @@ button {
   margin-top: 5px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* A mailbox's access level, inline before its sync state. */
+.mail-access-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.72);
+}
+.mail-access-tag.send {
+  border-color: var(--accent-line, rgba(255, 255, 255, 0.28));
+  color: #fff;
+}
+
+/* The read-only / read-&-send chooser for a new mailbox. */
+.mail-access-picker {
+  margin-top: 12px;
 }
 
 .settings-status-dot.live-live {

@@ -26,6 +26,7 @@ import {
 import type { LibraryItem, NoteItem } from "../../types/library";
 import { extractVideoId } from "../../lib/youtube";
 import { useYouTubePlayer } from "../../lib/useYouTubePlayer";
+import { useMediaSession } from "../../lib/useMediaSession";
 import { api } from "../../lib/api";
 import { isApiConfigured } from "../../lib/env";
 
@@ -237,6 +238,27 @@ export function MyProPodcastPlayer({
     if (!item || !onSelectEpisode) return;
     onSelectEpisode(item);
   };
+
+  // Hand playback to the OS media controls (lock screen, notification shade,
+  // headset keys) while an episode is open — the Spotify-style control surface.
+  useMediaSession({
+    active: isOpen && !!videoId,
+    title: episodeTitle || podcast.title || "Podcast",
+    artist: creator || podcastName,
+    album: podcastName,
+    artwork: podcast.image,
+    playing: isPlaying,
+    duration: totalDuration,
+    position: currentTime,
+    playbackRate: playbackSpeed,
+    onPlay: () => playback.play(),
+    onPause: () => playback.pause(),
+    onSeekBackward: () => playback.skip(-15),
+    onSeekForward: () => playback.skip(15),
+    onPreviousTrack: previousEpisode ? () => goToEpisode(previousEpisode) : undefined,
+    onNextTrack: nextEpisode ? () => goToEpisode(nextEpisode) : undefined,
+    onSeekTo: (seconds) => playback.seekTo(seconds),
+  });
 
   /* ----- Notes ----------------------------------------------------------
    * Two places have to agree: the library item in memory (which is what

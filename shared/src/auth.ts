@@ -46,7 +46,29 @@ export interface Auth {
 export interface AuthOptions {
   storage?: AuthStorage;
   fetch?: typeof fetch;
+  /**
+   * How this client keeps the token fresh.
+   *
+   *  - `'self'` (default) — the client refreshes through Render when the access
+   *    token nears expiry. This is the web app and a standalone phone build.
+   *  - `'follower'` — the client never calls `/auth/refresh` itself. It only
+   *    uses sessions handed to it via `setSession`. The native WebView shell is
+   *    a follower: the web app it hosts owns the single refresh loop and posts
+   *    each fresh session out (`frontend/src/lib/shell.ts`). If *both* clients
+   *    refreshed, they would race on the same refresh token — Supabase rotates
+   *    it, so whichever refreshed second would be rejected and sign the user
+   *    out. One refresher, posted outward, is what keeps the session alive.
+   */
+  refreshMode?: 'self' | 'follower';
 }
+
+/** A refresh attempt's outcome, so a transient failure never clears a session. */
+type RefreshResult =
+  | { kind: 'ok'; session: AuthSession }
+  /** Render/Supabase explicitly rejected the refresh token — it is dead. */
+  | { kind: 'invalid' }
+  /** Network down, server asleep, 5xx — the token may still be good later. */
+  | { kind: 'transient' };
 
 const STORAGE_KEY = 'mypro.session';
 const REFRESH_SKEW_MS = 60_000;
@@ -64,6 +86,7 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
   const doFetch: typeof fetch =
     opts.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
   const storage = opts.storage ?? memoryStorage();
+  const refreshMode = opts.refreshMode ?? 'self';
   const listeners = new Set<(session: AuthSession | null) => void>();
 
   let cached: AuthSession | null | undefined;
@@ -120,15 +143,57 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
     };
   }
 
+  /**
+   * One refresh round-trip, classified so the caller can tell a dead token
+   * (sign out) from a flaky network (keep the session, try again later).
+   *
+   * Render answers 401 when the refresh token itself is rejected; anything else
+   * — offline, a cold Render instance, a 5xx — is transient, and clearing the
+   * session on it is exactly the "logged out after a blink of no signal" bug.
+   */
+  async function refreshRequest(refreshToken: string): Promise<RefreshResult> {
+    let res: Response;
+    try {
+      res = await doFetch(`${env.apiUrl}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+    } catch {
+      return { kind: 'transient' };
+    }
+    if (res.status === 401 || res.status === 400 || res.status === 403) {
+      return { kind: 'invalid' };
+    }
+    if (!res.ok) return { kind: 'transient' };
+    try {
+      const text = await res.text();
+      const parsed = (text ? JSON.parse(text) : null) as { session?: AuthSession | null } | null;
+      if (parsed?.session) return { kind: 'ok', session: parsed.session };
+      return { kind: 'transient' };
+    } catch {
+      return { kind: 'transient' };
+    }
+  }
+
   async function refresh(session: AuthSession): Promise<AuthSession | null> {
+    // A follower never refreshes — it rides on sessions posted to setSession,
+    // so it can't rotate the shared refresh token out from under the primary.
+    if (refreshMode === 'follower') return session;
     if (refreshing) return refreshing;
     refreshing = (async () => {
       try {
-        const out = await post('/auth/refresh', { refresh_token: session.refresh_token });
-        await save(out.session);
-        return out.session;
-      } catch {
-        await save(null);
+        const result = await refreshRequest(session.refresh_token);
+        if (result.kind === 'ok') {
+          await save(result.session);
+          return result.session;
+        }
+        if (result.kind === 'invalid') {
+          await save(null);
+          return null;
+        }
+        // Transient: keep the stored session untouched so a later call can try
+        // again once connectivity returns.
         return null;
       } finally {
         refreshing = null;
@@ -148,8 +213,19 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
       const session = await load();
       if (!session) return null;
       if (isExpired(session)) {
+        // A follower does not refresh. Hand back whatever token it was last
+        // given: usually the primary has already posted a fresh one, and if
+        // not, a 401 on the call is caught by the caller (e.g. the clock's
+        // arm loop) far more gracefully than signing the user out here would be.
+        if (refreshMode === 'follower') return session.access_token;
         const next = await refresh(session);
-        return next?.access_token ?? null;
+        if (next) return next.access_token;
+        // Refresh failed. If it cleared the session (a real rejection) the
+        // cache is now null and we must report "no token". If the session
+        // survived (a transient failure), hand back the stale token: the call
+        // 401s and the caller recovers, which beats signing the user out.
+        const surviving = await load();
+        return surviving ? surviving.access_token : null;
       }
       return session.access_token;
     },

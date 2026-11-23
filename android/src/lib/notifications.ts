@@ -25,14 +25,43 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import type { ScheduleOccurrence } from '@mypro/shared';
+import {
+  notificationChannelFor,
+  notificationHash,
+  type ScheduleOccurrence,
+} from '@mypro/shared';
 import { client } from './client';
+import { colors } from '../theme';
 
 /** How far ahead to arm. Re-armed on every launch, so the window rolls. */
 export const ARM_WINDOW_HOURS = 48;
 
 /** Marks our own scheduled notifications so we never cancel someone else's. */
 const OWNED = 'mypro:schedule';
+
+/**
+ * The brand accent, so the status-bar icon and app name are tinted rather than
+ * a flat black square. Sourced from the one theme token (`colors.violet`), not
+ * repeated as a literal.
+ */
+const ACCENT = colors.violet;
+
+/**
+ * The channels the app posts on. Two, so the user can tune them apart the way
+ * a real app lets you — silence briefs but keep event reminders loud, say.
+ * `default` is kept only so notifications armed by an older build still show.
+ */
+const CHANNELS: Record<string, { name: string; description: string }> = {
+  reminders: {
+    name: 'Reminders',
+    description: 'Calendar events and your standing schedules.',
+  },
+  briefs: {
+    name: 'Briefs & messages',
+    description: 'Your morning brief and things the assistant surfaces.',
+  },
+  default: { name: 'MyPro', description: 'General notifications.' },
+};
 
 /** Foreground behaviour: a notification that arrives while you are looking at
  * the app should still be visible — it is the same information either way. */
@@ -51,12 +80,17 @@ Notifications.setNotificationHandler({
  */
 export async function ensureChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
-  await Notifications.setNotificationChannelAsync('default', {
-    name: 'MyPro',
-    importance: Notifications.AndroidImportance.HIGH,
-    vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#FFFFFF',
-  });
+  await Promise.all(
+    Object.entries(CHANNELS).map(([id, meta]) =>
+      Notifications.setNotificationChannelAsync(id, {
+        name: meta.name,
+        description: meta.description,
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: ACCENT,
+      }),
+    ),
+  );
 }
 
 /**
@@ -108,25 +142,28 @@ export async function armUpcoming(): Promise<number | null> {
     // drain loop owns anything overdue.
     if (!Number.isFinite(at.getTime()) || at.getTime() <= now + 1000) continue;
 
+    const channelId = notificationChannelFor(occurrence);
     try {
       await Notifications.scheduleNotificationAsync({
         identifier: occurrence.id,
         content: {
           title: occurrence.title || 'MyPro',
           body: occurrence.body ?? bodyFor(occurrence),
+          color: ACCENT,
           data: {
             owner: OWNED,
             schedule_id: occurrence.schedule_id,
             action_type: occurrence.action_type,
-            /* Where tapping it should land. A report opens the brief; a bare
-             * reminder has nowhere better to go than Today. */
-            deeplink: occurrence.action_type === 'report' ? 'assistant' : 'today',
+            /* The exact in-app route a tap opens — section plus, for a calendar
+             * reminder, the event itself. Computed once here (shared logic) and
+             * carried on the notification so the tap handler is trivial. */
+            hash: notificationHash(occurrence),
           },
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
           date: at,
-          channelId: 'default',
+          channelId,
         },
       });
       armed += 1;

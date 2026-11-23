@@ -10,6 +10,46 @@ export interface CalEvent {
   allDay: boolean;
   location?: string;
   tone: string;
+  /** Set once the event has been marked done. */
+  completedAt?: string;
+}
+
+/**
+ * The time-based rules for an event's actions. The backend is the authority
+ * (backend-render calendar service `completionWindow` / `isEventEditable`);
+ * this mirrors it so the UI can hide buttons rather than offer ones the server
+ * will refuse. **Change one, change both.**
+ *
+ *  - `editable`  — only before it starts (an all-day event through its day).
+ *  - `canComplete` — once it has started, for a 12-hour window (a day, all-day).
+ */
+const DONE_WINDOW_MS = 12 * 60 * 60_000;
+const DONE_WINDOW_ALL_DAY_MS = 24 * 60 * 60_000;
+
+export interface EventActionState {
+  editable: boolean;
+  canComplete: boolean;
+  completed: boolean;
+  /** The completion window has opened and closed without being used. */
+  completionMissed: boolean;
+}
+
+export function eventActionState(ev: CalEvent, now: number = Date.now()): EventActionState {
+  const start = new Date(ev.startsAt).getTime();
+  const completed = Boolean(ev.completedAt);
+  if (!Number.isFinite(start)) {
+    return { editable: true, canComplete: false, completed, completionMissed: false };
+  }
+  const windowMs = ev.allDay ? DONE_WINDOW_ALL_DAY_MS : DONE_WINDOW_MS;
+  const editable = now < start + (ev.allDay ? DONE_WINDOW_ALL_DAY_MS : 0);
+  const started = now >= start;
+  const canComplete = started && now <= start + windowMs;
+  return {
+    editable,
+    canComplete,
+    completed,
+    completionMissed: !completed && started && now > start + windowMs,
+  };
 }
 
 export interface NewEventInput {
@@ -134,6 +174,7 @@ function rowToEvent(row: Record<string, unknown>): CalEvent {
     allDay: Boolean(row.all_day),
     location: str(row.location),
     tone: toneFor(row, id),
+    completedAt: str(row.completed_at),
   };
 }
 
@@ -210,6 +251,8 @@ export interface CalendarState {
   createEvent: (input: NewEventInput) => Promise<void>;
   updateEvent: (id: string, input: NewEventInput) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
+  completeEvent: (id: string) => Promise<void>;
+  uncompleteEvent: (id: string) => Promise<void>;
   reload: () => void;
 }
 
@@ -331,6 +374,38 @@ export function useCalendar(focus: Date): CalendarState {
     setEvents((cur) => cur.filter((ev) => ev.id !== id));
   };
 
+  const setCompletion = (id: string, completedAt: string | undefined) =>
+    setEvents((cur) => cur.map((ev) => (ev.id === id ? { ...ev, completedAt } : ev)));
+
+  const completeEvent = async (id: string) => {
+    if (!configured) {
+      setCompletion(id, new Date().toISOString());
+      return;
+    }
+    const row = await api.calendar.completeEvent(id);
+    setEvents((cur) =>
+      cur.map((ev) => (ev.id === id ? rowToEvent(row as Record<string, unknown>) : ev)),
+    );
+  };
+
+  const uncompleteEvent = async (id: string) => {
+    if (!configured) {
+      setCompletion(id, undefined);
+      return;
+    }
+    const row = await api.calendar.uncompleteEvent(id);
+    // DELETE returns no body; fall back to clearing the flag locally.
+    setEvents((cur) =>
+      cur.map((ev) =>
+        ev.id === id
+          ? row && typeof row === 'object'
+            ? rowToEvent(row as Record<string, unknown>)
+            : { ...ev, completedAt: undefined }
+          : ev,
+      ),
+    );
+  };
+
   return {
     events,
     loading,
@@ -339,6 +414,8 @@ export function useCalendar(focus: Date): CalendarState {
     createEvent,
     updateEvent,
     deleteEvent,
+    completeEvent,
+    uncompleteEvent,
     reload: useCallback(() => setReloadToken((t) => t + 1), []),
   };
 }

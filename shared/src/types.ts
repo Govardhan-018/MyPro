@@ -335,8 +335,9 @@ export interface NodeStatus {
  * time, something to say, and a stable id to deduplicate against.
  */
 export interface ScheduleOccurrence {
-  /** `<schedule id>:<ISO instant>` — stable, so a re-arm replaces rather than duplicates. */
+  /** `<source id>:<ISO instant>` — stable, so a re-arm replaces rather than duplicates. */
   id: string;
+  /** The source row's id. A schedule id for `kind:'schedule'`, an event id for `kind:'calendar'`. */
   schedule_id: string;
   name: string;
   action_type: 'notify' | 'report' | 'email' | 'chat_message';
@@ -344,6 +345,19 @@ export interface ScheduleOccurrence {
   body: string | null;
   /** ISO 8601, UTC. */
   at: string;
+  /**
+   * What produced this moment. `'schedule'` is a standing assistant schedule;
+   * `'calendar'` is a calendar event's reminder (1h before and at the start,
+   * plus any custom reminders). Optional for back-compat — absent means
+   * `'schedule'`.
+   */
+  kind?: 'schedule' | 'calendar';
+  /** Which app section tapping the notification should open. */
+  deeplink?: 'today' | 'calendar' | 'assistant';
+  /** The specific row to focus on tap (a calendar event id), if any. */
+  deeplink_id?: string;
+  /** The focused item's instant, so the app can jump to the right day. */
+  deeplink_at?: string;
 }
 
 /**
@@ -356,9 +370,25 @@ export interface ScheduleOccurrence {
 export interface GmailAccountRow {
   id: string;
   email: string;
+  /**
+   * The space-separated OAuth scopes this mailbox was connected with. Presence
+   * of `gmail.send` is what distinguishes a read-only mailbox from one MyPro
+   * may reply from. Null on rows connected before scopes were recorded.
+   */
+  scopes: string | null;
   sync_state: 'idle' | 'syncing' | 'error' | string;
   sync_error: string | null;
   /** Non-null once a first backfill has completed. */
   history_id: string | null;
   created_at: string;
+}
+
+/** The access a mailbox is connected with (mirror of the server's union). */
+export type GmailAccessLevel = 'read' | 'send';
+
+/** Whether a stored scope string grants send. Shared by client and server. */
+export function gmailScopesGrantSend(scopes: string | null | undefined): boolean {
+  return (scopes ?? '').split(/\s+/).filter(Boolean).includes(
+    'https://www.googleapis.com/auth/gmail.send',
+  );
 }

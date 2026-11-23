@@ -56,6 +56,53 @@ interface ScheduleRowShape {
 
 const SELECT = '*, assistant_schedule_days(day_of_week)';
 
+/** The flat occurrence shape the phone arms notifications from. */
+interface ScheduleOccurrenceOut {
+  id: string;
+  schedule_id: string;
+  name: string;
+  action_type: 'notify' | 'report' | 'email' | 'chat_message';
+  title: string;
+  body: string | null;
+  at: string;
+  kind: 'schedule' | 'calendar';
+  deeplink: 'today' | 'calendar' | 'assistant';
+  deeplink_id?: string;
+  deeplink_at?: string;
+}
+
+/**
+ * The minutes-before a calendar event should remind. The baseline the product
+ * promises is **one hour before and at the start** (`60` and `0`); any custom
+ * `event_reminders` are merged in and de-duplicated. An all-day event gets only
+ * the at-start moment — "one hour before midnight" is noise.
+ *
+ * Pure and exported so the timing rule is unit-tested without a database.
+ */
+export function calendarReminderLeads(allDay: boolean, custom: number[]): number[] {
+  const valid = custom.filter((m) => Number.isFinite(m) && m >= 0);
+  if (allDay) return [0];
+  return [...new Set([0, 60, ...valid])].sort((a, b) => a - b);
+}
+
+/** Human lead-time for a calendar reminder's body, e.g. "In 1 hour · Office". */
+export function calendarBody(minutesBefore: number, location: string | null): string {
+  const where = location ? ` · ${location}` : '';
+  if (minutesBefore === 0) return `Starting now${where}`;
+  if (minutesBefore % 1440 === 0) {
+    const d = minutesBefore / 1440;
+    return `In ${d} day${d === 1 ? '' : 's'}${where}`;
+  }
+  if (minutesBefore % 60 === 0) {
+    const h = minutesBefore / 60;
+    return `In ${h} hour${h === 1 ? '' : 's'}${where}`;
+  }
+  if (minutesBefore < 60) return `In ${minutesBefore} minute${minutesBefore === 1 ? '' : 's'}${where}`;
+  const h = Math.floor(minutesBefore / 60);
+  const m = minutesBefore % 60;
+  return `In ${h}h ${m}m${where}`;
+}
+
 @Injectable()
 export class SchedulesService {
   constructor(
@@ -160,7 +207,7 @@ export class SchedulesService {
     const from = new Date();
     const until = new Date(from.getTime() + hours * 3600_000);
 
-    const out = rows
+    const scheduleOccurrences = rows
       .filter((s) => s.enabled)
       .flatMap((s) =>
         expandOccurrences(
@@ -186,10 +233,80 @@ export class SchedulesService {
           title: typeof s.action_payload?.title === 'string' ? s.action_payload.title : s.name,
           body: typeof s.action_payload?.body === 'string' ? s.action_payload.body : null,
           at: at.toISOString(),
+          kind: 'schedule' as const,
+          deeplink: (s.action_type === 'report' ? 'assistant' : 'today') as 'assistant' | 'today',
         })),
       );
 
+    const out = [...scheduleOccurrences, ...(await this.calendarOccurrences(user, from, until))];
     out.sort((a, b) => a.at.localeCompare(b.at));
+    return out;
+  }
+
+  /**
+   * Calendar events as notification moments (Feature: calendar reminders).
+   *
+   * Every event earns a reminder **one hour before** and **at the start** —
+   * that is the baseline the product promises — plus any custom
+   * `event_reminders` the user set on it. All_day events get only the at-start
+   * moment, because "one hour before midnight" is noise.
+   *
+   * The phone arms whatever this returns, so no device change is needed: the
+   * same local-notification path that fires the morning brief now fires event
+   * reminders too, with the laptop shut.
+   */
+  private async calendarOccurrences(user: AuthUser, from: Date, until: Date) {
+    const db = this.supabase.forUser(user.token);
+    // Fetch a little past the window so a 1h-before reminder for an event just
+    // beyond the edge is still caught.
+    const fetchUntil = new Date(until.getTime() + 60 * 60_000);
+    const { data, error } = await db
+      .from('calendar_events')
+      .select('id, title, starts_at, all_day, location, event_reminders(minutes_before)')
+      .gte('starts_at', from.toISOString())
+      .lte('starts_at', fetchUntil.toISOString())
+      .order('starts_at');
+    if (error) throw new BadRequestException(error.message);
+
+    type EventRow = {
+      id: string;
+      title: string;
+      starts_at: string;
+      all_day: boolean | null;
+      location: string | null;
+      event_reminders: { minutes_before: number }[] | null;
+    };
+
+    const out: ScheduleOccurrenceOut[] = [];
+    for (const event of (data ?? []) as EventRow[]) {
+      const startsAt = new Date(event.starts_at);
+      if (!Number.isFinite(startsAt.getTime())) continue;
+
+      const leads = calendarReminderLeads(
+        Boolean(event.all_day),
+        (event.event_reminders ?? []).map((r) => r.minutes_before),
+      );
+
+      for (const minutesBefore of leads) {
+        const at = new Date(startsAt.getTime() - minutesBefore * 60_000);
+        // Only moments inside the arming window and still in the future.
+        if (at.getTime() <= from.getTime() || at.getTime() > until.getTime()) continue;
+        out.push({
+          id: `evt:${event.id}:${at.toISOString()}`,
+          schedule_id: event.id,
+          name: event.title,
+          action_type: 'notify',
+          title: event.title || 'Event',
+          body: calendarBody(minutesBefore, event.location),
+          at: at.toISOString(),
+          kind: 'calendar',
+          deeplink: 'calendar',
+          // So a tap opens the right day with this very event's sheet.
+          deeplink_id: event.id,
+          deeplink_at: event.starts_at,
+        });
+      }
+    }
     return out;
   }
 
