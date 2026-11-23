@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../common/supabase.service';
 import { CryptoService } from '../common/crypto.service';
 import { GoogleOAuthService } from './google-oauth.service';
+import { GoogleCredsService } from './google-creds.service';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -59,6 +60,7 @@ export class GmailApiService {
     private readonly supabase: SupabaseService,
     private readonly crypto: CryptoService,
     private readonly oauth: GoogleOAuthService,
+    private readonly creds: GoogleCredsService,
   ) {}
 
   /**
@@ -83,8 +85,15 @@ export class GmailApiService {
       );
     }
 
+    const creds = await this.creds.forUser(account.user_id);
+    if (!creds) {
+      throw new GmailReauthRequired(
+        'Google OAuth is not configured. Add the app credentials in Settings → Mail.',
+      );
+    }
+
     try {
-      const tokens = await this.oauth.refresh(refreshToken);
+      const tokens = await this.oauth.refresh(creds, refreshToken);
       await this.supabase.admin
         .from('gmail_accounts')
         .update({

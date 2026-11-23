@@ -4512,6 +4512,13 @@ function SettingsView({
   const gmail = useGmail(!!userEmail);
   // The access a new mailbox is connected with — read-only, or read + send.
   const [mailMode, setMailMode] = useState<GmailAccessLevel>("read");
+  // The in-app Google OAuth app credentials form. Write-only: never pre-filled
+  // from the server, since the secret is never returned.
+  const [oauthForm, setOauthForm] = useState({
+    client_id: "",
+    client_secret: "",
+    redirect_uri: "",
+  });
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [savedNote, setSavedNote] = useState(false);
@@ -4752,11 +4759,106 @@ function SettingsView({
         {open === "mail" && (
           <div className="settings-panel">
             {!gmail.configured ? (
-              <p className="settings-hint">
-                <strong>Not available yet.</strong> This server has no Google credentials.
-              </p>
+              /* No Google app yet — let the user paste its credentials. They are
+                 stored encrypted server-side and never shown again (write-only). */
+              <>
+                <p className="settings-hint">
+                  To connect Gmail, create an OAuth app in{" "}
+                  <strong>Google Cloud Console</strong> (APIs &amp; Services →
+                  Credentials → OAuth client ID, type “Web application”), then paste its
+                  details here. They are stored <strong>encrypted</strong> and never shown
+                  again — to change them you delete and re-enter.
+                </p>
+                <label className="field-label">
+                  CLIENT ID
+                  <input
+                    value={oauthForm.client_id}
+                    onChange={(e) =>
+                      setOauthForm((f) => ({ ...f, client_id: e.target.value }))
+                    }
+                    placeholder="xxxxxxxx.apps.googleusercontent.com"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="field-label">
+                  CLIENT SECRET
+                  <input
+                    type="password"
+                    value={oauthForm.client_secret}
+                    onChange={(e) =>
+                      setOauthForm((f) => ({ ...f, client_secret: e.target.value }))
+                    }
+                    placeholder="GOCSPX-…"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="field-label">
+                  AUTHORISED REDIRECT URI
+                  <input
+                    value={oauthForm.redirect_uri}
+                    onChange={(e) =>
+                      setOauthForm((f) => ({ ...f, redirect_uri: e.target.value }))
+                    }
+                    placeholder="https://your-api.onrender.com/api/v1/gmail/callback"
+                    autoComplete="off"
+                  />
+                </label>
+                <p className="settings-hint">
+                  The redirect URI must be added to the OAuth client in Google Cloud, exactly
+                  as entered here. It ends in <code>/api/v1/gmail/callback</code>.
+                </p>
+                <div className="settings-panel-actions">
+                  <button
+                    className="primary-button"
+                    disabled={
+                      gmail.busy ||
+                      !oauthForm.client_id.trim() ||
+                      !oauthForm.client_secret.trim() ||
+                      !oauthForm.redirect_uri.trim()
+                    }
+                    onClick={async () => {
+                      await gmail.saveOauthConfig({
+                        client_id: oauthForm.client_id.trim(),
+                        client_secret: oauthForm.client_secret.trim(),
+                        redirect_uri: oauthForm.redirect_uri.trim(),
+                      });
+                      setOauthForm({ client_id: "", client_secret: "", redirect_uri: "" });
+                    }}
+                  >
+                    {gmail.busy ? "Saving…" : "Save Google app"}
+                  </button>
+                </div>
+                {(gmail.note || gmail.error) && (
+                  <p className="settings-hint">{gmail.error ?? gmail.note}</p>
+                )}
+              </>
             ) : (
               <>
+                {/* Where the credentials live, and (if in-app) a way to remove them. */}
+                <div className="settings-status-row">
+                  <span className="settings-status-dot live-live" aria-hidden="true" />
+                  <div>
+                    <strong>
+                      Google app connected
+                      {gmail.source === "settings" ? " · stored encrypted in Settings" : " · from server config"}
+                    </strong>
+                    <small>
+                      {gmail.source === "settings"
+                        ? "The client secret is encrypted and never shown. Remove it to change it."
+                        : "Credentials come from the Render environment."}
+                    </small>
+                  </div>
+                  {gmail.source === "settings" && (
+                    <button
+                      className="settings-inline-action"
+                      onClick={() => void gmail.deleteOauthConfig()}
+                      disabled={gmail.busy}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
                 {gmail.accounts.map((account) => {
                   const canSend = gmailScopesGrantSend(account.scopes);
                   return (

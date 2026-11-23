@@ -14,6 +14,8 @@ import { isApiConfigured } from './env';
 export interface GmailState {
   /** Whether the server has Google credentials at all. */
   configured: boolean;
+  /** Where the credentials come from: the app's Settings, Render's env, or none. */
+  source: 'settings' | 'env' | null;
   accounts: GmailAccountRow[];
   loading: boolean;
   busy: boolean;
@@ -24,12 +26,21 @@ export interface GmailState {
   connect: (mode: GmailAccessLevel) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
   sync: () => Promise<void>;
+  /** Save the in-app Google OAuth app credentials (encrypted server-side). */
+  saveOauthConfig: (input: {
+    client_id: string;
+    client_secret: string;
+    redirect_uri: string;
+  }) => Promise<void>;
+  /** Delete the in-app credentials. */
+  deleteOauthConfig: () => Promise<void>;
   reload: () => void;
 }
 
 export function useGmail(enabled: boolean): GmailState {
   const active = isApiConfigured && enabled;
   const [configured, setConfigured] = useState(false);
+  const [source, setSource] = useState<'settings' | 'env' | null>(null);
   const [accounts, setAccounts] = useState<GmailAccountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -48,6 +59,7 @@ export function useGmail(enabled: boolean): GmailState {
         api.gmail.accounts().catch(() => [] as GmailAccountRow[]),
       ]);
       setConfigured(status.configured);
+      setSource(status.source);
       setAccounts(rows);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load your mailboxes.');
@@ -147,8 +159,44 @@ export function useGmail(enabled: boolean): GmailState {
     }
   }, [load]);
 
+  const saveOauthConfig = useCallback(
+    async (input: { client_id: string; client_secret: string; redirect_uri: string }) => {
+      setBusy(true);
+      setError(null);
+      setNote(null);
+      try {
+        const status = await api.gmail.saveOauthConfig(input);
+        setConfigured(status.configured);
+        setSource(status.source);
+        setNote('Google app credentials saved. You can connect a mailbox now.');
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not save those credentials.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const deleteOauthConfig = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const status = await api.gmail.deleteOauthConfig();
+      setConfigured(status.configured);
+      setSource(status.source);
+      setNote('Google app credentials removed.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not remove those credentials.');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   return {
     configured,
+    source,
     accounts,
     loading,
     busy,
@@ -157,6 +205,8 @@ export function useGmail(enabled: boolean): GmailState {
     connect,
     disconnect,
     sync,
+    saveOauthConfig,
+    deleteOauthConfig,
     reload: () => void load(),
   };
 }

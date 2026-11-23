@@ -335,8 +335,22 @@ export function createApi(
      * OAuth tokens and the key that decrypts them.
      */
     gmail: {
-      /** Whether the server can run a connect flow at all. */
-      status: () => get<{ configured: boolean }>('/gmail/status'),
+      /** Whether the server can run a connect flow at all, and from where. */
+      status: () =>
+        get<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/status'),
+      /** Status of the in-app Google OAuth app credentials (never the secret). */
+      oauthConfig: () =>
+        get<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config'),
+      /** Save the Google OAuth app credentials (stored encrypted, write-only). */
+      saveOauthConfig: (body: {
+        client_id: string;
+        client_secret: string;
+        redirect_uri: string;
+      }) =>
+        post<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config', body),
+      /** Delete the in-app credentials (connect then falls back to env, if any). */
+      deleteOauthConfig: () =>
+        del<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config'),
       accounts: () => get<GmailAccountRow[]>('/gmail/accounts'),
       /**
        * Returns Google's consent URL. The caller navigates to it; Google

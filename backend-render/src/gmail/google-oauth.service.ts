@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env';
+import type { GoogleCreds } from './google-creds.service';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -70,23 +71,6 @@ const STATE_TTL_MS = 10 * 60_000;
 export class GoogleOAuthService {
   private readonly logger = new Logger(GoogleOAuthService.name);
 
-  configured(): boolean {
-    const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } = env();
-    return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI);
-  }
-
-  private creds() {
-    const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } = env();
-    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
-      throw new BadRequestException('Google OAuth is not configured on the server');
-    }
-    return {
-      clientId: GOOGLE_CLIENT_ID,
-      clientSecret: GOOGLE_CLIENT_SECRET,
-      redirectUri: GOOGLE_REDIRECT_URI,
-    };
-  }
-
   /**
    * The consent URL, with a signed `state`.
    *
@@ -96,8 +80,8 @@ export class GoogleOAuthService {
    * cannot attach their mailbox to someone else's account by crafting a
    * callback URL, which is the whole CSRF surface of an OAuth connect flow.
    */
-  authUrl(userId: string, level: GmailAccessLevel = 'send'): string {
-    const { clientId, redirectUri } = this.creds();
+  authUrl(creds: GoogleCreds, userId: string, level: GmailAccessLevel = 'send'): string {
+    const { clientId, redirectUri } = creds;
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -154,24 +138,22 @@ export class GoogleOAuthService {
     return createHmac('sha256', env().INTERNAL_SERVICE_TOKEN).update(payload).digest('base64url');
   }
 
-  async exchangeCode(code: string): Promise<GoogleTokens> {
-    const { clientId, clientSecret, redirectUri } = this.creds();
+  async exchangeCode(creds: GoogleCreds, code: string): Promise<GoogleTokens> {
     return this.tokenRequest({
       grant_type: 'authorization_code',
       code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
+      client_id: creds.clientId,
+      client_secret: creds.clientSecret,
+      redirect_uri: creds.redirectUri,
     });
   }
 
-  async refresh(refreshToken: string): Promise<GoogleTokens> {
-    const { clientId, clientSecret } = this.creds();
+  async refresh(creds: GoogleCreds, refreshToken: string): Promise<GoogleTokens> {
     return this.tokenRequest({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
+      client_id: creds.clientId,
+      client_secret: creds.clientSecret,
     });
   }
 

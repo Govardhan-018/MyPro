@@ -12,12 +12,19 @@ import { InternalAuthGuard } from '../common/internal-auth.guard';
 import { many, none } from '../common/crud';
 import { env } from '../config/env';
 import { GoogleOAuthService, scopesGrantSend, type GmailAccessLevel } from './google-oauth.service';
+import { GoogleCredsService } from './google-creds.service';
 import { GmailApiService, GmailReauthRequired } from './gmail-api.service';
 import { GmailSyncService } from './gmail-sync.service';
 
 const connectInput = z.object({
   /** How much access to request for this mailbox. Defaults to read-only. */
   mode: z.enum(['read', 'send']).default('read'),
+});
+
+const oauthConfigInput = z.object({
+  client_id: z.string().min(10).max(500),
+  client_secret: z.string().min(10).max(500),
+  redirect_uri: z.string().url().max(500),
 });
 
 const sendInput = z.object({
@@ -43,10 +50,44 @@ export class GmailService {
     private readonly supabase: SupabaseService,
     private readonly crypto: CryptoService,
     private readonly oauth: GoogleOAuthService,
+    private readonly creds: GoogleCredsService,
     private readonly api: GmailApiService,
     private readonly sync: GmailSyncService,
     private readonly audit: AuditService,
   ) {}
+
+  /** Whether a connect flow can run, and where the credentials come from. */
+  async oauthConfigStatus(user: AuthUser) {
+    return this.creds.status(user.id);
+  }
+
+  /** Save the in-app Google OAuth app credentials (secret encrypted at rest). */
+  async saveOauthConfig(user: AuthUser, input: z.infer<typeof oauthConfigInput>) {
+    await this.creds.save(user.id, {
+      clientId: input.client_id,
+      clientSecret: input.client_secret,
+      redirectUri: input.redirect_uri,
+    });
+    await this.audit.record({
+      userId: user.id,
+      actor: 'user',
+      action: 'gmail.oauth_config.save',
+      targetType: 'google_oauth_config',
+    });
+    return this.creds.status(user.id);
+  }
+
+  /** Remove the in-app credentials; connect then falls back to env, if set. */
+  async deleteOauthConfig(user: AuthUser) {
+    await this.creds.remove(user.id);
+    await this.audit.record({
+      userId: user.id,
+      actor: 'user',
+      action: 'gmail.oauth_config.delete',
+      targetType: 'google_oauth_config',
+    });
+    return this.creds.status(user.id);
+  }
 
   async accounts(user: AuthUser) {
     const db = this.supabase.forUser(user.token);
@@ -60,8 +101,9 @@ export class GmailService {
   }
 
   /** Whether the server can run a connect flow at all (Phase 7.1). */
-  status() {
-    return { configured: this.oauth.configured() };
+  async status(user: AuthUser) {
+    const { configured, source } = await this.creds.status(user.id);
+    return { configured, source };
   }
 
   /**
@@ -71,14 +113,15 @@ export class GmailService {
    * read + send. The user picks this per mailbox in Settings, so one account
    * can be summarise-only while another is allowed to reply.
    */
-  connectUrl(user: AuthUser, mode: GmailAccessLevel = 'read') {
-    if (!this.oauth.configured()) {
+  async connectUrl(user: AuthUser, mode: GmailAccessLevel = 'read') {
+    const creds = await this.creds.forUser(user.id);
+    if (!creds) {
       throw new BadRequestException(
-        'Google OAuth is not configured on the server. Set GOOGLE_CLIENT_ID, ' +
-          'GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI.',
+        'Google OAuth is not configured. Add the app credentials in Settings → Mail ' +
+          '(or set them in the Render environment).',
       );
     }
-    return { url: this.oauth.authUrl(user.id, mode) };
+    return { url: this.oauth.authUrl(creds, user.id, mode) };
   }
 
   /**
@@ -96,7 +139,9 @@ export class GmailService {
     const userId = this.oauth.verifyState(state);
     if (!userId) throw new BadRequestException('This connect link has expired. Try again.');
 
-    const tokens = await this.oauth.exchangeCode(code);
+    const creds = await this.creds.forUser(userId);
+    if (!creds) throw new BadRequestException('Google OAuth is no longer configured.');
+    const tokens = await this.oauth.exchangeCode(creds, code);
     const email = await this.oauth.emailFor(tokens.accessToken);
     if (!email) throw new BadRequestException('Could not read the Google account address');
 
@@ -273,8 +318,29 @@ export class GmailController {
 
   @Get('status')
   @UseGuards(AuthGuard)
-  status() {
-    return this.gmail.status();
+  status(@CurrentUser() user: AuthUser) {
+    return this.gmail.status(user);
+  }
+
+  /** Read-only status of the stored OAuth app credentials (never the secret). */
+  @Get('oauth-config')
+  @UseGuards(AuthGuard)
+  oauthConfig(@CurrentUser() user: AuthUser) {
+    return this.gmail.oauthConfigStatus(user);
+  }
+
+  /** Save the Google OAuth app credentials (client secret encrypted at rest). */
+  @Post('oauth-config')
+  @UseGuards(AuthGuard)
+  saveOauthConfig(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    return this.gmail.saveOauthConfig(user, oauthConfigInput.parse(body));
+  }
+
+  /** Delete the stored credentials (write-only: this is the only way to change them). */
+  @Delete('oauth-config')
+  @UseGuards(AuthGuard)
+  deleteOauthConfig(@CurrentUser() user: AuthUser) {
+    return this.gmail.deleteOauthConfig(user);
   }
 
   @Get('accounts')
@@ -337,6 +403,7 @@ export class GmailInternalController {
     GmailSyncService,
     GmailApiService,
     GoogleOAuthService,
+    GoogleCredsService,
     CryptoService,
     InternalAuthGuard,
   ],
