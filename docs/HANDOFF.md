@@ -3,87 +3,75 @@
 What the last session changed. `docs/PHASES.md` is the durable plan; this file
 is volatile. Read `AGENTS.md` too.
 
-## This session: Phase 16 completed — the assistant is now a companion (code)
+## This session: the Android WebView shell (Phase 13.10 / ANDROID_UPGRADE)
 
-All four parts of Phase 16 are implemented and unit-tested. The agent now
-carries memory across sessions, decides on its own when to speak (with
-restraint), and adapts its register. **74 unit tests green, all four packages
-typecheck.** What has *not* happened is a live run — it needs migrations
-applied and the agent rebuilt (see "Before it runs live").
+Executed `docs/ANDROID_UPGRADE.md` through the cutover (route steps 1–5). The
+phone is now a thin native shell around the deployed web app: one codebase, one
+design, nothing to drift. The native screens are untouched but demoted behind a
+flag, not deleted — that waits on a real-device check.
 
-Earlier this session (already committed): the web ↔ agent connection fix
-(`start-agent.bat` tunnel-URL capture via cloudflared's metrics API; CORS; the
-dev `VITE_AGENT_URL` fallback) and the first cut of 16.1/16.2/16.3.
+**Typechecks pass in all four packages, the web app builds, and the Android JS
+bundles with `react-native-webview` resolving.** What has *not* happened is a
+run on a real phone (no sandbox can) — see "Before it ships" below.
 
-### 16.1 — commitments + attention threads
-- `commitments` (`0009`): CRUD on render (`/commitments`), agent skills, a web
-  Commitments section; `next_checkin_at` auto-armed on a deadline.
-- `attention_threads` (`0011`): `open_thread` / `close_thread` skills; active
-  threads injected into every prompt.
+### What changed
+- **`android/App.tsx`** now chooses: `shellEnabled()` → `src/ShellApp.tsx`
+  (default), else the legacy UI, moved verbatim to **`src/NativeApp.tsx`** with
+  its font gate + theme/toast providers kept in `App.tsx`.
+- **`android/src/ShellApp.tsx`** (new) — a `react-native-webview` onto
+  `EXPO_PUBLIC_WEB_URL`. Native-only concerns: adopts the web-posted session
+  (`client.auth.setSession`) and arms the clock + push; re-arms on foreground;
+  notification taps drive the web's URL hash (cold-start and runtime); Android
+  back button walks WebView history; external origins (OAuth consent) open in
+  the system browser; load/error/setup states.
+- **`android/src/lib/shell.ts`** (new) — `WEB_URL`, the `__MYPRO_SHELL__`
+  marker injected before content, the deep-link whitelist, and the
+  `EXPO_PUBLIC_SHELL` flag.
+- **`frontend/src/lib/shell.ts`** (new) — the single place the web reads
+  `inShell`. Adds the `.in-shell` body class, sets `viewport-fit=cover` (shell
+  only — `index.html` still omits it on purpose), exposes `postToShell`, and
+  **bridges the session out** via `onAuthChange`. `main.tsx` calls `initShell()`
+  before paint.
+- **`frontend/src/index.css`** — one `.in-shell` block (overscroll off,
+  `touch-action: manipulation`, no tap flash/callout, no text-select on chrome;
+  the reader and inputs are left selectable).
+- **`frontend/src/App.tsx`** — `usePush` gated on `!inShell` (or notifications
+  double); a `hashchange` listener so a deep link into an already-open app
+  re-routes (also fixes browser back/forward on the view hash).
+- **`shared/src/auth.ts`** — added `setSession(session)` to the `Auth`
+  contract + impl; the bridge the shell adopts the web's session through.
+- **`android/package.json`** — `react-native-webview@13.12.5` (a native module;
+  autolinked by `expo prebuild`, so the APK pipeline needs no new step).
+- **`.github/workflows/android.yml`** — passes `EXPO_PUBLIC_WEB_URL` (secret)
+  and `EXPO_PUBLIC_SHELL` (var) into the build.
+- **`android/.env.example`** documents both new vars.
 
-### 16.2 — memory layers (full)
-- Facts (`assistant_memory`) injected every prompt, now with **decay**
-  (`src/memory/decay.ts`): a fact unused past a ~45-day half-life fades below a
-  floor and drops out; `remember` resets its clock. `remember`/`forget` skills.
-- **Narrative** (`0010` + `SchedulerService.narrativeRefresh`, hourly): a
-  ~250-word third-person sketch regenerated weekly.
-- **Episodic** (`memory_episodes`, `0011` + `SchedulerService.episodeRefresh`,
-  6-hourly): one sentence summarising each new stretch of ≥16 messages.
-- Everything assembled in `AssistantService.memoryContext` and injected by
-  `systemPrompt`.
+### The rule it was built under
+Every shell branch lives in `lib/shell.ts` and changes only how the app *feels*,
+never *what the user can do* — so the second app cannot grow back. Web push is
+the one correctness branch (gate it, or notifications double).
 
-### 16.3 — the Pulse (`src/pulse/`)
-- `PulseService` (30-min cron) replaces the old one-off commitment check-in and
-  inactivity nudge (both removed from `SchedulerService`). It gathers candidate
-  signals — `commitment`, `task`, `email`, `silence`, `evening`, `weekly` —
-  scores each **urgency × value × novelty** (`pulse/scoring.ts`), and sends only
-  those that clear a min score, a per-signal **cooldown**, and a **daily budget
-  of 3**. Novelty decays from when each signal last fired.
-- Every candidate — sent or suppressed and why — is written to `interventions`
-  (`0011`). That's the suppressed log ("what did you decide not to tell me
-  today?"), and the tuning surface.
-
-### 16.4 — register + rhythm
-- **Register** (`src/assistant/register.ts`): derived from the situation
-  (health → serious, at-risk → concerned, deadline → focus, win → celebratory,
-  else casual), injected as one prompt line.
-- **Rhythm**: the evening close-out and Sunday letter are two Pulse signals
-  gated on the user's local time.
-
-### Tests (this is the "test the AI" layer)
-New backend-local suites for the pure AI logic: `pulse-scoring` (score, novelty
-decay, the three gates, ranking), `memory-decay` (effective confidence, fading,
-live-fact selection), `register` (derivation precedence). Plus the existing
-recurrence / commitment-skill / memory-skill suites. 39 in backend-local, 74
-total. The pure logic that decides what the companion knows and whether it
-speaks is covered; the LLM-in-the-loop behaviour is not (can't be, headless).
-
-## Before it runs live (your steps)
-1. **Apply migrations by hand** in Supabase: `0009_commitments.sql`,
-   `0010_narrative_memory.sql`, `0011_companion.sql` (plus any still-pending
-   `0005`–`0008`).
-2. **Rebuild + restart the agent** (`start-agent.bat`) — it's on the old build.
-   Crons run with `SCHEDULER_ENABLED=true` (default).
-3. Deploy backend-render (push `main`) for the Commitments CRUD.
-
-### How to see each piece work (once live)
-- **Memory:** tell the assistant "remember I prefer deep work before noon",
-  then open a fresh chat and ask what it knows — it should use it without being
-  told. Then "forget that".
-- **Commitment + Pulse:** say "I promised to send the report by tomorrow 5pm";
-  it should record a commitment, and within the day a check-in should appear in
-  chat + as a notification. Overdue → it flags `at_risk`.
-- **Suppressed log:** query `interventions` — you'll see sent rows and
-  suppressed ones with `suppressed_reason`.
-- **Narrative/episodic:** accumulate some conversation; `narrative_snapshots`
-  and `memory_episodes` fill on their crons (hourly / 6-hourly).
+## Before it ships (your steps)
+1. **Set `EXPO_PUBLIC_WEB_URL`** to the Vercel app as a repository secret (CI)
+   and in `android/.env` (local). Without it the shell shows a setup screen.
+2. **Step 0 + spike on a real phone** (ANDROID_UPGRADE §3): install the APK,
+   confirm sign-in, the reader, and that a brief fires with the laptop shut.
+3. **Only then, delete the native screens** (step 6) and close Phase 13 bar
+   13.2 (offline cache). To fall back meanwhile, set `EXPO_PUBLIC_SHELL=native`.
 
 ## Verified this session
-- All four packages `npx tsc --noEmit`.
-- Unit tests: backend-local 39, backend-render 17, shared 14, frontend 4 = 74.
-- Not verified (needs live stack + model + time): memory injection, decay,
-  narrative/episodic generation, any Pulse signal firing, register in a real
-  reply. All headless-impossible.
+- `npx tsc --noEmit` clean in `android/` and `frontend/`; `shared/` clean apart
+  from two **pre-existing, environment-only** `RequestInfo` errors on untouched
+  `doFetch` code (confirmed present with my changes stashed).
+- `pnpm --dir frontend build` succeeds (needs pnpm's isolated linker locally —
+  the react 18/19 hoist conflict of Phase 13.7; CI/Vercel are unaffected).
+- `pnpm --dir shared test` — 14 passing.
+- Android Metro bundled 867 modules (all new files + `react-native-webview`);
+  the only failure was a Git-LFS *pointer stub* for a logo PNG, which CI pulls
+  for real (`lfs: true`).
+- **Not verified (needs a device):** sign-in and the reader in the WebView, a
+  brief firing with the laptop shut, deep links, the back button, and the
+  in-shell feel. All headless-impossible.
 
 ## Still true from earlier sessions
 - Web `https://mypro-by-gova.vercel.app` · Render `https://mypro-km2k.onrender.com`
@@ -95,3 +83,5 @@ speaks is covered; the LLM-in-the-loop behaviour is not (can't be, headless).
 - `performSupabaseUpload` in `utils/pdfStorage.ts` is still a fake progress
   simulator — only extracted JSON syncs, never the raw PDF.
 - Commit only when asked; use the co-author line the session's attribution gives.
+- Phase 16 (companion) is built and unit-tested but unproven live; it needs
+  migrations `0009`–`0011` applied and the agent rebuilt.

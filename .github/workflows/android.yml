@@ -33,6 +33,13 @@ jobs:
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
       EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
       EXPO_PUBLIC_AGENT_URL: ${{ secrets.EXPO_PUBLIC_AGENT_URL }}
+      # Since the Android upgrade the app is a WebView shell around the deployed
+      # web app (docs/ANDROID_UPGRADE.md). Set EXPO_PUBLIC_WEB_URL to that URL
+      # (e.g. the Vercel app) or the APK shows a setup screen. The optional
+      # EXPO_PUBLIC_SHELL repository variable can be set to `native` to build
+      # the legacy native screens instead of the shell.
+      EXPO_PUBLIC_WEB_URL: ${{ secrets.EXPO_PUBLIC_WEB_URL }}
+      EXPO_PUBLIC_SHELL: ${{ vars.EXPO_PUBLIC_SHELL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -59,6 +59,37 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ─── Native shell (Android upgrade §2) ──────────────────────────────────────
+ * The phone runs this web app inside react-native-webview. These rules strip
+ * the browser "tells" so it reads as an app. Presentation only — never gate a
+ * feature or any data on `.in-shell`, or the second app grows back. The flag is
+ * set in frontend/src/lib/shell.ts; `viewport-fit=cover` is set there too.
+ * Deliberately outside every @layer so it wins over utilities regardless of
+ * specificity. */
+.in-shell {
+  /* Pull-to-refresh and the rubber-band bounce are the biggest page tells. */
+  overscroll-behavior: none;
+  /* Apps do not double-tap-zoom their own chrome (effective on all
+   * descendants: a double-tap needs every ancestor to allow it). */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+.in-shell .view-scroll,
+.in-shell .mobile-nav-drawer-scroll {
+  overscroll-behavior: none;
+}
+/* Chrome is not selectable text. Content is left untouched: selecting text in
+ * the reader and articles is a feature, and inputs need it to work at all. */
+.in-shell .bottom-nav,
+.in-shell .mobile-header,
+.in-shell .page-heading,
+.in-shell .mobile-nav-tabs,
+.in-shell button {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .app-shell {
   min-height: 100dvh;
   display: flex;

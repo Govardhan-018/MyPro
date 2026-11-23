@@ -105,6 +105,7 @@ import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
 import { usePush, type PushStatus } from "./lib/usePush";
+import { inShell } from "./lib/shell";
 import { useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
@@ -4397,7 +4398,11 @@ function SettingsView({
   const [open, setOpen] = useState<
     "profile" | "notifications" | "mail" | "privacy" | null
   >(null);
-  const push = usePush(!!userEmail);
+  // Web push is disabled inside the native shell: the shell already runs its
+  // own `registerForPush()` and `armUpcoming()`, so leaving this on would make
+  // every notification arrive twice, drifting apart over time. The native clock
+  // owns notifications in the app. (Android upgrade §2 — not optional.)
+  const push = usePush(!!userEmail && !inShell);
   const gmail = useGmail(!!userEmail);
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
@@ -5137,6 +5142,22 @@ function AppShell({
   useLayoutEffect(() => {
     displayedRef.current = displayedView;
   }, [displayedView]);
+
+  /**
+   * React to the address-bar hash changing under us. Browser back/forward move
+   * through the `#calendar`-style hashes `navigate` writes, and the native
+   * shell delivers a notification deep-link into an already-open app the same
+   * way — by setting the hash. Without this the view only read the hash once,
+   * at mount, so a deep link into a running app did nothing.
+   */
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = viewFromHash();
+      if (next !== displayedRef.current) navigate(next);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [navigate]);
 
   /**
    * Tapping a push notification (Phase 6.2) when a tab is already open.

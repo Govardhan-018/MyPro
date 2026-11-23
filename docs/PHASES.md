@@ -84,7 +84,7 @@ never a second implementation.
 | 10 | PDF pipeline | web/app · render | ✅ done (OCR on the web) |
 | 11 | The clock | web/app · local | ✅ done |
 | 12 | Ground under the agent | local | ✅ 12.1–12.4 done (12.2 live-model scoring still manual) |
-| 13 | The phone as main surface | web/app | 🟡 only 13.2 (offline cache) left |
+| 13 | The phone as main surface | web/app | 🟡 shell cutover built; device-proof + delete (ANDROID_UPGRADE §3) + 13.2 left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
 | 16 | A companion that initiates | local | ✅ built (16.1–16.4); live behaviour unproven |
@@ -369,6 +369,14 @@ block. Two things it calls out: web push must be disabled inside the shell or
 every notification arrives twice, and the offline cache stays its own piece —
 which is 13.2 below.
 
+**Built (Nov 2026) — the shell cutover, 13.10 below.** The phone now loads the
+deployed web app in `react-native-webview` by default; the native screens are
+kept behind `EXPO_PUBLIC_SHELL=native` for one release. So the drift above no
+longer accrues — there is no second UI to drift from — and **13.2 (offline
+cache) is the only feature work left in this phase**, plus two operational
+steps in `ANDROID_UPGRADE.md`: prove the shell on a real device, then delete
+the native screens.
+
 - ✅ **13.1** Today, Assistant chat, Calendar, Health, Knowledge screens on
   Android, reusing `shared/` — done as 8.3.
 - **13.2** A local cache so the app is useful with no connection. **The only
@@ -495,6 +503,28 @@ which is 13.2 below.
   choice is made instead of showing a screen that could do nothing.
 
   first time.
+
+- 🟡 **13.10** The thin native shell (Nov 2026) — `docs/ANDROID_UPGRADE.md`.
+  `android/App.tsx` now chooses the WebView shell (`src/ShellApp.tsx`) by
+  default and the legacy native screens (`src/NativeApp.tsx`) only under
+  `EXPO_PUBLIC_SHELL=native`. The shell loads `EXPO_PUBLIC_WEB_URL` in
+  `react-native-webview`, keeping native exactly the ~220 lines a web page
+  cannot do: the Phase 11 clock and push arming (`lib/notifications.ts`), the
+  Android back button, notification deep links (driving the web's URL hash),
+  and sending external origins (OAuth consent) to the system browser. The
+  **session bridge** is the join: the web owns sign-in and posts its session
+  out through `frontend/src/lib/shell.ts` (`postToShell`), and the shell adopts
+  it with the new `client.auth.setSession()`, so the native clock carries a
+  live token without a second login. Presentation is one `.in-shell` CSS block
+  and `viewport-fit=cover` set in the shell only (never in `index.html`, which
+  documents why); web push is gated off in the shell so notifications do not
+  arrive twice. **The rule holds: every shell branch lives in `lib/shell.ts`
+  and changes only how it feels, never what the user can do.** Verified:
+  typechecks in all four packages, the web builds, the Android JS bundles
+  (`react-native-webview` resolves). **Not yet proven on a real phone — and
+  until it is, the native screens are not deleted (ANDROID_UPGRADE §3, step 6)
+  and 13.2 stays open.**
+
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your
 own books and episodes.** The extraction is done and the data sits unused.
@@ -574,7 +604,9 @@ a sentence because a sentence was the only output available.
 - ✅ **21.3** Rendered in the web chat, and persisted on
   `assistant_messages.blocks` (`0017`) so a reload keeps them. Written
   best-effort: without the column the agent still answers.
-- ⬜ **21.4** Android renders none of it.
+- ✅ **21.4** Android renders all of it now — through the WebView shell
+  (13.10), the phone *is* the web chat, display-blocks included. The native
+  chat that would have needed its own renderer no longer exists.
 
 ### ⬜ Phase 17 — The seam
 **Goal: the corners stop being tabs.** Until here they are excellent

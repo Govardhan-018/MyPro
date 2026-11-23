@@ -23,6 +23,15 @@ export interface AuthSession {
 
 export interface Auth {
   getSession(): Promise<AuthSession | null>;
+  /**
+   * Adopt a session minted elsewhere, persisting it and notifying listeners.
+   *
+   * The native WebView shell signs in *inside the web app*, then posts the
+   * resulting session out to the shell; the shell hands it here so the native
+   * client (which arms the clock and registers for push) carries a live token
+   * without a second login. Passing null clears the session, same as signOut.
+   */
+  setSession(session: AuthSession | null): Promise<void>;
   /** Fresh access token (refreshes through Render if the current one expired). */
   getAccessToken(): Promise<string | null>;
   signInWithPassword(email: string, password: string): Promise<AuthSession | null>;
@@ -131,6 +140,9 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
   return {
     async getSession() {
       return (await load()) ?? null;
+    },
+    async setSession(session) {
+      await save(session);
     },
     async getAccessToken() {
       const session = await load();

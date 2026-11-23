@@ -5,9 +5,25 @@ codebase, one design, one place a bug gets fixed. The shell keeps the ~220
 lines that are genuinely native — the Phase 11 clock and push arming — and
 the UI becomes the web app itself.
 
-> **Status (Nov 2026).** Decided, not built. `docs/PHASES.md` remains the
-> record of what *is* built; this is the route for what replaces the phone's
-> UI layer.
+> **Status (Nov 2026).** Built through the cutover (route steps 1–5). The
+> shell is the default (`EXPO_PUBLIC_SHELL`); the native screens are kept one
+> release behind the flag (`=native`), not yet deleted. `docs/PHASES.md`
+> remains the record of what *is* built.
+>
+> **What is done:** `android/src/ShellApp.tsx` loads the deployed web app
+> (`EXPO_PUBLIC_WEB_URL`) in `react-native-webview`, keeping the Phase 11 clock
+> and push arming native. The session bridge, the `.in-shell` presentation
+> layer, `viewport-fit=cover`, the `usePush` gate, the back button and
+> notification deep links are all wired. Typechecks pass in all four packages;
+> the web app builds; the Android JS bundles (`react-native-webview` resolves).
+>
+> **What is left, in order:** (1) **Step 0 / the spike on a real device** —
+> install the APK and confirm sign-in, the reader and a brief firing with the
+> laptop shut. Nothing below should happen until this passes. (2) **Step 6,
+> the delete** — once proven, remove `android/src/screens/**`,
+> `android/src/components/**` (bar what the shell imports), `NativeApp.tsx` and
+> the four styling dependencies. (3) **§5, the offline cache** — still its own
+> piece (Phase 13.2).
 
 ---
 
@@ -109,27 +125,32 @@ countable, and a list that can be read in ten seconds stays honest.
 
 Staged so it can be abandoned cheaply at any point.
 
-0. **Step 0 — two minutes, before any code.** Open the deployed web app in
-   Chrome on the phone. That is within a rounding error of what the shell
-   will feel like. If scrolling, the keyboard or the reader feel wrong, stop
-   and reconsider — everything below assumes this passes.
-1. **Spike — 1 day.** `react-native-webview` (a native module; needs a
-   `prebuild` and a CI build to prove it, as `expo-blur` did) behind a dev
-   toggle, pointed at the Vercel URL. Confirm sign-in and the reader on a
-   real phone.
-   *If this feels wrong, stop here: one day spent, native app untouched.*
-2. **Session bridge — half a day.** The web posts its session out via
-   `postToShell()`; the shell keeps it in AsyncStorage so `armUpcoming()`
-   still has a token. Verify a brief fires with the laptop shut.
-3. **Shell polish — half a day.** `lib/shell.ts`, the `.in-shell` CSS block,
-   `viewport-fit=cover`, and the `usePush` gate from §2.
-4. **Navigation — half a day.** Back button to WebView history; notification
-   deep links to the right route (the web already reads its section from the
-   URL hash, so this is a `#calendar`-style load).
-5. **Cut over.** WebView becomes the default; the native screens stay one
-   release behind a flag.
-6. **Delete.** Remove `android/src/screens/**` and `android/src/components/**`.
-   The payoff: ~8,900 lines, and half of every future design change, gone.
+0. **Step 0 — two minutes, before trusting the build.** ⬜ Open the deployed
+   web app in Chrome on the phone. That is within a rounding error of what the
+   shell feels like. If scrolling, the keyboard or the reader feel wrong, stop
+   and reconsider — everything else assumes this passes. *(Yours to do; no
+   sandbox can.)*
+1. **Spike.** ✅ `react-native-webview` (a native module; needs a `prebuild`
+   and a CI build to prove it, as `expo-blur` did) behind the
+   `EXPO_PUBLIC_SHELL` flag, pointed at `EXPO_PUBLIC_WEB_URL`. Code done and
+   bundles; **still to confirm on a real phone: sign-in and the reader.**
+2. **Session bridge.** ✅ The web posts its session out via `postToShell()`
+   (`frontend/src/lib/shell.ts`); the shell adopts it through
+   `client.auth.setSession()`, which persists it to AsyncStorage so
+   `armUpcoming()` has a token. **To verify on device: a brief fires with the
+   laptop shut.**
+3. **Shell polish.** ✅ `lib/shell.ts` (both sides), the `.in-shell` CSS block,
+   `viewport-fit=cover` (set in the shell only — `index.html` still omits it,
+   see §2), and the `usePush` gate.
+4. **Navigation.** ✅ Android back button → WebView history; notification deep
+   links drive the web's URL hash (a `#calendar`-style load), with a
+   `hashchange` listener added to the web so an already-open app re-routes.
+5. **Cut over.** ✅ The WebView is the default; the native screens stay behind
+   `EXPO_PUBLIC_SHELL=native`.
+6. **Delete.** ⬜ Remove `android/src/screens/**`, `android/src/components/**`
+   (bar what the shell imports), and `NativeApp.tsx`, **after step 0 and the
+   device checks above pass**. The payoff: ~8,900 lines, and half of every
+   future design change, gone.
 
 **Dependencies that go with them:** `@expo/vector-icons`,
 `@expo-google-fonts/dm-sans`, `expo-blur`, `expo-linear-gradient` — all four
