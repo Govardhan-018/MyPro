@@ -23,7 +23,11 @@ A single intelligent personal space: **Calendar · Library/Reader · Knowledge �
 > - `supabase/migrations/` — 0001 schema (4NF) · 0002 RLS + health gate ·
 >   0003 node presence · 0004 skills · 0005 pdf-text storage · 0006 realtime ·
 >   0007 deferred run status · 0008 pending-action result · 0009 commitments ·
->   0010 narrative memory · 0011 companion layers · **0012 agent core**
+>   0010 narrative memory · 0011 companion layers · 0012 agent core ·
+>   0013 research · 0014 strava + interests · 0015–0016/0018 keepalive ·
+>   0017 message blocks · **0019 retention** (pg_cron prune of old logs) ·
+>   **0020 event completion** (`calendar_events.completed_at`) ·
+>   **0021 google_oauth_config** (in-app, encrypted OAuth app credentials)
 >
 > Staying awake: Supabase Cron + pg_net POST `/internal/keepalive` every 10
 > minutes (`0015`, repointed by `0016`). It is a ping, not a scheduler tick.
@@ -115,8 +119,9 @@ the reason the clock now lives on the devices.
 - **Health gate (two layers):**
   1. **DB:** `health_*` tables' RLS additionally requires a live row in `health_access_grants` (scoped to the requesting agent + not expired) when the caller is the assistant service role.
   2. **API:** the assistant's data-access service literally cannot build a health query without an active grant token; health tools are excluded from the tool list until the user approves (grant has `expires_at`).
-- **Gmail tokens** encrypted at rest (pgcrypto or app-level AES via a VM-held key), never returned to clients.
+- **Gmail tokens** encrypted at rest (app-level AES-256-GCM via a Render-held `TOKEN_ENCRYPTION_KEY`), never returned to clients. The **Google OAuth app client secret** uses the same scheme when stored in-app (`google_oauth_config`), and is write-only.
 - **Secrets:** `.env` on the VM + Vercel/Supabase dashboards. No secrets in the repo or client bundle.
+- **Retention (0019):** a daily `pg_cron` job `prune_old_history()` bounds growth — it deletes aged rows from the *log/history* tables (audit 365d, schedule_runs 120d, notifications 180d, skill_invocations 180d, interventions 180d, research_usage 90d, interest_findings 120d, email_messages 365d, assistant_messages 365d) and sweeps expired `research_cache`. **Live user content is never pruned.** This is the retention half of Phase 18.1.
 - **Untrusted input:** email bodies, article text, and PDF text are *data* to the AI, never commands. Outward/irreversible actions need explicit user confirmation.
 - **Backups:** Supabase PITR; periodic `pg_dump` to Storage.
 
@@ -164,12 +169,31 @@ gmail_accounts(
   access_token_enc bytea,
   refresh_token_enc bytea,
   token_expires_at timestamptz,
-  scopes text,
+  scopes text,                         -- granted scopes; presence of gmail.send
+                                       -- = this mailbox may be replied from
+                                       -- (per-account access level, write path
+                                       -- gated on it). Read-only requests only
+                                       -- gmail.readonly.
   history_id text,                     -- for incremental sync
   watch_expiration timestamptz,
   sync_state text,                     -- 'idle'|'syncing'|'error'
   unique(user_id, email)
 )
+
+-- The Google OAuth *app* credentials (one app serves every mailbox), stored in
+-- the app instead of the Render env (0021). The client secret is encrypted
+-- (AES-256-GCM, same key as the tokens) and write-only — the API reports only
+-- whether it is set and from where ('settings' | 'env'), never the value.
+-- RLS forced with NO policies: only Render's service key reads it.
+google_oauth_config(
+  user_id primary key,
+  client_id text,
+  client_secret_enc text,              -- bytea hex literal
+  redirect_uri text
+)
+-- Resolution order (backend-render GoogleCredsService): this table first, then
+-- the GOOGLE_* env vars as a fallback, so existing env-based deploys are
+-- unchanged.
 
 email_messages(
   id, gmail_account_id references gmail_accounts, user_id,
@@ -204,10 +228,24 @@ event_categories(id, user_id, name, tone)         -- Work/Personal/Health/Readin
 calendar_events(
   id, user_id, title, description,
   starts_at timestamptz, ends_at timestamptz, all_day bool,
-  location text, category_id references event_categories
+  location text, category_id references event_categories,
+  completed_at timestamptz           -- null = outstanding; set = marked done (0020)
 )
 event_reminders(id, calendar_event_id, minutes_before int, channel text)  -- 1:M, not an array
 ```
+
+**Event lifecycle time-rules** (enforced in the API, `calendar.module.ts`, so
+they hold however the request arrives — the UI only mirrors them):
+- **Editable** only *before* an event starts (an all-day event through its day).
+- **Markable done** only *after* it starts, for a **12-hour window** (a day for
+  all-day). `POST/DELETE /calendar/events/:id/complete`.
+- Delete is always allowed, past events included.
+
+**Reminders are notifications.** `GET /schedules/upcoming` expands calendar
+events too — **1h before + at the start + any custom `event_reminders`**
+(all-day → at-start only) — so the phone's local-notification clock reminds you
+of events, not just scheduled jobs. Each occurrence carries a channel
+(`reminders`/`briefs`) and a deep-link route (the event on its day).
 
 ### 4.5 Tasks
 
@@ -490,9 +528,16 @@ token. The laptop calls `POST /internal/gmail/send` when the user approves an
 outward action rather than keeping a second copy of the most dangerous
 credential in the system — one place to revoke, one place to audit.
 
-- **Connect:** Google Cloud OAuth app; per-account consent; scopes
-  `gmail.readonly` + `gmail.send` (never `gmail.modify` — the assistant has no
-  need to archive or label, and a scope you cannot use cannot be abused).
+- **The OAuth app credentials** can live in the Render env (`GOOGLE_*`) **or**
+  be pasted into Settings → Mail, where the client secret is encrypted at rest
+  (`google_oauth_config`, §4.3) and is write-only. `GoogleCredsService` resolves
+  per user: the in-app copy first, the env as fallback. You still register the
+  app once in Google Cloud — this only moves *where the resulting secret lives*.
+- **Connect:** per-account consent, at a chosen **access level** —
+  **read-only** (`gmail.readonly`) or **read + send** (`+ gmail.send`), picked
+  per mailbox in Settings (`POST /gmail/connect {mode}`). Never `gmail.modify`.
+  The send path (`/internal/gmail/send`) is **gated on the stored scope**, so a
+  read-only mailbox is refused with a clear message rather than an opaque 403.
   Tokens encrypted with AES-256-GCM (§3) and stored as Postgres **bytea hex
   literals**; writing base64 there stores the characters of the encoding and
   decrypts to nothing.
@@ -631,6 +676,7 @@ channels: `push | telegram | email | in_app`. Full field table in `backend/READM
 /api/v1/collections                      GET/POST/PATCH/DELETE  (+ /items/:id)
 /api/v1/knowledge                        GET           (derived from annotations)
 /api/v1/calendar/events|categories       GET/POST/PATCH/DELETE
+    /events/:id/complete                 POST/DELETE   (mark done / undo; 12h window enforced)
 /api/v1/tasks                            GET/POST/PATCH/DELETE
 /api/v1/health/records                   GET/POST/PATCH/DELETE  (requires grant)
 /api/v1/health/grant                     GET/POST/DELETE
@@ -639,11 +685,14 @@ channels: `push | telegram | email | in_app`. Full field table in `backend/READM
     /unregister                          POST          (withdraw by token)
     /channels                            GET/POST
 /api/v1/schedules                        GET/POST/PATCH/DELETE
-    /upcoming?hours=48                   GET           (flattened occurrences — the clock)
+    /upcoming?hours=48                   GET           (flattened occurrences — the clock;
+                                                       includes calendar-event reminders)
     /:id/runs                            GET
-/api/v1/gmail/status|accounts|messages   GET
-    /connect                             POST          (→ Google consent URL)
+/api/v1/gmail/status|accounts|messages   GET           (status also reports creds source)
+    /connect                             POST          (body {mode:'read'|'send'} → consent URL)
     /callback                            GET           (no guard: signed `state` is the auth)
+    /oauth-config                        GET/POST/DELETE (in-app Google app creds; secret
+                                                       encrypted + write-only)
     /sync                                POST
     /accounts/:id                        DELETE
 /api/v1/nodes/status                     GET           (is the laptop awake?)

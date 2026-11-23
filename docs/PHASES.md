@@ -119,6 +119,19 @@ Library, reader annotations (highlights, notes, bookmarks, sessions),
 Knowledge, Calendar, Health, with loading and error states throughout. The
 separate Tasks page was removed deliberately — Calendar covers it.
 
+**Calendar event lifecycle (Nov 2026).** An event can now be marked **Done**
+(`completed_at`, `0020`), not only edited or deleted. The time-rules are
+enforced in backend-render (`calendar.module.ts`), not just the UI: **editable
+only before it starts**, **markable done only after it starts for a 12-hour
+window** (a day for all-day), delete always allowed. Completed events are struck
+through across the views. See BACKEND_PLAN §4.4.
+
+**Session durability (Nov 2026).** `shared/src/auth.ts` no longer signs you out
+on a transient refresh failure (only a real 401), and the native WebView shell
+client runs in a non-refreshing `follower` mode so it cannot rotate the shared
+Supabase refresh token out from under the web app — the cause of the frequent
+mobile logout.
+
 ### ✅ Phase 4 — Assistant UI · *the heart of the product*
 **Goal:** a conversation that shows its work and refuses to pretend when the
 laptop is asleep.
@@ -163,11 +176,16 @@ Render owns all of it, because it is the only half holding
 `TOKEN_ENCRYPTION_KEY` — the laptop asks it to send rather than keeping a
 second copy of the most dangerous credential in the system.
 
-- ⬜ **7.1** Google Cloud OAuth app + consent screen — **yours to do.** Set
-  `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
-  (`…/api/v1/gmail/callback`) and `APP_URL` on render, plus `RENDER_API_URL`
-  on the laptop. With none of them set, the Mail panel says "not available"
-  instead of offering a button that cannot work.
+- ⬜ **7.1** Google Cloud OAuth app + consent screen — **yours to do.** You
+  still register the app once in Google Cloud (Google issues the client
+  id/secret). **Where the credentials live is now your choice (Nov 2026):**
+  either set `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI`
+  (`…/api/v1/gmail/callback`) + `APP_URL` on render, **or** paste them into
+  **Settings → Mail**, where the client secret is stored **encrypted**
+  (AES-256-GCM, `google_oauth_config`, `0021`) and **write-only** —
+  `GoogleCredsService` resolves the in-app copy first, the env as fallback. With
+  neither set, the Mail panel shows the credentials form instead of a dead
+  button. `RENDER_API_URL` on the laptop is still needed for `send_email`.
 - ✅ **7.2** Connect flow in Settings → Mail, multiple accounts (the row is
   `unique (user_id, email)`, so a second mailbox is just another row). The
   callback carries an **HMAC-signed, 10-minute `state`**: it arrives from
