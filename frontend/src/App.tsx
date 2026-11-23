@@ -105,6 +105,7 @@ import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
 import { usePush, type PushStatus } from "./lib/usePush";
 import { inShell } from "./lib/shell";
+import { Loading } from "./components/ui";
 import { useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
@@ -231,7 +232,7 @@ function useSimulatedRequest() {
 }
 
 function Spinner() {
-  return <i className="button-spinner" aria-hidden="true" />;
+  return <Loading variant="inline" size={16} />;
 }
 
 /** Colour Mode is the default experience; this remembers a per-device opt-out. */
@@ -451,7 +452,7 @@ function Welcome({
           </div>
 
           <div className={`auth-feedback auth-feedback-${authState}`} aria-live="polite">
-            {authState === "loading" && <i className="auth-spinner" />}
+            {authState === "loading" && <Loading variant="inline" size={16} />}
             {authState === "success" && <CheckCircle2 size={15} />}
             {authState === "error" && <span>!</span>}
             {feedback && <p>{feedback}</p>}
@@ -865,7 +866,7 @@ function CalendarView() {
       )}
       {loading && !error && (
         <div className="data-banner" aria-live="polite">
-          Loading your calendar…
+          <Loading variant="inline" size={18} text="Loading your calendar…" />
         </div>
       )}
       <div className={`calendar-layout calendar-layout-${mode.toLowerCase()}`}>
@@ -2145,11 +2146,7 @@ function AssistantView() {
                   <div className="message-avatar">{characterInitial(characterName)}</div>
                   <div className="message-bubble thinking-bubble">
                     <span>{characterName} is thinking</span>
-                    <div className="typing-dots" aria-label="Loading response">
-                      <i />
-                      <i />
-                      <i />
-                    </div>
+                    <Loading variant="inline" size={16} />
                   </div>
                 </div>
               )}
@@ -2205,7 +2202,7 @@ function AssistantView() {
                 onClick={() => send()}
                 disabled={isThinking || offline}
               >
-                {isThinking ? <i className="send-loader" /> : <Send size={17} />}
+                {isThinking ? <Loading variant="inline" size={17} /> : <Send size={17} />}
               </button>
             </div>
           </div>
@@ -2552,7 +2549,7 @@ function LibraryView({
       )}
       {loading && !error && (
         <div className="data-banner" aria-live="polite">
-          Loading your library…
+          <Loading variant="inline" size={18} text="Loading your library…" />
         </div>
       )}
 
@@ -3305,7 +3302,7 @@ function KnowledgeView({
       )}
       {knowledge.loading && !knowledge.error && (
         <div className="data-banner" aria-live="polite">
-          Loading your knowledge…
+          <Loading variant="inline" size={18} text="Loading your knowledge…" />
         </div>
       )}
 
@@ -3728,7 +3725,7 @@ function HealthView() {
       )}
       {health.loading && !health.error && (
         <div className="data-banner" aria-live="polite">
-          Loading your health records…
+          <Loading variant="inline" size={18} text="Loading your health records…" />
         </div>
       )}
 
@@ -5628,7 +5625,10 @@ function AppShell({
 function AuthSplash({ colorMode }: { colorMode: boolean }) {
   return (
     <main className={`welcome login-welcome auth-splash ${colorMode ? "color-mode" : ""}`}>
-      <Brand colorMode={colorMode} />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
+        <Brand colorMode={colorMode} />
+        <Loading variant="inline" size={30} />
+      </div>
     </main>
   );
 }

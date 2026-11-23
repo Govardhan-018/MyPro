@@ -2,6 +2,7 @@
  * MyPro UI kit (UI upgrade §3). Shared, token-driven, motion-aware building
  * blocks. Build screens from these rather than one-off per-screen CSS.
  */
+export { Loading, type LoadingVariant } from "./Loading";
 export { Pressable, type PressableProps } from "./Pressable";
 export { SkeletonLine, SkeletonBlock, SkeletonCircle, useDelayedSkeleton } from "./Skeleton";
 export { EmptyState } from "./EmptyState";

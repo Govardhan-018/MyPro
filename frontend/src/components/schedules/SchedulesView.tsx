@@ -6,6 +6,7 @@
  * you see, build, pause and delete them, and read what each run actually did.
  */
 import { useState } from "react";
+import { Loading } from "../ui";
 import {
   AlarmClock,
   Bell,
@@ -233,7 +234,7 @@ export function SchedulesView() {
       )}
       {schedules.loading && !schedules.error && (
         <div className="data-banner" aria-live="polite">
-          Loading your schedules…
+          <Loading variant="inline" size={18} text="Loading your schedules…" />
         </div>
       )}
       {!schedules.configured && (
@@ -428,7 +429,7 @@ export function SchedulesView() {
               Cancel
             </button>
             <button className="primary-button" onClick={submit} disabled={saving}>
-              {saving ? <Loader2 size={16} className="schedule-spin" /> : <Check size={16} />}
+              {saving ? <Loading variant="inline" size={16} /> : <Check size={16} />}
               {saving ? "Creating…" : "Create schedule"}
             </button>
           </div>
@@ -564,7 +565,7 @@ export function SchedulesView() {
 
                 {openRuns === row.id && (
                   <div className="schedule-runs">
-                    {!rowRuns && <small>Loading runs…</small>}
+                    {!rowRuns && <Loading variant="inline" size={14} text="Loading runs…" />}
                     {rowRuns && !rowRuns.length && <small>It hasn’t run yet.</small>}
                     {rowRuns?.map((run) => (
                       <div className={`schedule-run status-${run.status}`} key={run.id}>

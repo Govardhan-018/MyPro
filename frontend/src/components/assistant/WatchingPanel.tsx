@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 import type { InterestRow, StravaStatus } from "../../lib/api";
 import { api } from "../../lib/api";
+import { Loading } from "../ui";
 
 /**
  * What it watches for you, and where it gets your training from.
@@ -143,7 +144,7 @@ export function WatchingPanel() {
       </div>
 
       {interests === null ? (
-        <span className="capability-note">Loading…</span>
+        <Loading variant="inline" size={16} text="Loading…" />
       ) : interests.length === 0 ? (
         <span className="capability-note">
           Nothing yet. You can also just tell it — “keep me posted on India's cricket”.

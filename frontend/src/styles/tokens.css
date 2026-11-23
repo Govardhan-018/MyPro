@@ -172,6 +172,67 @@
   }
 }
 
+/* ── Universal loader (wavy ring) ────────────────────────────────────────────
+ * One smooth 360° rotation, GPU transform only. Reduced motion stops the spin
+ * and gently pulses instead (a loader still needs to read as "working"). */
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ds-loader-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.ds-wavy-spin {
+  animation: ds-spin 2.4s linear infinite;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.ds-wavy-pulse {
+  animation: ds-loader-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-wavy-spin {
+    animation: ds-loader-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+/* ── Content reveal (top → bottom) ───────────────────────────────────────────
+ * For content that arrives after its view has already entered (async loads):
+ * children drop into place in order, matching the JS page-entrance feel. */
+@keyframes ds-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ds-reveal-group > * {
+  animation: ds-reveal-up 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ds-reveal-group > *:nth-child(1) { animation-delay: 0ms; }
+.ds-reveal-group > *:nth-child(2) { animation-delay: 45ms; }
+.ds-reveal-group > *:nth-child(3) { animation-delay: 90ms; }
+.ds-reveal-group > *:nth-child(4) { animation-delay: 135ms; }
+.ds-reveal-group > *:nth-child(5) { animation-delay: 180ms; }
+.ds-reveal-group > *:nth-child(6) { animation-delay: 225ms; }
+.ds-reveal-group > *:nth-child(7) { animation-delay: 270ms; }
+.ds-reveal-group > *:nth-child(n + 8) { animation-delay: 300ms; }
+@media (prefers-reduced-motion: reduce) {
+  .ds-reveal-group > * {
+    animation: none;
+  }
+}
+
 /* ── Error shake (form validation) ───────────────────────────────────────────
  * A short horizontal shake on invalid submit — transform only. */
 @keyframes ds-shake {

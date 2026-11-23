@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Check, CheckCircle2, Clock3, ClipboardList, Plus, Trash2, X } from "lucide-react";
 import type { CommitmentRow, CommitmentState } from "@mypro/shared";
 import { useCommitments, type CommitmentInput } from "../../lib/useCommitments";
+import { Loading } from "../ui";
 
 const KINDS: CommitmentRow["kind"][] = ["promise", "goal", "decision", "intention"];
 
@@ -128,7 +129,7 @@ export function CommitmentsView() {
       )}
       {commitments.loading && !commitments.error && (
         <div className="data-banner" aria-live="polite">
-          Loading your commitments…
+          <Loading variant="inline" size={18} text="Loading your commitments…" />
         </div>
       )}
       {!commitments.configured && (

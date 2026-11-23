@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { Loading } from "../ui";
 import {
   AlignLeft,
   AlignJustify,
@@ -1777,7 +1778,7 @@ const key = `${page}-${idx}`;
               <div className="reader-flow-foot" ref={bottomSentinel}>
                 {flowEnd < totalPages ? (
                   <span className="reader-flow-loading">
-                    <span className="reader-flow-dot" aria-hidden="true" />
+                    <Loading variant="inline" size={14} />
                     Loading page {Math.min(totalPages, flowEnd + 1)}…
                   </span>
                 ) : (
