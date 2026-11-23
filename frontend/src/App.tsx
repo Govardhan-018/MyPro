@@ -107,7 +107,7 @@ import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
 import { usePush, type PushStatus } from "./lib/usePush";
-import { inShell } from "./lib/shell";
+import { inShell, requestShellTestNotification } from "./lib/shell";
 import { Loading } from "./components/ui";
 import { useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
@@ -4661,46 +4661,74 @@ function SettingsView({
                 Refresh
               </button>
             </div>
-            <div className="settings-status-row">
-              <span
-                className={`settings-status-dot push-${push.status}`}
-                aria-hidden="true"
-              />
-              <div>
-                <strong>When the app is closed — {PUSH_LABELS[push.status]}</strong>
-                <small>
-                  {push.reason ??
-                    (push.status === "subscribed"
-                      ? "This browser will show notifications even with every MyPro tab closed."
-                      : "Allow notifications and this browser will hear from MyPro even when no tab is open.")}
-                </small>
-              </div>
-            </div>
-            <div className="settings-panel-actions">
-              {push.status === "idle" && (
-                <button className="primary-button" onClick={() => void push.subscribe()}>
-                  Enable push
-                </button>
-              )}
-              {push.status === "subscribing" && (
-                <button className="primary-button" disabled>
-                  Enabling…
-                </button>
-              )}
-              {push.status === "subscribed" && (
-                <button className="secondary-button" onClick={() => void push.unsubscribe()}>
-                  Turn push off
-                </button>
-              )}
-              {push.status === "error" && (
-                <button className="secondary-button" onClick={() => void push.subscribe()}>
-                  Try again
-                </button>
-              )}
-            </div>
-            <p className="settings-hint">
-              <strong>Web only for now.</strong> Android notifications come next.
-            </p>
+            {inShell ? (
+              /* In the app, the native clock owns notifications: it arms event
+                 reminders and the brief on the device. Web push is off here
+                 (it would double every alert), so offer a test instead. */
+              <>
+                <div className="settings-status-row">
+                  <span className="settings-status-dot live-live" aria-hidden="true" />
+                  <div>
+                    <strong>On this phone</strong>
+                    <small>
+                      Event reminders (an hour before and at the start) and your brief are scheduled
+                      on the device, so they arrive even with the app closed.
+                    </small>
+                  </div>
+                </div>
+                <div className="settings-panel-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => requestShellTestNotification()}
+                  >
+                    Send a test notification
+                  </button>
+                </div>
+                <p className="settings-hint">
+                  Not seeing it? Allow notifications for MyPro in Android Settings, then try again.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="settings-status-row">
+                  <span
+                    className={`settings-status-dot push-${push.status}`}
+                    aria-hidden="true"
+                  />
+                  <div>
+                    <strong>When the app is closed — {PUSH_LABELS[push.status]}</strong>
+                    <small>
+                      {push.reason ??
+                        (push.status === "subscribed"
+                          ? "This browser will show notifications even with every MyPro tab closed."
+                          : "Allow notifications and this browser will hear from MyPro even when no tab is open.")}
+                    </small>
+                  </div>
+                </div>
+                <div className="settings-panel-actions">
+                  {push.status === "idle" && (
+                    <button className="primary-button" onClick={() => void push.subscribe()}>
+                      Enable push
+                    </button>
+                  )}
+                  {push.status === "subscribing" && (
+                    <button className="primary-button" disabled>
+                      Enabling…
+                    </button>
+                  )}
+                  {push.status === "subscribed" && (
+                    <button className="secondary-button" onClick={() => void push.unsubscribe()}>
+                      Turn push off
+                    </button>
+                  )}
+                  {push.status === "error" && (
+                    <button className="secondary-button" onClick={() => void push.subscribe()}>
+                      Try again
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 

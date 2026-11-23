@@ -201,6 +201,39 @@ async function cancelOwned(): Promise<void> {
 }
 
 /**
+ * Fire a notification right now, so the user can confirm on their own phone
+ * that notifications are permitted and showing — independent of whether an
+ * event happens to be due. Returns why it could not, so the UI can say.
+ */
+export async function fireTestNotification(): Promise<{ ok: boolean; reason?: string }> {
+  if (!(await ensurePermission())) {
+    return { ok: false, reason: 'Notifications are turned off for MyPro in Android settings.' };
+  }
+  await ensureChannel();
+  try {
+    await Notifications.scheduleNotificationAsync({
+      identifier: `mypro-test-${Date.now()}`,
+      content: {
+        title: 'MyPro notifications are on',
+        body: 'This is a test. Event reminders and your brief will arrive like this.',
+        color: ACCENT,
+        data: { owner: OWNED, hash: '' },
+      },
+      // A small delay rather than null: an immediate trigger can be swallowed
+      // while the app is foregrounded on some Android builds.
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: 2,
+        channelId: 'reminders',
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : 'Could not post a notification.' };
+  }
+}
+
+/**
  * Register this device for push (Phase 8.4).
  *
  * Filed under `channel_type: 'fcm'` because that is how it is delivered, but

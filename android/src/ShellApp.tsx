@@ -19,7 +19,7 @@ import {
 } from 'react-native-webview';
 import { Text } from './components/Typography';
 import { client } from './lib/client';
-import { armUpcoming, registerForPush } from './lib/notifications';
+import { armUpcoming, fireTestNotification, registerForPush } from './lib/notifications';
 import { hashFromDeeplink } from '@mypro/shared';
 import { INJECTED_BEFORE, WEB_URL, isWebConfigured } from './lib/shell';
 
@@ -49,7 +49,8 @@ const STATUS_BAR = Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24)
 /** The message shapes the web posts out. Mirrors `ShellMessage` on the web. */
 type IncomingMessage =
   | { type: 'session'; session: Parameters<typeof client.auth.setSession>[0] }
-  | { type: 'haptic'; kind: string };
+  | { type: 'haptic'; kind: string }
+  | { type: 'test-notification' };
 
 export function ShellApp() {
   if (!isWebConfigured) return <SetupScreen />;
@@ -100,6 +101,8 @@ function Shell() {
           void registerForPush();
         }
       });
+    } else if (message.type === 'test-notification') {
+      void fireTestNotification();
     }
     // Other message types (e.g. haptics) are ignored until the shell handles
     // them — unknown messages must never throw.
@@ -218,6 +221,13 @@ function Shell() {
           thirdPartyCookiesEnabled
           setSupportMultipleWindows={false}
           allowsBackForwardNavigationGestures
+          // Media: the WebView blocks playback until a user gesture and refuses
+          // inline playback by default, which is exactly why the podcast player
+          // (a YouTube embed) stayed silent in the app. Allow inline playback,
+          // let a tap start it, and permit fullscreen for the video mode.
+          mediaPlaybackRequiresUserAction={false}
+          allowsInlineMediaPlayback
+          allowsFullscreenVideo
           // The native clock owns pull-to-refresh behaviour; the web disables
           // overscroll in `.in-shell`.
           overScrollMode="never"

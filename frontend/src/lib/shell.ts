@@ -32,7 +32,9 @@ export type ShellMessage =
   /** The current auth session (or null when signed out), for the native clock. */
   | { type: 'session'; session: AuthSession | null }
   /** A short tactile tap on a meaningful action. */
-  | { type: 'haptic'; kind: 'light' | 'medium' | 'success' };
+  | { type: 'haptic'; kind: 'light' | 'medium' | 'success' }
+  /** Ask the shell to post a test notification, so the user can verify them. */
+  | { type: 'test-notification' };
 
 /**
  * Are we running inside the native shell? Read once at module load: the marker
@@ -61,6 +63,11 @@ export function postToShell(message: ShellMessage): void {
 /** A light haptic tap, routed to the shell. No-op in a browser. */
 export function shellHaptic(kind: 'light' | 'medium' | 'success' = 'light'): void {
   if (inShell) postToShell({ type: 'haptic', kind });
+}
+
+/** Ask the native shell to post a test notification. No-op in a browser. */
+export function requestShellTestNotification(): void {
+  if (inShell) postToShell({ type: 'test-notification' });
 }
 
 let initialised = false;
