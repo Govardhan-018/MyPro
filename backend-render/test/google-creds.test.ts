@@ -77,7 +77,27 @@ describe('GoogleCredsService.forUser', () => {
       configured: true,
       source: 'settings',
       redirect_uri: 'https://x',
+      missing: [],
     });
+  });
+
+  it('names exactly what is missing when nothing is configured (never a secret)', async () => {
+    const { supabase } = fakeSupabase(null);
+    const svc = new GoogleCredsService(supabase, fakeCrypto);
+    const saved = { ...process.env };
+    delete process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_SECRET;
+    delete process.env.RENDER_EXTERNAL_URL;
+    delete process.env.PUBLIC_API_URL;
+    process.env.GOOGLE_CLIENT_ID = 'cid.apps.googleusercontent.com';
+    try {
+      const status = await svc.status('u1');
+      expect(status.configured).toBe(false);
+      expect(status.missing).toEqual(['GOOGLE_CLIENT_SECRET', 'PUBLIC_API_URL']);
+      expect(JSON.stringify(status)).not.toContain('cid.apps');
+    } finally {
+      process.env = saved;
+    }
   });
 });
 

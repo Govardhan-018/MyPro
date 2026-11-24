@@ -6,9 +6,11 @@
 
 const DB_NAME = "mypro_storage_vault";
 // v2 adds the extracted-text store (Phase 10.1) alongside the PDF blobs.
-const DB_VERSION = 2;
+// v3 adds the offline-download records (what was saved for offline reading).
+const DB_VERSION = 3;
 const STORE_NAME = "pdf_documents";
 const TEXT_STORE_NAME = "pdf_text";
+const OFFLINE_STORE_NAME = "offline_books";
 
 export interface StoredPdfRecord {
   id: string; // book title or unique identifier
@@ -36,9 +38,20 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(TEXT_STORE_NAME)) {
         db.createObjectStore(TEXT_STORE_NAME, { keyPath: "id" });
       }
+      if (!db.objectStoreNames.contains(OFFLINE_STORE_NAME)) {
+        db.createObjectStore(OFFLINE_STORE_NAME, { keyPath: "id" });
+      }
     };
+    // Another tab still holds the old version open: let it close, don't hang.
+    request.onblocked = () => reject(new Error("Storage is busy in another tab — close it and retry."));
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // A newer version opened elsewhere (a fresh deploy in another tab):
+      // step aside so its upgrade is not blocked by this old connection.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -237,5 +250,60 @@ export async function deleteExtractedText(key: string): Promise<void> {
     });
   } catch {
     // Graceful fallback
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Offline downloads — which books were saved for offline reading.      */
+/* The book text itself lives in the pdf_text store (same key the       */
+/* reader opens), so a download is exactly what the reader reads.       */
+/* ------------------------------------------------------------------ */
+
+export interface OfflineBookRecord {
+  /** Library item id (or title for an unsaved book). */
+  id: string;
+  /** The pdf_text key holding the book's structured text. */
+  textKey: string;
+  title: string;
+  creator?: string;
+  cover?: string;
+  pageCount: number;
+  chapters: number;
+  /** The text's own version (its extraction time) — re-downloads compare it. */
+  version: string;
+  sizeBytes: number;
+  savedAt: string;
+}
+
+async function offlineTx<T>(
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => IDBRequest,
+): Promise<T> {
+  const db = await openDb();
+  return new Promise<T>((resolve, reject) => {
+    const tx = db.transaction(OFFLINE_STORE_NAME, mode);
+    const request = run(tx.objectStore(OFFLINE_STORE_NAME));
+    request.onsuccess = () => resolve(request.result as T);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function listOfflineBooks(): Promise<OfflineBookRecord[]> {
+  try {
+    return (await offlineTx<OfflineBookRecord[]>("readonly", (s) => s.getAll())) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveOfflineBook(record: OfflineBookRecord): Promise<void> {
+  await offlineTx("readwrite", (s) => s.put(record));
+}
+
+export async function deleteOfflineBook(id: string): Promise<void> {
+  try {
+    await offlineTx("readwrite", (s) => s.delete(id));
+  } catch {
+    /* already gone */
   }
 }

@@ -3,17 +3,55 @@ import type { LibraryItem } from '../types/library';
 import { api, ApiError } from './api';
 import { isApiConfigured } from './env';
 import { itemToCreateBody, itemToPatchBody, rowToItem } from './libraryMap';
+import { outbox } from './outbox';
 
 /**
- * How long to let progress settle before writing it back.
- *
- * The reader and the podcast player auto-save on every change, and "every
- * change" means every page the scroll crosses and every half-second the
- * player ticks — which turned a ten-minute listen into roughly a thousand
- * PATCHes. Only the last value of a burst matters, so each item keeps one
- * trailing timer.
+ * The last library this device saw, per user, so the app opens with your
+ * books (and their latest local progress) with no connection at all.
  */
-const WRITE_BACK_MS = 1200;
+const cacheKey = (uid: string) => `mypro.library.${uid}`;
+
+function userId(): string | null {
+  try {
+    const raw = localStorage.getItem('mypro.session');
+    return raw ? ((JSON.parse(raw) as { user?: { id?: string } }).user?.id ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCache(): LibraryItem[] | null {
+  const uid = userId();
+  if (!uid) return null;
+  try {
+    const raw = localStorage.getItem(cacheKey(uid));
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return Array.isArray(parsed) ? (parsed as LibraryItem[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(items: LibraryItem[]): void {
+  const uid = userId();
+  if (!uid) return;
+  try {
+    // Only the fields the list and reader need offline; never blobs.
+    localStorage.setItem(cacheKey(uid), JSON.stringify(items));
+  } catch {
+    /* quota: the cache is a convenience */
+  }
+}
+
+/** Fields that make up a reading/listening position. */
+const positionOf = (item: LibraryItem) =>
+  `${item.currentPage ?? ''}|${item.currentTimeSeconds ?? ''}|${item.progress ?? ''}`;
+
+/** A failure that means "no connection / server unreachable", not "you can't". */
+function isNetworkFailure(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return error.status === 0 || error.status >= 500;
+}
 
 export interface LibraryState {
   items: LibraryItem[];
@@ -27,6 +65,8 @@ export interface LibraryState {
   createItem: (item: LibraryItem) => Promise<LibraryItem>;
   /** Remove locally and on the server. */
   removeItem: (item: LibraryItem) => Promise<void>;
+  /** Showing the saved copy because the server could not be reached. */
+  offline: boolean;
 }
 
 function message(error: unknown): string {
@@ -41,71 +81,104 @@ function message(error: unknown): string {
  */
 export function useLibrary(seed: LibraryItem[]): LibraryState {
   const configured = isApiConfigured;
-  const [items, setItems] = useState<LibraryItem[]>(configured ? [] : seed);
-  const [loading, setLoading] = useState<boolean>(configured);
+  const [items, setItems] = useState<LibraryItem[]>(() => (configured ? (readCache() ?? []) : seed));
+  const [loading, setLoading] = useState<boolean>(configured && !readCache());
   const [error, setError] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await api.library.list();
+      const fresh = rows.map(rowToItem);
+      // An item with changes still waiting in the outbox keeps this device's
+      // copy: the server has not seen them yet, and showing its older progress
+      // would look like the reading was lost.
+      const waiting = outbox.pendingItemIds();
+      const local = new Map((readCache() ?? []).map((item) => [item.id, item]));
+      setItems(
+        fresh.map((item) =>
+          item.id && waiting.has(item.id) && local.has(item.id) ? { ...item, ...local.get(item.id)! } : item,
+        ),
+      );
+      setError(null);
+      setOffline(false);
+    } catch (caught) {
+      const cached = readCache();
+      if (cached && isNetworkFailure(caught)) {
+        setItems(cached);
+        setOffline(true);
+        setError(null);
+      } else {
+        setError(message(caught));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!configured) return;
-    let active = true;
-    api.library
-      .list()
-      .then((rows) => {
-        if (!active) return;
-        setItems(rows.map(rowToItem));
-        setLoading(false);
-      })
-      .catch((caught) => {
-        if (!active) return;
-        setError(message(caught));
-        setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+    void load();
+    // Back online: refresh once the queued changes have gone up.
+    const onOnline = () => void outbox.flush().then(load);
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [configured, load]);
+
+  // Keep the offline copy current with every local change.
+  useEffect(() => {
+    if (!configured || loading) return;
+    const timer = window.setTimeout(() => writeCache(items), 400);
+    return () => window.clearTimeout(timer);
+  }, [configured, loading, items]);
+
+  // The server is the referee: after a queued change lands, adopt what it
+  // kept (an older offline position loses to a newer one from elsewhere).
+  useEffect(() => {
+    if (!configured) return;
+    return outbox.onApplied((op, result) => {
+      if (op.kind !== 'library.patch' || !result || typeof result !== 'object') return;
+      if (outbox.pendingFor(op.itemId).some((p) => p.kind === 'library.patch')) return;
+      const server = rowToItem(result as Parameters<typeof rowToItem>[0]);
+      setItems((current) =>
+        current.map((item) =>
+          item.id === op.itemId && positionOf(item) !== positionOf(server)
+            ? {
+                ...item,
+                progress: server.progress,
+                currentPage: server.currentPage,
+                currentTimeSeconds: server.currentTimeSeconds,
+                status: server.status,
+              }
+            : item,
+        ),
+      );
+    });
   }, [configured]);
 
-  /** One trailing timer per item id, plus the latest body to send for it. */
-  const pending = useRef<Map<string, { timer: number; item: LibraryItem }>>(new Map());
-
+  /**
+   * Queue a write-back. Every change goes to the durable outbox (bursts of
+   * page turns collapse into one PATCH per item there), stamped with when the
+   * position changed so a late offline write cannot rewind another device.
+   */
   const persist = useCallback(
-    (item: LibraryItem) => {
+    (item: LibraryItem, positionChanged: boolean) => {
       if (!configured || !item.id) return;
-      const id = item.id;
-      const queued = pending.current.get(id);
-      if (queued) window.clearTimeout(queued.timer);
-      const timer = window.setTimeout(() => {
-        const latest = pending.current.get(id);
-        pending.current.delete(id);
-        if (!latest) return;
-        api.library.update(id, itemToPatchBody(latest.item)).catch(() => {
-          /* best-effort write-back; the UI already reflects the change */
-        });
-      }, WRITE_BACK_MS);
-      pending.current.set(id, { timer, item });
+      const body = itemToPatchBody(item);
+      if (positionChanged) body.position_at = new Date().toISOString();
+      outbox.push({ kind: 'library.patch', itemId: item.id, body });
     },
     [configured],
   );
 
-  /** Send whatever is still queued (tab closing, hook unmounting). */
-  const flushPending = useCallback(() => {
-    for (const [id, queued] of pending.current) {
-      window.clearTimeout(queued.timer);
-      api.library.update(id, itemToPatchBody(queued.item)).catch(() => {});
-    }
-    pending.current.clear();
-  }, []);
-
   useEffect(() => {
+    // Leaving the page or backgrounding the app: send what is queued now.
     const onHide = () => {
-      if (document.visibilityState === 'hidden') flushPending();
+      if (document.visibilityState === 'hidden') void outbox.flush();
     };
     document.addEventListener('visibilitychange', onHide);
-    return () => {
-      document.removeEventListener('visibilitychange', onHide);
-      flushPending();
-    };
-  }, [flushPending]);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, []);
 
   /**
    * Update one item, found by its id or — for the unsaved/prototype case —
@@ -123,9 +196,10 @@ export function useLibrary(seed: LibraryItem[]): LibraryState {
         const index = current.findIndex((item) => item.id === key);
         const target = index === -1 ? current.findIndex((item) => item.title === key) : index;
         if (target === -1) return current;
-        const updated = patch(current[target]);
-        // Defer the network write out of the state-updater pass.
-        queueMicrotask(() => persist(updated));
+        const previous = current[target];
+        const updated = patch(previous);
+        // Defer the write out of the state-updater pass.
+        queueMicrotask(() => persist(updated, positionOf(previous) !== positionOf(updated)));
         return current.map((item, i) => (i === target ? updated : item));
       });
     },
@@ -156,5 +230,5 @@ export function useLibrary(seed: LibraryItem[]): LibraryState {
     [configured],
   );
 
-  return { items, setItems, loading, error, configured, updateItem, createItem, removeItem };
+  return { items, setItems, loading, error, configured, updateItem, createItem, removeItem, offline };
 }

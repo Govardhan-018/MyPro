@@ -689,10 +689,14 @@ channels: `push | telegram | email | in_app`. Full field table in `backend/READM
 /api/v1/me/realtime                      GET           (project URL + publishable key)
 /api/v1/me/push                          GET           (VAPID public key)
 /api/v1/library                          GET/POST/PATCH/DELETE
+    PATCH accepts `position_at` (when the device recorded the position): an older one than
+    `*_details.position_updated_at` (0023) is ignored — newest position wins across devices
     /:id/annotations  /:id/bookmarks  /:id/reading-sessions  /:id/listening-sessions
+    (creates accept a client `id` uuid; a retried create returns the existing row — offline outbox)
     /:id/pdf-text/upload-url|url|confirm POST/GET/POST (signed URLs, brokered)
 /api/v1/collections                      GET/POST/PATCH/DELETE  (+ /items/:id)
-/api/v1/knowledge                        GET           (derived from annotations)
+/api/v1/knowledge                        GET           (derived from annotations; embeds the source item's
+                                                       id/title/type/creator/cover — the web groups by source)
 /api/v1/calendar/events|categories       GET/POST/PATCH/DELETE
     /events/:id/complete                 POST/DELETE   (mark done / undo; 12h window enforced)
 /api/v1/tasks                            GET/POST/PATCH/DELETE

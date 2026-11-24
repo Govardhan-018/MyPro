@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef } from 'react';
 import type { Annotation, AnnotationColor, BookmarkItem } from '../types/library';
-import { api, type AnnotationRow } from './api';
+import type { AnnotationRow } from './api';
+import { isUuid, outbox, uuid } from './outbox';
+import { writeReaderCache } from './readerCache';
 
 /**
  * Reader persistence. The reader works on in-memory annotation/bookmark arrays
@@ -64,6 +66,23 @@ function annotationToCreate(a: Annotation) {
   };
 }
 
+/** The reader's annotation as the row the server would hold (for the offline cache). */
+function annotationToRow(itemId: string, a: Annotation, id: string): AnnotationRow {
+  return {
+    id,
+    library_item_id: itemId,
+    kind: a.kind,
+    page: a.page ?? null,
+    paragraph: a.paragraph ?? null,
+    anchor_text: a.anchorText || null,
+    title: a.title ?? null,
+    body: a.body ?? null,
+    color: a.color ?? null,
+    chapter: a.chapter ?? null,
+    created_at: a.createdAt && !Number.isNaN(Date.parse(a.createdAt)) ? a.createdAt : new Date().toISOString(),
+  };
+}
+
 export interface ReaderSnapshot {
   bookmarks: BookmarkItem[];
   annotations: Annotation[];
@@ -124,36 +143,65 @@ export function useReaderSync(configured: boolean): ReaderSync {
       if (!configured || !state || state.itemId !== itemId) return;
 
       if (latest) {
+        // Everything goes through the durable outbox (works offline, retries,
+        // never duplicates); the local cache is updated to the final state so
+        // the next open — online or not — starts from exactly this.
         const currentAnnotationIds = new Set(latest.annotations.map((a) => a.id));
         for (const id of state.annotationIds) {
-          if (!currentAnnotationIds.has(id)) api.reader.deleteAnnotation(id).catch(() => {});
+          if (!currentAnnotationIds.has(id)) outbox.push({ kind: 'annotation.delete', annotationId: id });
         }
+        const rows: AnnotationRow[] = [];
         for (const a of latest.annotations) {
+          // A new note gets its permanent id now — the server stores it as-is,
+          // so a retried create is recognised rather than duplicated.
+          const id = state.annotationIds.has(a.id) || isUuid(a.id) ? a.id : uuid();
           if (!state.annotationIds.has(a.id)) {
-            api.reader.createAnnotation(itemId, annotationToCreate(a)).catch(() => {});
+            outbox.push({
+              kind: 'annotation.create',
+              itemId,
+              body: { ...annotationToCreate(a), id },
+            });
           }
+          rows.push(annotationToRow(itemId, a, id));
         }
 
         const currentPages = new Set(latest.bookmarks.map((b) => b.page));
         for (const [page, id] of state.bookmarkIdByPage) {
-          if (!currentPages.has(page)) api.reader.deleteBookmark(id).catch(() => {});
+          if (!currentPages.has(page)) outbox.push({ kind: 'bookmark.delete', bookmarkId: id });
         }
+        const bookmarkRows: Record<string, unknown>[] = [];
         for (const b of latest.bookmarks) {
-          if (!state.bookmarkIdByPage.has(b.page)) {
-            api.reader
-              .createBookmark(itemId, { page: b.page, title: b.title || undefined })
-              .catch(() => {});
+          const known = state.bookmarkIdByPage.get(b.page);
+          const id = known ?? (isUuid(b.id) ? b.id : uuid());
+          if (!known) {
+            outbox.push({
+              kind: 'bookmark.create',
+              itemId,
+              body: { id, page: b.page, ...(b.title ? { title: b.title } : {}) },
+            });
           }
+          bookmarkRows.push({
+            id,
+            library_item_id: itemId,
+            page: b.page,
+            title: b.title ?? null,
+            created_at: b.createdAt || new Date().toISOString(),
+          });
         }
+        writeReaderCache(itemId, rows, bookmarkRows);
       }
 
-      api.reader
-        .readingSession(itemId, {
+      outbox.push({
+        kind: 'session',
+        itemId,
+        table: 'reading',
+        body: {
+          id: uuid(),
           started_at: started || new Date().toISOString(),
           ended_at: new Date().toISOString(),
           ...(latest ? { end_page: latest.currentPage } : {}),
-        })
-        .catch(() => {});
+        },
+      });
     },
     [configured],
   );

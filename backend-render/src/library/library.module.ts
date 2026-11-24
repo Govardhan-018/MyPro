@@ -52,7 +52,35 @@ const createItem = z.object({
   details: z.record(z.unknown()).optional(),
 });
 
-const patchItem = createItem.partial().omit({ type: true });
+const patchItem = createItem
+  .partial()
+  .omit({ type: true })
+  .extend({
+    /**
+     * When the client recorded the reading/listening position it is sending.
+     * An offline device can deliver its queue hours later; a position older
+     * than the one already stored (another device read further since) must
+     * not overwrite it. Needs migration 0023; without it writes as before.
+     */
+    position_at: z.string().datetime().optional(),
+  });
+
+/** Position fields per detail table — the ones a stale write must not touch. */
+const POSITION_FIELDS: Partial<Record<z.infer<typeof itemType>, string[]>> = {
+  book: ['current_page'],
+  podcast: ['current_time_seconds'],
+};
+
+/**
+ * Last-writer-wins on the position, by the time it was *recorded* on the
+ * device, not the time it arrived. Pure; unit-tested.
+ */
+export function isStalePosition(stored: string | null | undefined, incoming: string | undefined): boolean {
+  if (!stored || !incoming) return false;
+  const a = Date.parse(stored);
+  const b = Date.parse(incoming);
+  return Number.isFinite(a) && Number.isFinite(b) && b < a;
+}
 
 const SELECT = '*, book_details(*), podcast_details(*), article_details(*), note_details(*)';
 
@@ -108,15 +136,34 @@ export class LibraryService {
 
   async update(user: AuthUser, id: string, input: z.infer<typeof patchItem>) {
     const db = this.supabase.forUser(user.token);
-    const existing = (await this.get(user, id)) as { type: z.infer<typeof itemType> };
-    const { details, ...item } = input;
+    const existing = (await this.get(user, id)) as { type: z.infer<typeof itemType> } & Record<string, unknown>;
+    const { details, position_at, ...item } = input;
+    const table = DETAIL_TABLE[existing.type];
+    const positionFields = POSITION_FIELDS[existing.type] ?? [];
+    let parsed = parseDetails(existing.type, details) as Record<string, unknown> | undefined;
+
+    // Conflict check: drop a position recorded before the one already stored.
+    if (position_at && positionFields.length) {
+      const current = await db
+        .from(table)
+        .select('position_updated_at')
+        .eq('library_item_id', id)
+        .maybeSingle();
+      const stored = current.error
+        ? null
+        : (current.data as { position_updated_at?: string | null } | null)?.position_updated_at;
+      if (isStalePosition(stored, position_at)) {
+        delete item.progress;
+        if (parsed) for (const field of positionFields) delete parsed[field];
+      } else if (!current.error && parsed && positionFields.some((f) => f in parsed!)) {
+        parsed = { ...parsed, position_updated_at: position_at };
+      }
+    }
 
     if (Object.keys(item).length) {
       none(await db.from('library_items').update(item).eq('id', id));
     }
-    const parsed = parseDetails(existing.type, details);
     if (parsed && Object.keys(parsed).length) {
-      const table = DETAIL_TABLE[existing.type];
       const row = await db.from(table).select('library_item_id').eq('library_item_id', id).maybeSingle();
       if (row.data) none(await db.from(table).update(parsed).eq('library_item_id', id));
       else none(await db.from(table).insert({ ...parsed, library_item_id: id }));

@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { SupabaseService } from '../common/supabase.service';
 import { CryptoService } from '../common/crypto.service';
-import { env } from '../config/env';
 
 /** The OAuth app credentials a connect/refresh needs. */
 export interface GoogleCreds {
@@ -102,26 +101,47 @@ export class GoogleCredsService {
     });
   }
 
-  /** Whether a connect flow can run for this user, and which source backs it. */
+  /**
+   * Whether a connect flow can run for this user, which source backs it, and —
+   * when it cannot — exactly what is missing, so the UI can say what a
+   * deployer must set instead of a vague "not available". Never returns a
+   * secret, only the *names* of what is absent.
+   */
   async status(userId: string): Promise<{
     configured: boolean;
     source: GoogleCredsSource;
     /** The callback to register in Google Cloud — shown read-only for setup. */
     redirect_uri: string | null;
+    /** What a deployer must add for Gmail to work; empty when configured. */
+    missing: string[];
   }> {
     const redirect_uri = this.redirectUri();
-    const { data } = await this.supabase.admin
+    const { data, error } = await this.supabase.admin
       .from('google_oauth_config')
       .select('client_id, redirect_uri')
       .eq('user_id', userId)
       .maybeSingle();
     const row = data as { client_id?: string; redirect_uri?: string | null } | null;
     if (row?.client_id && (redirect_uri || row.redirect_uri)) {
-      return { configured: true, source: 'settings', redirect_uri: redirect_uri ?? row.redirect_uri ?? null };
+      return {
+        configured: true,
+        source: 'settings',
+        redirect_uri: redirect_uri ?? row.redirect_uri ?? null,
+        missing: [],
+      };
     }
-    return this.envCreds()
-      ? { configured: true, source: 'env', redirect_uri }
-      : { configured: false, source: null, redirect_uri };
+    if (this.envCreds()) return { configured: true, source: 'env', redirect_uri, missing: [] };
+
+    const read = (k: string) => (process.env[k] ?? '').trim();
+    const missing: string[] = [];
+    if (!read('GOOGLE_CLIENT_ID')) missing.push('GOOGLE_CLIENT_ID');
+    if (!read('GOOGLE_CLIENT_SECRET')) missing.push('GOOGLE_CLIENT_SECRET');
+    if (!redirect_uri) missing.push('PUBLIC_API_URL');
+    // The in-app alternative needs its table; say so when it is not there.
+    if (error && /google_oauth_config|does not exist|schema cache/i.test(error.message)) {
+      missing.push('migration 0021_google_oauth_config.sql');
+    }
+    return { configured: false, source: null, redirect_uri, missing };
   }
 
   /** Save (or replace) the in-app credentials. The secret is encrypted here. */
@@ -154,7 +174,10 @@ export class GoogleCredsService {
   }
 
   private envCreds(): GoogleCreds | null {
-    const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } = env();
+    // Raw reads (blank = absent): resolving creds must not depend on the rest
+    // of the env schema, which the process already validated at boot.
+    const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID ?? '').trim();
+    const GOOGLE_CLIENT_SECRET = (process.env.GOOGLE_CLIENT_SECRET ?? '').trim();
     const redirectUri = this.redirectUri();
     if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && redirectUri) {
       return { clientId: GOOGLE_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET, redirectUri };

@@ -4,7 +4,45 @@ What the last session changed. `docs/PHASES.md` is the durable plan and
 `docs/BACKEND_PLAN.md` is the architecture contract; this file is the volatile
 "what just happened". Read `AGENTS.md` too.
 
-## This session — reliability audit (branch `claude/clever-dirac-7r1fbd`)
+## Latest session — five improvements (branch `claude/clever-dirac-7r1fbd`)
+
+Suites: shared 38 · frontend 51 · backend-render 62 · backend-local 337; all
+typecheck; web builds. Verified end to end in a browser against a mock API
+(390px): every scenario below passed with no page errors. Migration to apply by
+hand: **`0023_offline_reading.sql`** (and `0022` if not yet applied).
+
+1. **Knowledge grouped by source** — `lib/knowledgeGroups.ts` (pure, tested):
+   groups derived on the fly (nothing stored → nothing to migrate), merged
+   across title formats ("Sapiens" = "Sapiens: A Brief History…" unless authors
+   differ), entries without a source land in "Unsorted". Grid with search, sort
+   (recent / A–Z / size), type filter → group detail with the existing cards.
+2. **Mail "not available"** — root cause on the server is missing config (the
+   sandbox cannot reach Render to read it): `GOOGLE_CLIENT_ID` /
+   `GOOGLE_CLIENT_SECRET` unset (or no in-app creds / `0021` not applied).
+   `/gmail/status` now returns `missing: [...]` and the panel lists exactly
+   that plus the Google Cloud steps. Also fixed: a *failed status request*
+   (cold Render, offline) used to be shown as "isn't available on this
+   server" — it now says it couldn't check, with Retry.
+3. **Chat** — `components/assistant/Markdown.tsx`: safe Markdown (React
+   elements, no innerHTML; http/mailto links only), tables, nested lists, code
+   with Copy. Replies as clean full-width text, your turns as right-aligned
+   bubbles (they were on the left), real initials (was hardcoded "AK"), stick-
+   to-bottom only when at the bottom + "Latest" button, auto-growing composer,
+   typing dots, history no longer re-animates (one timer per message before).
+4. **Calendar** — a started/completed event shows a read-only details card
+   (when / where / status) with Mark done · Delete · Close; no disabled form.
+   State re-evaluates every 30s while open.
+5. **Offline reading** — see PHASES 13.2. Also fixed: reader/podcast writes
+   were fire-and-forget (lost offline); the SW precache (`Vary: Origin` needed
+   `ignoreVary`); books with a PDF had no way to reach the download control
+   (now in the row menu, with a progress badge).
+
+**Not verified here:** the live Render env (blocked host), a real Android
+device (IndexedDB/SW in the WebView are standard Chromium, but untested on
+hardware), real Google OAuth. True background sync with the app *closed*
+needs native work (WorkManager); today sync runs on open/resume/reconnect.
+
+## Previous session — reliability audit
 
 Session management, Android notifications, Gmail OAuth UX, the three-mode
 scheduler, plus audit fixes. Suites: shared 38 · frontend 14 · backend-render
@@ -74,7 +112,7 @@ migration to apply by hand: **`0022_scheduler_reliability.sql`**.
   pages no longer surface as "Unexpected token <".
 
 ## Your steps
-1. Apply **`0022`** in the Supabase SQL editor (code degrades without it).
+1. Apply **`0022`** and **`0023`** in the Supabase SQL editor (code degrades without them).
 2. Google Cloud → OAuth client → add the redirect URI shown in Settings → Mail
    → Developer setup (normally `https://<render-service>/api/v1/gmail/callback`).
    Existing users must reconnect Gmail as **read & send** for email schedules.

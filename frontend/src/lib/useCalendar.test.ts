@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dateKeyOf, type CalEvent } from './useCalendar';
+import { dateKeyOf, describeEventTime, eventActionState, eventPhaseOf, type CalEvent } from './useCalendar';
 
 /**
  * Phase 12.4 — the day an event belongs to. This is the bug the function was
@@ -35,5 +35,41 @@ describe('dateKeyOf', () => {
 
   it('falls back to the date slice for an unparseable start', () => {
     expect(dateKeyOf(ev({ startsAt: 'not-a-date' }))).toBe('not-a-date');
+  });
+});
+
+
+describe('started / completed events (the read-only modal)', () => {
+  const ev = {
+    id: 'e1',
+    title: 'Check',
+    startsAt: '2026-11-24T16:55:00.000Z', // 11:55 New York
+    endsAt: '2026-11-24T16:58:00.000Z',
+    allDay: false,
+    tone: 'lavender',
+  };
+  const at = (iso: string) => Date.parse(iso);
+
+  it('upcoming: editable, not completable', () => {
+    expect(eventPhaseOf(ev, at('2026-11-24T16:00:00Z'))).toBe('upcoming');
+    expect(eventActionState(ev, at('2026-11-24T16:00:00Z'))).toMatchObject({ editable: true, canComplete: false });
+  });
+
+  it('in progress: locked, can be marked done', () => {
+    expect(eventPhaseOf(ev, at('2026-11-24T16:56:00Z'))).toBe('live');
+    expect(eventActionState(ev, at('2026-11-24T16:56:00Z'))).toMatchObject({ editable: false, canComplete: true });
+  });
+
+  it('ended: still completable inside the window, then not', () => {
+    expect(eventPhaseOf(ev, at('2026-11-24T17:30:00Z'))).toBe('ended');
+    expect(eventActionState(ev, at('2026-11-25T06:00:00Z'))).toMatchObject({
+      canComplete: false,
+      completionMissed: true,
+    });
+  });
+
+  it('completed stays completed (read-only), and the time reads in local time', () => {
+    expect(eventActionState({ ...ev, completedAt: '2026-11-24T17:00:00Z' }).completed).toBe(true);
+    expect(describeEventTime(ev)).toMatch(/11:55.*11:58/);
   });
 });

@@ -1,6 +1,7 @@
 import {
   Suspense,
   lazy,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -26,10 +27,12 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   ClipboardList,
   Ellipsis,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -59,6 +62,7 @@ import {
   Thermometer,
   Trash2,
   Upload,
+  WifiOff,
   X,
 } from "lucide-react";
 import type {
@@ -77,6 +81,7 @@ import { SchedulesView } from "./components/schedules/SchedulesView";
 import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
 import { characterInitial } from "./components/assistant/CharacterPanel";
+import { Markdown } from "./components/assistant/Markdown";
 import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
 import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
 import { WatchingPanel } from "./components/assistant/WatchingPanel";
@@ -113,12 +118,25 @@ import { Loading } from "./components/ui";
 import { isGmailReturn, useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
+import { readReaderCache, writeReaderCache } from "./lib/readerCache";
+import { outbox } from "./lib/outbox";
+import { useOfflineBooks } from "./lib/offlineBooks";
+import { SyncStatus } from "./components/library/SyncStatus";
 import {
   entrySource,
   useKnowledge,
   type KnowledgeEntry,
   type KnowledgeKind,
 } from "./lib/useKnowledge";
+import {
+  UNSORTED_KEY,
+  groupKnowledge,
+  searchGroups,
+  sortGroups,
+  type GroupSort,
+  type KnowledgeGroup,
+  type SourceType,
+} from "./lib/knowledgeGroups";
 import {
   useHealth,
   type IllnessDocument,
@@ -139,6 +157,8 @@ import {
   dateKeyOf,
   timeInputValue,
   eventActionState,
+  eventPhaseOf,
+  describeEventTime,
   HOUR_LABELS,
   GRID_HEIGHT,
   DEFAULT_SCROLL_TOP,
@@ -858,9 +878,25 @@ function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
   // editable only before it starts; it may be marked done once it has started,
   // for a 12-hour window. The backend enforces both — this just shapes the UI.
   const [completing, setCompleting] = useState(false);
+  // The modal's notion of "now" ticks while it is open, so an event that starts
+  // while you are looking at it switches to its started state on its own.
+  const [modalNow, setModalNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!showModal) return;
+    setModalNow(Date.now());
+    const timer = window.setInterval(() => setModalNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [showModal]);
   const editingEvent = editingId ? events.find((e) => e.id === editingId) ?? null : null;
-  const actionState = editingEvent ? eventActionState(editingEvent) : null;
-  const lockedForEdit = Boolean(editingId) && actionState !== null && !actionState.editable;
+  const actionState = editingEvent ? eventActionState(editingEvent, modalNow) : null;
+  /**
+   * Read-only whenever the server would refuse an edit: the event has started
+   * or is done. It used to render the full form with greyed-out inputs next to
+   * "can no longer be edited", which read as a broken editor.
+   */
+  const lockedForEdit =
+    Boolean(editingId) && actionState !== null && (!actionState.editable || actionState.completed);
+  const eventPhase = editingEvent ? eventPhaseOf(editingEvent, modalNow) : null;
 
   const markDone = async () => {
     if (!editingId) return;
@@ -1103,20 +1139,68 @@ function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
             <div className="modal-heading">
               <div>
                 <span className="section-kicker">
-                  {actionState?.completed
-                    ? "COMPLETED"
-                    : editingId
-                      ? lockedForEdit
-                        ? "EVENT"
-                        : "EDIT EVENT"
-                      : "QUICK ADD"}
+                  {!editingId
+                    ? "QUICK ADD"
+                    : actionState?.completed
+                      ? "COMPLETED"
+                      : eventPhase === "live"
+                        ? "HAPPENING NOW"
+                        : eventPhase === "ended"
+                          ? "ENDED"
+                          : "EDIT EVENT"}
                 </span>
-                <h2>{editingId ? "Change this event" : "Create an event"}</h2>
+                <h2>
+                  {!editingId ? "Create an event" : lockedForEdit ? editingEvent?.title || "Event" : "Change this event"}
+                </h2>
               </div>
               <IconButton label="Close" onClick={closeModal}>
                 <X size={18} />
               </IconButton>
             </div>
+            {lockedForEdit && editingEvent && actionState ? (
+              /* Read-only: what the event is and what can still be done. */
+              <div className="event-details">
+                <dl>
+                  <div>
+                    <dt>When</dt>
+                    <dd>{describeEventTime(editingEvent)}</dd>
+                  </div>
+                  {editingEvent.location && (
+                    <div>
+                      <dt>Where</dt>
+                      <dd>{editingEvent.location}</dd>
+                    </div>
+                  )}
+                  <div>
+                    <dt>Status</dt>
+                    <dd>
+                      <span
+                        className={`event-status-pill ${
+                          actionState.completed ? "done" : eventPhase === "live" ? "live" : "past"
+                        }`}
+                      >
+                        {actionState.completed ? <Check size={13} /> : null}
+                        {actionState.completed
+                          ? `Done${editingEvent.completedAt ? ` · ${new Date(editingEvent.completedAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}` : ""}`
+                          : eventPhase === "live"
+                            ? "In progress"
+                            : "Ended"}
+                      </span>
+                    </dd>
+                  </div>
+                </dl>
+                <p className="event-state-note">
+                  {actionState.completed
+                    ? "Marked done. Unmark it if that was a mistake."
+                    : actionState.canComplete
+                      ? "This event has started, so its details are locked. Mark it done when you’ve finished, or delete it."
+                      : actionState.completionMissed
+                        ? "The window to mark this done has passed. You can still delete it."
+                        : "This event has started, so its details are locked. You can delete it."}
+                </p>
+              </div>
+            ) : (
+              <>
             <label className="field-label">
               TITLE
               <input
@@ -1186,22 +1270,7 @@ function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
                 </label>
               </div>
             )}
-            {/* Why editing is off / what can be done now. */}
-            {editingId && actionState && (
-              actionState.completed ? (
-                <p className="event-state-note done">
-                  <Check size={14} /> Marked done. You can unmark it if that was a mistake.
-                </p>
-              ) : lockedForEdit ? (
-                <p className="event-state-note">
-                  This event has started, so it can no longer be edited —{" "}
-                  {actionState.canComplete
-                    ? "mark it done or delete it."
-                    : actionState.completionMissed
-                      ? "the window to mark it done has passed; you can still delete it."
-                      : "you can delete it."}
-                </p>
-              ) : null
+              </>
             )}
             {validationMessage && !lockedForEdit && (
               <p className="composer-error" role="alert">
@@ -1209,7 +1278,7 @@ function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
               </p>
             )}
             {formError && <p className="composer-error">{formError}</p>}
-            <div className="modal-footer">
+            <div className={`modal-footer ${lockedForEdit ? "event-footer-readonly" : ""}`}>
               {editingId && (
                 <button
                   className="secondary-button event-delete-button"
@@ -1226,7 +1295,7 @@ function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
                 onClick={closeModal}
                 disabled={saving || deleting || completing}
               >
-                Cancel
+                {lockedForEdit ? "Close" : "Cancel"}
               </button>
               {/* Mark done / undo — only inside the 12-hour window, or to undo. */}
               {editingId && actionState?.completed ? (
@@ -1628,30 +1697,32 @@ function MonthCalendar({
   );
 }
 
-function AnimatedReply({ text }: { text: string }) {
-  const words = text.split(" ");
-  const [visibleWords, setVisibleWords] = useState(0);
-
+/**
+ * A reply that just arrived types itself in — quickly, and as Markdown, so
+ * formatting appears as it reveals rather than as raw asterisks. History
+ * renders instantly: it used to re-animate every old message (one timer each)
+ * whenever the chat mounted.
+ */
+function RevealReply({ text, animate }: { text: string; animate: boolean }) {
+  const [shown, setShown] = useState(() => (animate ? 0 : text.length));
   useEffect(() => {
-    setVisibleWords(0);
-    const interval = window.setInterval(() => {
-      setVisibleWords((current) => {
-        if (current >= words.length) {
-          window.clearInterval(interval);
-          return current;
-        }
-        return current + 1;
+    if (!animate || prefersReducedMotion()) {
+      setShown(text.length);
+      return;
+    }
+    setShown(0);
+    // ~1.2s whatever the length: long answers must not take a minute to read.
+    const step = Math.max(4, Math.ceil(text.length / 48));
+    const timer = window.setInterval(() => {
+      setShown((current) => {
+        const next = Math.min(text.length, current + step);
+        if (next >= text.length) window.clearInterval(timer);
+        return next;
       });
-    }, 42);
-    return () => window.clearInterval(interval);
-  }, [text, words.length]);
-
-  return (
-    <>
-      {words.slice(0, visibleWords).join(" ")}
-      {visibleWords < words.length && <i className="typing-cursor" />}
-    </>
-  );
+    }, 25);
+    return () => window.clearInterval(timer);
+  }, [text, animate]);
+  return <Markdown text={shown >= text.length ? text : text.slice(0, shown)} />;
 }
 
 // Stable reference so the Lottie players are not re-initialized on every render.
@@ -2014,7 +2085,54 @@ type ChatMessage = {
   agent?: AgentTurnSummary;
   /** Cards built from the turn's tool results, rendered under the reply. */
   blocks?: DisplayBlock[] | null;
+  /** Arrived in this session (animate it); history renders at once. */
+  fresh?: boolean;
 };
+
+/** "AK" from "ak@…" or a display name — the user's own initials, not a constant. */
+function userInitials(email: string | null | undefined): string {
+  const local = (email ?? "").split("@")[0].replace(/[^a-zA-Z0-9]+/g, " ").trim();
+  if (!local) return "You";
+  const parts = local.split(" ");
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : local.slice(0, 2)).toUpperCase();
+}
+
+/**
+ * One message. Memoised: typing in the composer re-renders the view, and a
+ * long conversation must not re-render (or re-parse) every message per key.
+ */
+const ChatMessageRow = memo(function ChatMessageRow({
+  message: m,
+  avatar,
+}: {
+  message: ChatMessage;
+  avatar: string;
+}) {
+  return (
+    <div className={`message ${m.from}`}>
+      <div className="message-avatar" aria-hidden="true">
+        {avatar}
+      </div>
+      <div className="message-bubble">
+        {m.from === "ai" ? (
+          <RevealReply text={m.text} animate={Boolean(m.fresh)} />
+        ) : (
+          <p className="message-user-text">{m.text}</p>
+        )}
+        <ResultBlocks blocks={m.blocks} />
+        <AgentPlanCard agent={m.agent} />
+        {m.receipts && m.receipts.length > 0 && (
+          <div className="receipt-cards">
+            {m.receipts.map((r) => (
+              <ReceiptCard key={r.id} receipt={r} />
+            ))}
+          </div>
+        )}
+        <time>{m.time}</time>
+      </div>
+    </div>
+  );
+});
 
 function receiptTone(status: ReceiptRow["status"]): "ok" | "bad" | "wait" {
   if (status === "success") return "ok";
@@ -2047,7 +2165,7 @@ function fmtTime(iso?: string | null): string {
     : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function AssistantView() {
+function AssistantView({ userEmail }: { userEmail?: string | null }) {
   // Real agent chat when the backend is configured; otherwise the original
   // local prototype flow so the design stays demoable without a laptop.
   const configured = isApiConfigured;
@@ -2068,12 +2186,54 @@ function AssistantView() {
   const conversationRef = useRef<HTMLDivElement>(null);
   const request = useSimulatedRequest();
 
+  /**
+   * Stick to the bottom only while the reader is at the bottom. It used to
+   * yank the view down on every change — including a background reload while
+   * you were reading an older answer.
+   */
+  const atBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const scrollToBottom = useCallback((smooth = true) => {
+    const el = conversationRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    atBottom.current = true;
+    setShowJump(false);
+  }, []);
+  const onConversationScroll = useCallback(() => {
+    const el = conversationRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottom.current = near;
+    if (near) setShowJump(false);
+  }, []);
+  const lastMessage = messages[messages.length - 1];
+  useLayoutEffect(() => {
+    if (!lastMessage && !isThinking) return;
+    if (atBottom.current || lastMessage?.from === "user") scrollToBottom(Boolean(lastMessage?.fresh));
+    else setShowJump(true);
+  }, [lastMessage, isThinking, scrollToBottom]);
+  // A fresh reply grows while it reveals; keep its end in view.
   useEffect(() => {
-    conversationRef.current?.scrollTo({
-      top: conversationRef.current.scrollHeight,
-      behavior: "smooth",
+    const el = conversationRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const content = el.firstElementChild;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight;
     });
-  }, [messages, isThinking]);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [messages.length > 0]);
+
+  // The composer grows with what you type, up to a limit, then scrolls.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+  }, [message]);
 
   // Load history, then poll agent presence and the approval queue.
   useEffect(() => {
@@ -2181,6 +2341,7 @@ function AssistantView() {
           receipts: result.receipts,
           agent: result.agent,
           blocks: result.agent?.blocks,
+          fresh: true,
         },
       ]);
       // A turn may have queued an outward action for approval.
@@ -2297,37 +2458,42 @@ function AssistantView() {
               <p>Your time, knowledge and health — in one place.</p>
             </div>
           ) : (
-            <div className="conversation" ref={conversationRef}>
-              {messages.map((m) => (
-                <div key={m.id} className={`message ${m.from}`}>
-                  <div className="message-avatar">
-                    {m.from === "ai" ? characterInitial(characterName) : "AK"}
+            <div
+              className="conversation"
+              ref={conversationRef}
+              onScroll={onConversationScroll}
+              role="log"
+              aria-live="polite"
+              aria-label="Conversation"
+            >
+              <div className="conversation-inner">
+                {messages.map((m) => (
+                  <ChatMessageRow
+                    key={m.id}
+                    message={m}
+                    avatar={m.from === "ai" ? characterInitial(characterName) : userInitials(userEmail)}
+                  />
+                ))}
+                {isThinking && (
+                  <div className="message ai loading-message">
+                    <div className="message-avatar">{characterInitial(characterName)}</div>
+                    <div className="message-bubble thinking-bubble" role="status">
+                      <span>{characterName} is thinking</span>
+                      <span className="typing-dots" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    </div>
                   </div>
-                  <div className="message-bubble">
-                    <p>{m.from === "ai" ? <AnimatedReply text={m.text} /> : m.text}</p>
-                    <ResultBlocks blocks={m.blocks} />
-                    <AgentPlanCard agent={m.agent} />
-                    {m.receipts && m.receipts.length > 0 && (
-                      <div className="receipt-cards">
-                        {m.receipts.map((r) => (
-                          <ReceiptCard key={r.id} receipt={r} />
-                        ))}
-                      </div>
-                    )}
-                    <time>{m.time}</time>
-                  </div>
-                </div>
-              ))}
-              {isThinking && (
-                <div className="message ai loading-message">
-                  <div className="message-avatar">{characterInitial(characterName)}</div>
-                  <div className="message-bubble thinking-bubble">
-                    <span>{characterName} is thinking</span>
-                    <Loading variant="inline" size={16} />
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
+          )}
+          {showJump && (
+            <button type="button" className="chat-jump" onClick={() => scrollToBottom()}>
+              <ChevronDown size={15} /> Latest
+            </button>
           )}
         </div>
         {pending.length > 0 && (
@@ -2359,6 +2525,10 @@ function AssistantView() {
         <div className="composer">
           <div className={`composer-field ${offline ? "disabled" : ""}`}>
             <textarea
+              ref={composerRef}
+              rows={1}
+              aria-label="Message"
+              enterKeyHint="send"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
@@ -2377,7 +2547,8 @@ function AssistantView() {
               <button
                 className={`send-button ${isThinking ? "sending" : ""}`}
                 onClick={() => send()}
-                disabled={isThinking || offline}
+                disabled={isThinking || offline || !message.trim()}
+                aria-label={isThinking ? "Sending" : "Send"}
               >
                 {isThinking ? <Loading variant="inline" size={17} /> : <Send size={17} />}
               </button>
@@ -2504,6 +2675,7 @@ function LibraryView({
   onRemoveItem,
   loading,
   error,
+  showingSaved = false,
 }: {
   items: LibraryItem[];
   onOpenMedia: (item: LibraryItem) => void;
@@ -2511,7 +2683,10 @@ function LibraryView({
   onRemoveItem: (item: LibraryItem) => Promise<void>;
   loading: boolean;
   error: string | null;
+  /** The server was unreachable; this is the copy saved on the device. */
+  showingSaved?: boolean;
 }) {
+  const offlineBooks = useOfflineBooks();
   const categories = ["All", "Books", "Podcasts", "Articles", "Notes"] as const;
   const filters = ["All", "In Progress", "Completed", "Want to Read", "Favorites"] as const;
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
@@ -2729,6 +2904,7 @@ function LibraryView({
           <Loading variant="inline" size={18} text="Loading your library…" />
         </div>
       )}
+      <SyncStatus showingSaved={showingSaved} />
 
       <div className="library-toolbar">
         <label className="library-search">
@@ -2810,6 +2986,7 @@ function LibraryView({
                   <div className="learning-title-line">
                     <div>
                       <span className={`content-type type-${item.tone}`}>{item.type}</span>
+                      <OfflineRowBadge item={item} />
                       <h3>{item.title}</h3>
                     </div>
                     {/* This button did nothing at all before. */}
@@ -2848,6 +3025,27 @@ function LibraryView({
                             >
                               <Play size={13} /> Open
                             </button>
+                            {item.type === "Books" && (item.pdfFileName || item.pdfUrl || item.id) && (
+                              offlineBooks.get(item) ? (
+                                <button
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    void offlineBooks.remove(item);
+                                  }}
+                                >
+                                  <WifiOff size={13} /> Remove download
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    void offlineBooks.download(item).catch(() => undefined);
+                                  }}
+                                >
+                                  <Download size={13} /> Download for offline
+                                </button>
+                              )
+                            )}
                             <button
                               className="danger"
                               onClick={() => {
@@ -3390,6 +3588,9 @@ function KnowledgeView({
             bookTitle: item.title,
             page: annotation.page,
             sourceType: KNOWLEDGE_SOURCE[item.type],
+            sourceId: item.id,
+            creator: item.creator,
+            cover: item.image || undefined,
             date: annotation.createdAt,
             tone: colorToTone[annotation.color || ""] || tone,
             tags: annotation.tags?.length ? annotation.tags : [annotation.kind],
@@ -3404,6 +3605,9 @@ function KnowledgeView({
             bookTitle: item.title,
             page: highlight.page,
             sourceType: KNOWLEDGE_SOURCE[item.type],
+            sourceId: item.id,
+            creator: item.creator,
+            cover: item.image || undefined,
             date: item.accessed,
             tone: colorToTone[highlight.color] || tone,
             tags: [item.type.toLowerCase()],
@@ -3417,6 +3621,9 @@ function KnowledgeView({
             bookTitle: item.title,
             page: note.page,
             sourceType: KNOWLEDGE_SOURCE[item.type],
+            sourceId: item.id,
+            creator: item.creator,
+            cover: item.image || undefined,
             date: note.createdAt,
             tone,
             tags: ["note"],
@@ -3431,6 +3638,9 @@ function KnowledgeView({
           bookTitle: item.title,
           page: bookmark.page,
           sourceType: KNOWLEDGE_SOURCE[item.type],
+          sourceId: item.id,
+          creator: item.creator,
+          cover: item.image || undefined,
           date: bookmark.createdAt,
           tone,
           tags: ["bookmark"],
@@ -3442,35 +3652,140 @@ function KnowledgeView({
 
   // Real data from /knowledge wins; otherwise the locally-derived entries.
   const entries = knowledge.entries ?? localEntries;
+  const live = useMemo(
+    () =>
+      entries
+        .filter((entry) => !deleted.has(entry.id))
+        .map((entry) => (edits[entry.id] !== undefined ? { ...entry, text: edits[entry.id] } : entry)),
+    [entries, deleted, edits],
+  );
 
-  const visible = entries.filter((entry) => {
-    if (deleted.has(entry.id)) return false;
+  // Grouped by source (book / episode / article), derived — never stored.
+  const groups = useMemo(() => groupKnowledge(live), [live]);
+  const [groupKey, setGroupKey] = useState<string | null>(null);
+  const [sort, setSort] = useState<GroupSort>("recent");
+  const [typeFilter, setTypeFilter] = useState<"all" | SourceType>("all");
+  const openGroup = groups.find((group) => group.key === groupKey) ?? null;
+  // A group emptied by deletes closes itself rather than showing nothing.
+  useEffect(() => {
+    if (groupKey && !openGroup) setGroupKey(null);
+  }, [groupKey, openGroup]);
+  useEffect(() => {
+    setTab("All");
+    setQuery("");
+  }, [groupKey]);
+
+  const shownGroups = useMemo(() => {
+    const byType = typeFilter === "all" ? groups : groups.filter((g) => g.sourceType === typeFilter);
+    const narrowed = tab === "All" ? byType : byType
+      .map((g) => ({ ...g, entries: g.entries.filter((e) => e.kind === tab) }))
+      .filter((g) => g.entries.length);
+    return sortGroups(searchGroups(narrowed, query), sort);
+  }, [groups, typeFilter, tab, query, sort]);
+
+  const scope = openGroup ? openGroup.entries : live;
+  const visible = scope.filter((entry) => {
     if (tab !== "All" && entry.kind !== tab) return false;
-    const text = (edits[entry.id] ?? entry.text).toLowerCase();
-    const haystack = `${text} ${entry.bookTitle} ${entry.tags.join(" ")}`;
+    const haystack = `${entry.text} ${entry.heading ?? ""} ${entry.bookTitle} ${entry.tags.join(" ")}`.toLowerCase();
     return haystack.includes(query.toLowerCase());
   });
 
   const counts = knowledgeTabs.map((item) => ({
     id: item.id,
-    count:
-      item.id === "All"
-        ? entries.filter((entry) => !deleted.has(entry.id)).length
-        : entries.filter((entry) => entry.kind === item.id && !deleted.has(entry.id)).length,
+    count: item.id === "All" ? scope.length : scope.filter((entry) => entry.kind === item.id).length,
   }));
+  const typesPresent = [...new Set(groups.map((g) => g.sourceType))];
+
+  const renderEntry = (entry: KnowledgeEntry) => (
+    <article className="glass-card knowledge-card" key={entry.id}>
+      <div className="knowledge-card-top">
+        <span className={`knowledge-kind kind-${entry.tone}`}>{entry.kind}</span>
+        <div className="knowledge-actions">
+          <button aria-label="Edit" onClick={() => setEditingId(editingId === entry.id ? null : entry.id)}>
+            <Pencil size={14} />
+          </button>
+          <button aria-label="Delete" onClick={() => removeEntry(entry.id)}>
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+      {entry.heading && <h3>{entry.heading}</h3>}
+      {editingId === entry.id ? (
+        <textarea
+          className="knowledge-edit"
+          autoFocus
+          value={edits[entry.id] ?? entry.text}
+          onChange={(event) => setEdits((current) => ({ ...current, [entry.id]: event.target.value }))}
+          onBlur={() => commitEdit(entry)}
+        />
+      ) : (
+        <p className="knowledge-text">{entry.text}</p>
+      )}
+      <div className="knowledge-tags">
+        {entry.tags.map((tag) => (
+          <span key={tag}>#{tag}</span>
+        ))}
+      </div>
+      <div className="knowledge-footer">
+        <button className="knowledge-source" onClick={() => onJumpToSource(entry.bookTitle, entry.page)}>
+          <ExternalLink size={13} />
+          {openGroup ? sourceLocation(entry) : `${entry.bookTitle || "Your library"} → ${sourceLocation(entry)}`}
+        </button>
+        <time>{knowledgeDate(entry.date)}</time>
+      </div>
+    </article>
+  );
+
+  const kindTabs = (
+    <div className="library-categories knowledge-tabs" role="tablist">
+      {knowledgeTabs.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          role="tab"
+          aria-selected={tab === id}
+          className={tab === id ? "active" : ""}
+          onClick={() => setTab(id)}
+        >
+          <Icon size={13} />
+          {label}
+          <kbd>{counts.find((count) => count.id === id)?.count ?? 0}</kbd>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="page-content knowledge-view">
-      <header className="page-heading">
-        <div>
-          <div className="eyebrow muted-eyebrow">KNOWLEDGE</div>
-          <h1>Everything you saved.</h1>
-          <p className="page-meta">
-            {visible.length} {visible.length === 1 ? "entry" : "entries"}
-            {tab === "All" ? "" : ` · ${tab.toLowerCase()}`}
-          </p>
-        </div>
-      </header>
+      {openGroup ? (
+        <header className="knowledge-group-head">
+          <button className="knowledge-back" onClick={() => setGroupKey(null)} aria-label="Back to all sources">
+            <ChevronLeft size={17} /> Sources
+          </button>
+          <div className="knowledge-group-hero">
+            <SourceCover group={openGroup} size="large" />
+            <div>
+              <span className="eyebrow muted-eyebrow">{SOURCE_LABEL[openGroup.sourceType]}</span>
+              <h1>{openGroup.title}</h1>
+              <p className="page-meta">
+                {openGroup.creator ? `${openGroup.creator} · ` : ""}
+                {openGroup.entries.length} {openGroup.entries.length === 1 ? "item" : "items"}
+                {openGroup.lastAt ? ` · updated ${knowledgeDate(new Date(openGroup.lastAt).toISOString())}` : ""}
+              </p>
+            </div>
+          </div>
+        </header>
+      ) : (
+        <header className="page-heading">
+          <div>
+            <div className="eyebrow muted-eyebrow">KNOWLEDGE</div>
+            <h1>Everything you saved.</h1>
+            <p className="page-meta">
+              {groups.filter((g) => g.key !== UNSORTED_KEY).length} sources · {live.length}{" "}
+              {live.length === 1 ? "entry" : "entries"}
+            </p>
+          </div>
+        </header>
+      )}
 
       {(knowledge.error || editError) && (
         <div className="data-banner data-banner-error" role="alert">
@@ -3489,86 +3804,149 @@ function KnowledgeView({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search your knowledge"
+            placeholder={openGroup ? `Search ${openGroup.title}` : "Search sources and notes"}
+            aria-label="Search knowledge"
           />
         </label>
-        <div className="library-categories knowledge-tabs" role="tablist">
-          {knowledgeTabs.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              role="tab"
-              aria-selected={tab === id}
-              className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
-            >
-              <Icon size={13} />
-              {label}
-              <kbd>{counts.find((count) => count.id === id)?.count ?? 0}</kbd>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="knowledge-list">
-        {visible.map((entry) => (
-          <article className="glass-card knowledge-card" key={entry.id}>
-            <div className="knowledge-card-top">
-              <span className={`knowledge-kind kind-${entry.tone}`}>{entry.kind}</span>
-              <div className="knowledge-actions">
+        {kindTabs}
+        {!openGroup && (
+          <div className="knowledge-group-controls">
+            <div className="knowledge-type-filter" role="group" aria-label="Source type">
+              {(["all", ...typesPresent] as ("all" | SourceType)[]).map((type) => (
                 <button
-                  aria-label="Edit"
-                  onClick={() => setEditingId(editingId === entry.id ? null : entry.id)}
+                  key={type}
+                  className={typeFilter === type ? "active" : ""}
+                  aria-pressed={typeFilter === type}
+                  onClick={() => setTypeFilter(type)}
                 >
-                  <Pencil size={14} />
+                  {type === "all" ? "All sources" : SOURCE_LABEL[type]}
                 </button>
-                <button
-                  aria-label="Delete"
-                  onClick={() => removeEntry(entry.id)}
-                >
-                  <X size={15} />
-                </button>
-              </div>
-            </div>
-            {entry.heading && <h3>{entry.heading}</h3>}
-            {editingId === entry.id ? (
-              <textarea
-                className="knowledge-edit"
-                autoFocus
-                value={edits[entry.id] ?? entry.text}
-                onChange={(event) =>
-                  setEdits((current) => ({ ...current, [entry.id]: event.target.value }))
-                }
-                onBlur={() => commitEdit(entry)}
-              />
-            ) : (
-              <p className="knowledge-text">{edits[entry.id] ?? entry.text}</p>
-            )}
-            <div className="knowledge-tags">
-              {entry.tags.map((tag) => (
-                <span key={tag}>#{tag}</span>
               ))}
             </div>
-            <div className="knowledge-footer">
-              <button
-                className="knowledge-source"
-                onClick={() => onJumpToSource(entry.bookTitle, entry.page)}
-              >
-                <ExternalLink size={13} />
-                {entry.bookTitle || "Your library"} → {sourceLocation(entry)}
-              </button>
-              <time>{knowledgeDate(entry.date)}</time>
-            </div>
-          </article>
-        ))}
-        {visible.length === 0 && (
-          <div className="library-empty">
-            <Brain size={20} />
-            <strong>Nothing saved yet</strong>
-            <span>Highlights and notes land here as you read.</span>
+            <label className="knowledge-sort">
+              <span>Sort</span>
+              <select value={sort} onChange={(event) => setSort(event.target.value as GroupSort)}>
+                <option value="recent">Recent</option>
+                <option value="az">A–Z</option>
+                <option value="count">Most items</option>
+              </select>
+            </label>
           </div>
         )}
       </div>
+
+      {openGroup ? (
+        <div className="knowledge-list">
+          {visible.map(renderEntry)}
+          {visible.length === 0 && (
+            <div className="library-empty">
+              <Search size={20} />
+              <strong>Nothing matches</strong>
+              <span>Try another word or kind.</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="knowledge-groups">
+          {shownGroups.map((group) => (
+            <button
+              key={group.key}
+              className="glass-card knowledge-group-card"
+              onClick={() => setGroupKey(group.key)}
+              aria-label={`${group.title}, ${group.entries.length} items`}
+            >
+              <SourceCover group={group} />
+              <span className="knowledge-group-body">
+                <span className="knowledge-group-type">{SOURCE_LABEL[group.sourceType]}</span>
+                <strong>{group.title}</strong>
+                {group.creator && <small className="knowledge-group-creator">{group.creator}</small>}
+                <span className="knowledge-group-kinds">
+                  {(Object.entries(group.kinds) as [KnowledgeKind, number][])
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([kind, n]) => `${n} ${kind.toLowerCase()}${n === 1 ? "" : "s"}`)
+                    .join(" · ")}
+                </span>
+              </span>
+              <span className="knowledge-group-count">
+                {group.entries.length}
+                <ChevronRight size={15} />
+              </span>
+            </button>
+          ))}
+          {shownGroups.length === 0 && !knowledge.loading && (
+            <div className="library-empty">
+              <Brain size={20} />
+              <strong>{live.length ? "Nothing matches" : "Nothing saved yet"}</strong>
+              <span>
+                {live.length
+                  ? "Try another word, kind or source type."
+                  : "Highlights, notes and quotes group themselves by book, episode and article as you save them."}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** A book row's offline state: saved, downloading (with %), or failed. */
+function OfflineRowBadge({ item }: { item: LibraryItem }) {
+  const offline = useOfflineBooks();
+  const state = offline.state(item);
+  if (state.phase === "done") {
+    return (
+      <span className="offline-badge" title="Saved on this device — readable offline">
+        <WifiOff size={11} /> Offline
+      </span>
+    );
+  }
+  if (state.phase === "downloading") {
+    return (
+      <span className="offline-badge pending" role="status">
+        <Download size={11} /> {state.percent}%
+      </span>
+    );
+  }
+  if (state.phase === "failed") {
+    return (
+      <span className="offline-badge failed" title={state.reason} role="alert">
+        Download failed
+      </span>
+    );
+  }
+  return null;
+}
+
+const SOURCE_LABEL: Record<SourceType, string> = {
+  book: "Book",
+  podcast: "Podcast",
+  article: "Article",
+  note: "Note",
+  unknown: "Other",
+};
+
+const SOURCE_ICON: Record<SourceType, typeof BookOpen> = {
+  book: BookOpen,
+  podcast: Headphones,
+  article: FileText,
+  note: StickyNote,
+  unknown: Brain,
+};
+
+/** A source's cover, or its type icon when it has none (or the image fails). */
+function SourceCover({ group, size = "small" }: { group: KnowledgeGroup; size?: "small" | "large" }) {
+  const [failed, setFailed] = useState(false);
+  const Icon = SOURCE_ICON[group.sourceType];
+  return (
+    <span className={`knowledge-cover knowledge-cover-${size}`} aria-hidden="true">
+      {group.cover && !failed ? (
+        <img src={group.cover} alt="" loading="lazy" onError={() => setFailed(true)} />
+      ) : (
+        <Icon size={size === "large" ? 26 : 18} />
+      )}
+    </span>
   );
 }
 
@@ -4837,15 +5215,45 @@ function SettingsView({
             {/* Connection status first: what a person actually wants to know. */}
             {gmail.loading ? (
               <Loading variant="inline" size={16} text="Checking your mailboxes…" />
+            ) : gmail.statusError ? (
+              /* The check failed — that says nothing about the server's setup. */
+              <>
+                <div className="settings-status-row">
+                  <span className="settings-status-dot push-error" aria-hidden="true" />
+                  <div>
+                    <strong>Couldn’t check your Gmail connection</strong>
+                    <small>{gmail.statusError} The server may be waking up — try again in a moment.</small>
+                  </div>
+                </div>
+                <div className="settings-panel-actions">
+                  <button className="secondary-button" onClick={gmail.reload}>
+                    Try again
+                  </button>
+                </div>
+              </>
             ) : !gmail.configured ? (
               <div className="settings-status-row">
                 <span className="settings-status-dot push-denied" aria-hidden="true" />
                 <div>
-                  <strong>Gmail isn’t available on this server yet</strong>
+                  <strong>Gmail isn’t set up on this server yet</strong>
                   <small>
-                    Connecting Gmail needs a one-time setup by whoever runs this MyPro server.
-                    Once that’s done, you’ll just tap “Connect Gmail” and sign in with Google.
+                    It needs a one-time setup by whoever deploys MyPro. After that you’ll just tap
+                    “Connect Gmail” and sign in with Google.
                   </small>
+                  {gmail.missing.length > 0 && (
+                    <ul className="settings-missing">
+                      {gmail.missing.map((name) => (
+                        <li key={name}>
+                          <code>{name}</code>
+                          {name === "GOOGLE_CLIENT_ID" || name === "GOOGLE_CLIENT_SECRET"
+                            ? " — not set on the API service (Render → Environment)"
+                            : name === "PUBLIC_API_URL"
+                              ? " — the API can’t tell its public address; set it to the API’s URL"
+                              : " — run it in the Supabase SQL editor to store the Google app in-app instead"}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             ) : (
@@ -4941,7 +5349,7 @@ function SettingsView({
             )}
 
             {/* One-time server setup. Collapsed: a normal user never needs it. */}
-            {!gmail.loading && (!gmail.configured || gmail.source === "settings") && (
+            {!gmail.loading && !gmail.statusError && (!gmail.configured || gmail.source === "settings") && (
               <details className="settings-advanced">
                 <summary>Developer setup</summary>
                 {gmail.source === "settings" ? (
@@ -4960,12 +5368,21 @@ function SettingsView({
                   </div>
                 ) : (
                   <>
-                    <p className="settings-hint">
-                      Preferred: set <code>GOOGLE_CLIENT_ID</code> and{" "}
-                      <code>GOOGLE_CLIENT_SECRET</code> on the API service. Or paste a Google
-                      Cloud “Web application” OAuth client here — the secret is encrypted on
-                      the server and never shown again.
-                    </p>
+                    <ol className="settings-steps">
+                      <li>
+                        In Google Cloud Console, enable the <strong>Gmail API</strong> and set up the
+                        OAuth consent screen (add yourself as a test user, or publish the app).
+                      </li>
+                      <li>
+                        Create an OAuth client of type <strong>Web application</strong> and add the
+                        redirect URI below as an <em>Authorised redirect URI</em>.
+                      </li>
+                      <li>
+                        Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> on the
+                        API service (preferred) — or paste them here; the secret is encrypted on the
+                        server and never shown again.
+                      </li>
+                    </ol>
                     {gmail.redirectUri ? (
                       <div className="field-label">
                         AUTHORISED REDIRECT URI (ADD THIS IN GOOGLE CLOUD)
@@ -5362,6 +5779,7 @@ function AppShell({
     items: libraryItems,
     loading: libraryLoading,
     error: libraryError,
+    offline: libraryOffline,
     configured: libraryConfigured,
     createItem: createLibraryItem,
     removeItem: removeLibraryItem,
@@ -5400,20 +5818,44 @@ function AppShell({
       if (libraryConfigured && item.id) {
         readerSync.begin(item.id);
         try {
-          const [annotations, bookmarks] = await Promise.all([
-            api.reader.annotations(item.id),
-            api.reader.bookmarks(item.id),
+          // With a copy on this device, don't hold the book hostage to a
+          // waking server: give it a few seconds, then open from the copy.
+          const hasCopy = Boolean(readReaderCache(item.id));
+          const [annotations, bookmarks] = await Promise.race([
+            Promise.all([api.reader.annotations(item.id), api.reader.bookmarks(item.id)]),
+            new Promise<never>((_, reject) =>
+              window.setTimeout(() => reject(new Error("slow")), hasCopy ? 4000 : 20000),
+            ),
           ]);
-          readerSync.setServer(item.id, annotations, bookmarks);
+          // Changes made offline and not yet synced are newer than the
+          // server's list: keep the cached copy while they are queued.
+          const queued = outbox.pendingFor(item.id).some((op) => op.kind !== "library.patch");
+          const cached = queued ? readReaderCache(item.id) : null;
+          const useAnnotations = cached?.annotations ?? annotations;
+          const useBookmarks = cached?.bookmarks ?? bookmarks;
+          if (!cached) writeReaderCache(item.id, annotations, bookmarks);
+          readerSync.setServer(item.id, useAnnotations, useBookmarks);
           enrichedReaderId.current = item.id;
           setReader({
             ...item,
-            annotations: annotations.map(annotationRowToUi),
-            bookmarks: bookmarks.map(bookmarkRowToUi),
+            annotations: useAnnotations.map(annotationRowToUi),
+            bookmarks: useBookmarks.map(bookmarkRowToUi),
           });
           return;
         } catch {
-          /* fall through and open with whatever the item already carries */
+          // Offline (or the server is waking): open from this device's copy,
+          // and diff against it on close so nothing is re-created or lost.
+          const cached = readReaderCache(item.id);
+          if (cached) {
+            readerSync.setServer(item.id, cached.annotations, cached.bookmarks);
+            enrichedReaderId.current = item.id;
+            setReader({
+              ...item,
+              annotations: cached.annotations.map(annotationRowToUi),
+              bookmarks: cached.bookmarks.map(bookmarkRowToUi),
+            });
+            return;
+          }
         }
       }
       if (item.id) {
@@ -5724,6 +6166,7 @@ function AppShell({
           onRemoveItem={removeLibraryItem}
           loading={libraryLoading}
           error={libraryError}
+          showingSaved={libraryOffline}
         />
       );
     if (displayedView === "knowledge")
@@ -5838,7 +6281,7 @@ function AppShell({
               ref={assistantRef}
               hidden={displayedView !== "assistant"}
             >
-              <AssistantView />
+              <AssistantView userEmail={userEmail} />
             </div>
           )}
         </div>

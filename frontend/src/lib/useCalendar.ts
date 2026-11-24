@@ -53,6 +53,31 @@ export function eventActionState(ev: CalEvent, now: number = Date.now()): EventA
   };
 }
 
+/**
+ * Where an event sits in time, for its label: not started, happening now, or
+ * over. An event without an end counts as live for an hour (all-day: its day).
+ */
+export function eventPhaseOf(ev: CalEvent, now: number = Date.now()): 'upcoming' | 'live' | 'ended' {
+  const start = new Date(ev.startsAt).getTime();
+  if (!Number.isFinite(start) || now < start) return 'upcoming';
+  const endParsed = ev.endsAt ? new Date(ev.endsAt).getTime() : NaN;
+  const end = Number.isFinite(endParsed)
+    ? endParsed
+    : start + (ev.allDay ? DONE_WINDOW_ALL_DAY_MS : 60 * 60_000);
+  return now < end ? 'live' : 'ended';
+}
+
+/** "Tue 24 Nov · 11:55 – 11:58", in the viewer's own time zone. */
+export function describeEventTime(ev: CalEvent): string {
+  const start = new Date(ev.startsAt);
+  if (Number.isNaN(start.getTime())) return '—';
+  const day = start.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  if (ev.allDay) return `${day} · All day`;
+  const time = (d: Date) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const end = ev.endsAt ? new Date(ev.endsAt) : null;
+  return end && !Number.isNaN(end.getTime()) ? `${day} · ${time(start)} – ${time(end)}` : `${day} · ${time(start)}`;
+}
+
 export interface NewEventInput {
   title: string;
   date: string; // YYYY-MM-DD

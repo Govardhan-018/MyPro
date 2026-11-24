@@ -8,7 +8,15 @@ import { many, none, one } from '../common/crud';
 
 const annotationKind = z.enum(['note', 'quote', 'summary', 'question', 'highlight']);
 
+/**
+ * A client-generated id, so a create retried by the offline outbox (the first
+ * attempt may have landed before the connection dropped) is recognised as the
+ * same row instead of inserted twice.
+ */
+const clientId = z.string().uuid().optional();
+
 const createAnnotation = z.object({
+  id: clientId,
   kind: annotationKind,
   page: z.number().int().min(0).optional(),
   paragraph: z.number().int().min(0).optional(),
@@ -19,14 +27,16 @@ const createAnnotation = z.object({
   chapter: z.string().max(300).optional(),
   tags: z.array(z.string().min(1).max(60)).max(20).optional(),
 });
-const patchAnnotation = createAnnotation.partial();
+const patchAnnotation = createAnnotation.omit({ id: true }).partial();
 
 const createBookmark = z.object({
+  id: clientId,
   page: z.number().int().min(0),
   title: z.string().max(300).optional(),
 });
 
 const sessionInput = z.object({
+  id: clientId,
   started_at: z.string().datetime(),
   ended_at: z.string().datetime().optional(),
   start_page: z.number().int().optional(),
@@ -35,6 +45,23 @@ const sessionInput = z.object({
   end_seconds: z.number().int().optional(),
   notes: z.string().max(5000).optional(),
 });
+
+/**
+ * Insert a row; if it carries an id that already exists (a retried offline
+ * write whose first attempt succeeded), return the existing row instead of
+ * failing or duplicating. Exported for tests.
+ */
+export async function insertOnce(
+  db: ReturnType<SupabaseService['forUser']>,
+  table: string,
+  row: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await db.from(table).insert(row).select('*').single();
+  if (res.error && (res.error as { code?: string }).code === '23505' && row.id) {
+    return one(await db.from(table).select('*').eq('id', row.id as string).maybeSingle());
+  }
+  return one(res);
+}
 
 @Injectable()
 export class ReaderService {
@@ -55,13 +82,11 @@ export class ReaderService {
   async createAnnotation(user: AuthUser, itemId: string, input: z.infer<typeof createAnnotation>) {
     const db = this.supabase.forUser(user.token);
     const { tags, ...row } = input;
-    const created = one(
-      await db
-        .from('annotations')
-        .insert({ ...row, user_id: user.id, library_item_id: itemId })
-        .select('*')
-        .single(),
-    ) as { id: string };
+    const created = (await insertOnce(db, 'annotations', {
+      ...row,
+      user_id: user.id,
+      library_item_id: itemId,
+    })) as { id: string };
     if (tags?.length) await this.setTags(user, created.id, tags);
     return created;
   }
@@ -140,13 +165,7 @@ export class ReaderService {
     input: z.infer<typeof sessionInput>,
   ) {
     const db = this.supabase.forUser(user.token);
-    return one(
-      await db
-        .from(table)
-        .insert({ ...input, user_id: user.id, library_item_id: itemId })
-        .select('*')
-        .single(),
-    );
+    return insertOnce(db, table, { ...input, user_id: user.id, library_item_id: itemId });
   }
 
   // ---- knowledge (derived, never duplicated) ----
@@ -157,13 +176,13 @@ export class ReaderService {
         .from('annotations')
         // `type` so the client can label a podcast note's `page` as a
         // timestamp rather than a page number.
-        .select('id, kind, page, chapter, title, body, anchor_text, color, created_at, library_item_id, library_items(title, type)')
+        .select('id, kind, page, chapter, title, body, anchor_text, color, created_at, library_item_id, library_items(id, title, type, creator, cover_url)')
         .order('created_at', { ascending: false }),
     );
     const bookmarks = many(
       await db
         .from('bookmarks')
-        .select('id, page, title, created_at, library_item_id, library_items(title, type)')
+        .select('id, page, title, created_at, library_item_id, library_items(id, title, type, creator, cover_url)')
         .order('created_at', { ascending: false }),
     );
     return { annotations, bookmarks };

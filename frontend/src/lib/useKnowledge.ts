@@ -14,6 +14,10 @@ export interface KnowledgeEntry {
   page: number;
   /** What the entry came from — a podcast's `page` is a timestamp. */
   sourceType?: 'book' | 'podcast' | 'article' | 'note';
+  /** The library item it belongs to, its author/show, and cover. */
+  sourceId?: string;
+  creator?: string;
+  cover?: string;
   date: string;
   tone: string;
   tags: string[];
@@ -58,9 +62,19 @@ function sourceType(row: Record<string, unknown>): KnowledgeEntry['sourceType'] 
     : undefined;
 }
 
+function sourceMeta(row: Record<string, unknown>) {
+  const item = sourceItem(row);
+  return {
+    sourceId: str(row.library_item_id) ?? str(item?.id),
+    creator: str(item?.creator) || undefined,
+    cover: str(item?.cover_url) || undefined,
+  };
+}
+
 function annotationToEntry(a: Record<string, unknown>): KnowledgeEntry {
   const kind = str(a.kind) ?? 'note';
   return {
+    ...sourceMeta(a),
     id: `an-${String(a.id)}`,
     kind: capitalize(kind),
     text: str(a.body) || str(a.anchor_text) || '',
@@ -77,6 +91,7 @@ function annotationToEntry(a: Record<string, unknown>): KnowledgeEntry {
 function bookmarkToEntry(b: Record<string, unknown>): KnowledgeEntry {
   const page = numOr0(b.page);
   return {
+    ...sourceMeta(b),
     id: `bm-${String(b.id)}`,
     kind: 'Bookmark',
     text: str(b.title) || `Page ${page}`,

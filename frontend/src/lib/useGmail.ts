@@ -29,6 +29,14 @@ export interface GmailState {
   source: 'settings' | 'env' | null;
   /** The server's own OAuth callback URL, shown read-only for developer setup. */
   redirectUri: string | null;
+  /** What the server says is missing for Gmail to work (names only). */
+  missing: string[];
+  /**
+   * The status request itself failed (offline, server waking). Distinct from
+   * "not configured": the UI must not claim Gmail is unavailable on the server
+   * when it simply could not ask.
+   */
+  statusError: string | null;
   accounts: GmailAccountRow[];
   loading: boolean;
   busy: boolean;
@@ -51,6 +59,8 @@ export function useGmail(enabled: boolean): GmailState {
   const [configured, setConfigured] = useState(false);
   const [source, setSource] = useState<'settings' | 'env' | null>(null);
   const [redirectUri, setRedirectUri] = useState<string | null>(null);
+  const [missing, setMissing] = useState<string[]>([]);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<GmailAccountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -63,6 +73,7 @@ export function useGmail(enabled: boolean): GmailState {
       return;
     }
     setError(null);
+    setStatusError(null);
     try {
       const [status, rows] = await Promise.all([
         api.gmail.status(),
@@ -71,9 +82,12 @@ export function useGmail(enabled: boolean): GmailState {
       setConfigured(status.configured);
       setSource(status.source);
       setRedirectUri(status.redirect_uri ?? null);
+      setMissing(status.missing ?? []);
       setAccounts(rows);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not load your mailboxes.');
+      setStatusError(
+        caught instanceof Error ? caught.message : 'Could not check your Gmail connection.',
+      );
     } finally {
       setLoading(false);
     }
@@ -187,6 +201,7 @@ export function useGmail(enabled: boolean): GmailState {
         setConfigured(status.configured);
         setSource(status.source);
         setRedirectUri(status.redirect_uri ?? null);
+        setMissing(status.missing ?? []);
         setNote('Google app credentials saved. You can connect a mailbox now.');
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not save those credentials.');
@@ -205,6 +220,7 @@ export function useGmail(enabled: boolean): GmailState {
       const status = await api.gmail.deleteOauthConfig();
       setConfigured(status.configured);
       setSource(status.source);
+      setMissing(status.missing ?? []);
       setNote('Google app credentials removed.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not remove those credentials.');
@@ -217,6 +233,8 @@ export function useGmail(enabled: boolean): GmailState {
     configured,
     source,
     redirectUri,
+    missing,
+    statusError,
     accounts,
     loading,
     busy,

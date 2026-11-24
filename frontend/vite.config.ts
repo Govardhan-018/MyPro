@@ -36,6 +36,7 @@ export default defineConfig(({ mode }) => {
       figmaReactRefreshBoundaryFallback(),
       figmaMakeKitPlugin({ storiesGlob: "/src/**/*.stories.{ts,tsx,js,jsx}" }),
       figmaLinkedPackageSourcemaps(),
+      offlineAssetManifest(),
     ],
     resolve: {
       // The monorepo contains two React versions — this app on React 19 and the
@@ -70,6 +71,24 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+
+/**
+ * Lists the built files for the service worker (`public/sw.js`), which
+ * precaches them on install so the app — including lazily-loaded parts such as
+ * the reader and the PDF worker — opens with no connection. Without it only
+ * files fetched after the worker took control were cached, and the first
+ * offline launch came up blank.
+ */
+function offlineAssetManifest(): Plugin {
+  return {
+    name: "mypro-offline-asset-manifest",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const files = Object.keys(bundle).filter((file) => file.startsWith("assets/")).sort();
+      this.emitFile({ type: "asset", fileName: "asset-manifest.json", source: JSON.stringify(files) });
+    },
+  };
+}
 
 type FigmaSiteConfiguration = {
   title?: string;

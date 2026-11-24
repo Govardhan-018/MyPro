@@ -84,7 +84,7 @@ never a second implementation.
 | 10 | PDF pipeline | web/app · render | ✅ done (OCR on the web) |
 | 11 | The clock | web/app · local | ✅ done |
 | 12 | Ground under the agent | local | ✅ 12.1–12.4 done (12.2 live-model scoring still manual) |
-| 13 | The phone as main surface | web/app | 🟡 shell cutover built; device-proof + delete (ANDROID_UPGRADE §3) + 13.2 left |
+| 13 | The phone as main surface | web/app | 🟡 shell cutover built; 13.2 offline reading built (library + books + reading sync); device-proof + delete (ANDROID_UPGRADE §3) left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
 | 16 | A companion that initiates | local | ✅ built (16.1–16.4); live behaviour unproven |
@@ -417,9 +417,15 @@ the native screens.
 
 - ✅ **13.1** Today, Assistant chat, Calendar, Health, Knowledge screens on
   Android, reusing `shared/` — done as 8.3.
-- **13.2** A local cache so the app is useful with no connection. **The only
-  real work left in this phase.** Extracted book text is already cached; the
-  library list, calendar, brief and chat are not.
+- ✅ **13.2 (reading)** Offline reading, Nov 2026. Download a book (row menu
+  or book sheet) → its full structured text + notes are saved on the device
+  (IndexedDB `offline_books` + `pdf_text`; `lib/offlineBooks.ts`). The library
+  list is cached per user; the service worker precaches the whole build
+  (asset manifest) so the app *opens* offline, on the web and in the Android
+  WebView. Progress, notes, bookmarks and sessions go through a durable outbox
+  (`lib/outbox.ts`) that syncs on reconnect / resume, de-duplicated by client
+  uuids, with newest-position-wins across devices (migration **0023**).
+  *Still online-only:* calendar, brief, chat, knowledge.
 - ✅ **13.3** Reader touch interactions — done as 8.5.
 - ✅ **13.4** Push registration into `device_tokens` — done as 8.4 (still
   needs an EAS project id to produce a token).

@@ -25,6 +25,7 @@ import {
   formatBytes,
 } from "../../utils/pdfStorage";
 import { readPageCount } from "../../lib/pdfEngine";
+import { OfflineDownloadCard } from "./OfflineDownloadCard";
 
 interface BookOptionsModalProps {
   book: LibraryItem;
@@ -593,6 +594,9 @@ export function BookOptionsModal({
                   )}
                 </div>
               </div>
+
+              {/* Offline reading: download / progress / remove */}
+              <OfflineDownloadCard book={book} />
 
               {/* Action Toast Notice */}
               {actionNotice && (

@@ -53,6 +53,8 @@ export interface GmailOAuthStatus {
   source: 'settings' | 'env' | null;
   /** This server's OAuth callback URL (derived server-side), or null if unknown. */
   redirect_uri: string | null;
+  /** What a deployer must add (env var names / migration); empty when configured. */
+  missing?: string[];
 }
 
 function withQuery(path: string, query?: Query): string {
@@ -263,7 +265,7 @@ export function createApi(
 
       bookmarks: (itemId: string) =>
         get<Record<string, unknown>[]>(`/library/${itemId}/bookmarks`),
-      createBookmark: (itemId: string, body: { page: number; title?: string }) =>
+      createBookmark: (itemId: string, body: { id?: string; page: number; title?: string }) =>
         post(`/library/${itemId}/bookmarks`, body),
       deleteBookmark: (id: string) => del(`/bookmarks/${id}`),
 

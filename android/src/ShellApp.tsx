@@ -167,7 +167,15 @@ function Shell() {
   useEffect(() => {
     void syncClock();
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' || state === 'background') void syncClock();
+      if (state === 'active' || state === 'background') {
+        void syncClock();
+        // The web's outbox (offline reading progress, notes) syncs on resume
+        // and gets one last chance before Android may kill the app. A paused
+        // WebView does not reliably fire visibilitychange, so say it directly.
+        webRef.current?.injectJavaScript(
+          "window.dispatchEvent(new Event('mypro:resume')); true;",
+        );
+      }
       // Returning from Android's settings page: report the new permission.
       if (state === 'active') sendStatus();
     });
