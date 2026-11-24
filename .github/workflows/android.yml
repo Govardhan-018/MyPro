@@ -81,6 +81,13 @@ jobs:
             ndk;27.1.12297006
             cmake;3.22.1
 
+      # Caches Gradle's downloaded dependencies and wrapper between runs. Without
+      # it every build fetched ~1,000 artifacts from Maven Central, and two runs
+      # at once (a branch push and the merge to main) got rate-limited with
+      # "429 Too Many Requests", failing the build for no fault in the code.
+      - name: Set up Gradle (dependency cache)
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -107,7 +114,20 @@ jobs:
           # Release (not debug): bundles the JS so the APK runs standalone on a
           # phone with no Metro dev server. Expo signs release with the debug
           # keystore by default, so it installs with no secret needed.
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          #
+          # A dependency server answering 429 / timing out is not a build error:
+          # wait and try again (up to 3 attempts). Any other failure fails at once.
+          for attempt in 1 2 3; do
+            if ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle.log; then
+              exit 0
+            fi
+            if ! grep -qE "status code 429|Too Many Requests|Could not GET|Could not HEAD|Read timed out|Connection reset|Connect timed out" gradle.log; then
+              exit 1
+            fi
+            echo "::warning::Dependency download was rate-limited or timed out (attempt $attempt of 3); retrying in $((attempt * 60))s"
+            sleep $((attempt * 60))
+          done
+          exit 1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
