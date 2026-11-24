@@ -3738,7 +3738,11 @@ function KnowledgeView({
 
   const kindTabs = (
     <div className="library-categories knowledge-tabs" role="tablist">
-      {knowledgeTabs.map(({ id, label, icon: Icon }) => (
+      {knowledgeTabs
+        // Kinds with nothing in them are noise ("Notes 0"); keep All and the
+        // one currently selected so a filter never vanishes from under you.
+        .filter(({ id }) => id === "All" || id === tab || (counts.find((c) => c.id === id)?.count ?? 0) > 0)
+        .map(({ id, label, icon: Icon }) => (
         <button
           key={id}
           role="tab"
@@ -3780,8 +3784,12 @@ function KnowledgeView({
             <div className="eyebrow muted-eyebrow">KNOWLEDGE</div>
             <h1>Everything you saved.</h1>
             <p className="page-meta">
-              {groups.filter((g) => g.key !== UNSORTED_KEY).length} sources · {live.length}{" "}
-              {live.length === 1 ? "entry" : "entries"}
+              {(() => {
+                const sources = groups.filter((g) => g.key !== UNSORTED_KEY).length;
+                return `${sources} ${sources === 1 ? "source" : "sources"} · ${live.length} ${
+                  live.length === 1 ? "entry" : "entries"
+                }`;
+              })()}
             </p>
           </div>
         </header>
@@ -5099,7 +5107,7 @@ function SettingsView({
                     <small>
                       {phone.status?.permission === "granted"
                         ? `Reminders, event alerts and your brief are scheduled on the device, so they arrive with the app closed${
-                            phone.status.armed ? ` (${phone.status.armed} armed for the next 48 hours)` : ""
+                            phone.status.armed ? ` (${phone.status.armed} scheduled for the next 7 days)` : ""
                           }. They show as pop-ups and on the lock screen as your Android settings allow.`
                         : phone.status
                           ? "Android is blocking MyPro's notifications, so reminders cannot appear. Allow them to fix this."
@@ -5142,6 +5150,13 @@ function SettingsView({
                     Notification settings
                   </button>
                 </div>
+                {phone.status?.lastArm && (
+                  <p className={`settings-hint ${phone.status.lastArm.error ? "settings-hint-error" : ""}`}>
+                    {phone.status.lastArm.error
+                      ? phone.status.lastArm.error
+                      : `Reminders synced to this phone ${new Date(phone.status.lastArm.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} — ${phone.status.lastArm.armed} scheduled for the next 7 days.`}
+                  </p>
+                )}
                 {phone.testNote && <p className="settings-hint">{phone.testNote}</p>}
                 <p className="settings-hint">
                   Pop-ups not showing? In Android Settings → Notifications → MyPro, set the

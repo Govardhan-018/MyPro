@@ -33,8 +33,13 @@ import {
 import { client } from './client';
 import { colors } from '../theme';
 
-/** How far ahead to arm. Re-armed on every launch, so the window rolls. */
-export const ARM_WINDOW_HOURS = 48;
+/**
+ * How far ahead to arm: a week (the most `/schedules/upcoming` serves). It
+ * used to be 48 hours, so a reminder set for next Friday only reached the
+ * phone if the app happened to be opened again in the two days before it.
+ * Re-armed on every launch/resume and whenever a schedule changes.
+ */
+export const ARM_WINDOW_HOURS = 168;
 
 /** Marks our own scheduled notifications so we never cancel someone else's. */
 const OWNED = 'mypro:schedule';
@@ -113,6 +118,9 @@ export async function ensureChannel(): Promise<void> {
  * to say yes explicitly.
  */
 export async function ensurePermission(): Promise<boolean> {
+  // Expo's guidance: create the channel before asking, or on some Android
+  // versions the permission prompt never appears and the answer is "no".
+  await ensureChannel().catch(() => undefined);
   const existing = await Notifications.getPermissionsAsync();
   if (existing.granted) return true;
   // `canAskAgain === false` means they said no and meant it; re-prompting
@@ -132,9 +140,29 @@ export async function ensurePermission(): Promise<boolean> {
  *
  * @returns how many notifications are now armed, or null if it could not run.
  */
+/** The outcome of the last arming pass, shown in Settings → Notifications. */
+export interface ArmResult {
+  at: string;
+  /** How many notifications are now armed (null when the pass could not run). */
+  armed: number | null;
+  /** Where the reminder list came from. */
+  source: 'web' | 'native';
+  /** Why nothing was armed, in words a person can act on. */
+  error: string | null;
+}
+let lastArm: ArmResult | null = null;
+export const lastArmResult = () => lastArm;
+
+/**
+ * Arm the next week from the phone's own copy of the session (fallback path:
+ * cold start before the web app has loaded). The web app normally sends the
+ * list itself — see {@link armOccurrences}.
+ */
 export async function armUpcoming(): Promise<number | null> {
-  if (!(await ensurePermission())) return null;
-  await ensureChannel();
+  if (!(await ensurePermission())) {
+    lastArm = { at: new Date().toISOString(), armed: null, source: 'native', error: 'Notifications are turned off for MyPro.' };
+    return null;
+  }
   // Signed out: nothing of anyone's should be armed on this device.
   if (!(await client.auth.getSession())) {
     await cancelOwned();
@@ -144,16 +172,58 @@ export async function armUpcoming(): Promise<number | null> {
   let occurrences: ScheduleOccurrence[];
   try {
     occurrences = await client.api.schedules.upcoming(ARM_WINDOW_HOURS);
-  } catch {
+  } catch (err) {
     // Render may be asleep or the phone offline. Whatever is already armed
     // stays armed — that is the entire point of arming ahead of time.
+    lastArm = {
+      at: new Date().toISOString(),
+      armed: null,
+      source: 'native',
+      error: `Couldn’t fetch your reminders (${err instanceof Error ? err.message : 'network'}).`,
+    };
     return null;
   }
+  return armOccurrences(occurrences, 'native');
+}
+
+/** Only well-formed occurrences from the web bridge are armed. */
+function isOccurrence(value: unknown): value is ScheduleOccurrence {
+  const o = value as Partial<ScheduleOccurrence> | null;
+  return (
+    !!o &&
+    typeof o.id === 'string' &&
+    typeof o.at === 'string' &&
+    typeof o.schedule_id === 'string' &&
+    typeof o.action_type === 'string'
+  );
+}
+
+/**
+ * Replace everything we armed with this list. Called with the list the web
+ * app fetched using its own live session (the reliable path), or with the
+ * phone's own fetch above.
+ *
+ * Re-arming replaces rather than adds: every notification we own is cancelled
+ * first, then the current occurrence list is scheduled. That is why the
+ * occurrence id is derived from the schedule and the instant — editing a
+ * schedule changes the ids, so yesterday's plan cannot survive as a ghost.
+ */
+export async function armOccurrences(
+  list: unknown[],
+  source: 'web' | 'native',
+): Promise<number | null> {
+  if (!(await ensurePermission())) {
+    lastArm = { at: new Date().toISOString(), armed: null, source, error: 'Notifications are turned off for MyPro.' };
+    return null;
+  }
+  await ensureChannel();
+  const occurrences = list.filter(isOccurrence);
 
   await cancelOwned();
 
   const now = Date.now();
   let armed = 0;
+  let firstError: string | null = null;
 
   for (const occurrence of occurrences) {
     const at = new Date(occurrence.at);
@@ -190,12 +260,19 @@ export async function armUpcoming(): Promise<number | null> {
         },
       });
       armed += 1;
-    } catch {
-      // One bad occurrence must not cost us the other 47.
+    } catch (err) {
+      // One bad occurrence must not cost us the others — but say why.
+      firstError ??= err instanceof Error ? err.message : String(err);
       continue;
     }
   }
 
+  lastArm = {
+    at: new Date().toISOString(),
+    armed,
+    source,
+    error: firstError ? `Some reminders could not be scheduled: ${firstError}` : null,
+  };
   return armed;
 }
 
@@ -314,30 +391,38 @@ function easProjectId(): string | null {
 }
 
 /**
- * The whole native clock, in order: arm the next 48 hours, then (re)register
- * for push stamped with the arming time. One function so every trigger —
- * launch, foreground, background, a schedule edited in the web — does both.
- * Serialised: overlapping arms would cancel each other's work half-way.
+ * Every arming pass runs one at a time: each one cancels what we armed and
+ * schedules afresh, so two overlapping passes could leave half of each.
  */
-let syncing: Promise<void> | null = null;
-let syncAgain = false;
+let queue: Promise<unknown> = Promise.resolve();
+function serial<T>(work: () => Promise<T>): Promise<T> {
+  const next = queue.then(work, work);
+  queue = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * The native clock on its own: arm the week from the phone's copy of the
+ * session, then (re)register for push stamped with the arming time. Used on
+ * cold start and resume, before the web app has had a chance to send its list.
+ */
 export function syncClock(): Promise<void> {
-  if (syncing) {
-    syncAgain = true;
-    return syncing;
-  }
-  syncing = (async () => {
-    try {
-      do {
-        syncAgain = false;
-        const armed = await armUpcoming();
-        await registerForPush(armed !== null ? new Date() : undefined);
-      } while (syncAgain);
-    } finally {
-      syncing = null;
-    }
-  })();
-  return syncing;
+  return serial(async () => {
+    const armed = await armUpcoming();
+    await registerForPush(armed !== null ? new Date() : undefined);
+  });
+}
+
+/**
+ * The reliable path: the web app fetched the reminder list with its own live
+ * session (the same one every screen uses) and handed it over. No second
+ * token, no second API address that could be stale or missing.
+ */
+export function syncFromWeb(occurrences: unknown[]): Promise<void> {
+  return serial(async () => {
+    const armed = await armOccurrences(occurrences, 'web');
+    await registerForPush(armed !== null ? new Date() : undefined);
+  });
 }
 
 /**
@@ -361,6 +446,8 @@ export interface NotificationStatus {
   push: 'ready' | 'unconfigured' | 'unavailable';
   pushReason: string | null;
   armed: number;
+  /** When the phone last received its reminder list, and what came of it. */
+  lastArm: ArmResult | null;
 }
 
 export async function notificationStatus(): Promise<NotificationStatus> {
@@ -382,6 +469,7 @@ export async function notificationStatus(): Promise<NotificationStatus> {
           : 'Push needs a real device.'
         : 'This build has no push configuration; scheduled reminders still work.',
     armed,
+    lastArm,
   };
 }
 

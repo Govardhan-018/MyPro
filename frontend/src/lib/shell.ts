@@ -16,7 +16,8 @@
  * escape.
  */
 import { getSession, onAuthChange } from './supabase';
-import type { AuthSession } from '@mypro/shared';
+import type { AuthSession, ScheduleOccurrence } from '@mypro/shared';
+import { api } from './api';
 
 declare global {
   interface Window {
@@ -37,6 +38,8 @@ export type ShellMessage =
   | { type: 'test-notification' }
   /** Schedules or calendar changed: re-arm the phone's clock now, not on next launch. */
   | { type: 'rearm' }
+  /** The next week's reminders, fetched here with the live session, for the phone to arm. */
+  | { type: 'arm'; occurrences: ScheduleOccurrence[] }
   /** Ask the shell where notifications stand on this phone (answers via an event). */
   | { type: 'notification-status' }
   /** Re-request permission, or open Android's settings if it was refused. */
@@ -49,6 +52,8 @@ export interface ShellNotificationStatus {
   push: 'ready' | 'unconfigured' | 'unavailable';
   pushReason: string | null;
   armed: number;
+  /** The last time the phone received its reminders, and what came of it. */
+  lastArm: { at: string; armed: number | null; source: 'web' | 'native'; error: string | null } | null;
 }
 
 /** Replies the shell sends back into the page. */
@@ -67,9 +72,28 @@ export function onShellEvent(cb: (event: ShellEvent) => void): () => void {
   return () => window.removeEventListener('mypro-shell', handler);
 }
 
-/** Tell the phone its schedules changed, so a reminder set now is armed now. */
+/** How far ahead the phone arms — the most `/schedules/upcoming` serves. */
+const ARM_WINDOW_HOURS = 168;
+let armTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Hand the phone its reminders, so a reminder set now is armed now.
+ *
+ * The web fetches the list itself, with the session every screen uses, and
+ * posts it to the shell. The phone used to fetch it with its own copy of the
+ * token and its own build-time API address — when either was stale, missing
+ * or rejected, nothing was armed and nothing said so. If this fetch fails the
+ * phone is asked to try with its own copy, as before.
+ */
 export function requestShellRearm(): void {
-  if (inShell) postToShell({ type: 'rearm' });
+  if (!inShell) return;
+  clearTimeout(armTimer);
+  armTimer = setTimeout(() => {
+    api.schedules
+      .upcoming(ARM_WINDOW_HOURS)
+      .then((occurrences) => postToShell({ type: 'arm', occurrences }))
+      .catch(() => postToShell({ type: 'rearm' }));
+  }, 400);
 }
 
 /**
@@ -143,6 +167,19 @@ export function initShell(): void {
   // Push the session out now and on every auth change. The shell persists it
   // and re-arms the clock; a dropped message is recovered on the next change
   // or the next cold start (the shell reads storage too).
-  void getSession().then((session) => postToShell({ type: 'session', session }));
-  onAuthChange((session) => postToShell({ type: 'session', session }));
+  void getSession().then((session) => {
+    postToShell({ type: 'session', session });
+    if (session) requestShellRearm();
+  });
+  let signedIn = false;
+  onAuthChange((session) => {
+    postToShell({ type: 'session', session });
+    // Arm on sign-in (not on every hourly token refresh).
+    if (session && !signedIn) requestShellRearm();
+    signedIn = Boolean(session);
+  });
+  // The shell says the app came back to the foreground (or is going away).
+  window.addEventListener('mypro:resume', () => {
+    void getSession().then((session) => session && requestShellRearm());
+  });
 }

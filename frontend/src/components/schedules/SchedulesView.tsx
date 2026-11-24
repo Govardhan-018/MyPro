@@ -42,6 +42,8 @@ import {
 } from "../../lib/useSchedules";
 import { useGmail } from "../../lib/useGmail";
 import { gmailScopesGrantSend } from "../../lib/api";
+import { inShell } from "../../lib/shell";
+import { useShellNotifications } from "../../lib/useShellNotifications";
 
 const MODES: {
   id: ScheduleMode;
@@ -158,6 +160,10 @@ export function SchedulesView({ onOpenSettings }: { onOpenSettings?: () => void 
   const schedules = useSchedules(true);
   const gmail = useGmail(true);
   const canEmail = gmail.accounts.some((account) => gmailScopesGrantSend(account.scopes));
+  // In the app, reminders are the phone's own notifications: say so plainly
+  // when Android is blocking them, rather than letting a reminder vanish.
+  const phone = useShellNotifications(inShell);
+  const phoneBlocked = inShell && phone.status !== null && phone.status.permission !== "granted";
 
   const [editing, setEditing] = useState<ScheduleRow | "new" | null>(null);
   const [form, setForm] = useState<ScheduleForm>(() => emptyScheduleForm());
@@ -288,6 +294,19 @@ export function SchedulesView({ onOpenSettings }: { onOpenSettings?: () => void 
           <button type="button" className="sched-link" onClick={schedules.reload}>
             Try again
           </button>
+        </div>
+      )}
+      {phoneBlocked && (
+        <div className="data-banner data-banner-error" role="alert">
+          Notifications are turned off for MyPro on this phone, so reminders can’t appear.
+          <button type="button" className="sched-link" onClick={phone.fix}>
+            {phone.status?.canAskAgain ? "Allow notifications" : "Open Android settings"}
+          </button>
+        </div>
+      )}
+      {!phoneBlocked && phone.status?.lastArm?.error && (
+        <div className="data-banner data-banner-error" role="alert">
+          {phone.status.lastArm.error}
         </div>
       )}
       {success && (

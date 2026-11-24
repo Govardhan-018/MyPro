@@ -8511,6 +8511,8 @@ button {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
+  /* Its own row under the kind tabs — it used to touch them. */
+  margin-top: 12px;
 }
 .knowledge-type-filter {
   display: flex;
@@ -8524,7 +8526,8 @@ button {
 }
 .knowledge-type-filter button {
   flex: none;
-  padding: 6px 12px;
+  height: 36px;
+  padding: 0 14px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: transparent;
@@ -8545,7 +8548,8 @@ button {
   color: rgba(255, 255, 255, 0.5);
 }
 .knowledge-sort select {
-  padding: 6px 10px;
+  height: 36px;
+  padding: 0 10px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.04);

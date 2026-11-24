@@ -25,6 +25,7 @@ import {
   notificationStatus,
   requestPermissionOrOpenSettings,
   syncClock,
+  syncFromWeb,
 } from './lib/notifications';
 import { hashFromDeeplink } from '@mypro/shared';
 import { INJECTED_BEFORE, WEB_URL, isWebConfigured } from './lib/shell';
@@ -59,6 +60,8 @@ type IncomingMessage =
   | { type: 'test-notification' }
   /** Schedules or calendar changed in the web: re-arm the clock right now. */
   | { type: 'rearm' }
+  /** The web's own fetch of the next week's reminders — arm exactly these. */
+  | { type: 'arm'; occurrences: unknown[] }
   /** Settings wants to know where notifications stand on this phone. */
   | { type: 'notification-status' }
   /** Ask for permission again, or open Android's settings if it was refused. */
@@ -146,6 +149,8 @@ function Shell() {
         });
       } else if (message.type === 'rearm') {
         void syncClock().then(sendStatus);
+      } else if (message.type === 'arm' && Array.isArray(message.occurrences)) {
+        void syncFromWeb(message.occurrences).then(sendStatus);
       } else if (message.type === 'notification-status') {
         sendStatus();
       } else if (message.type === 'fix-notifications') {
