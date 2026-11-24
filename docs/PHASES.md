@@ -79,7 +79,7 @@ never a second implementation.
 | 5 | Schedules UI | web/app | ✅ done — three modes (Remind me · AI message · Email), 2026-11 |
 | 6 | Notifications that reach you | all | ✅ done (6.3 dropped) |
 | 7 | Gmail | render · local | ✅ code done — needs a Google OAuth app |
-| 8 | Android app | web/app | ✅ done (8.4 needs an EAS project) |
+| 8 | Android app | web/app | ✅ done (8.4 push deferred: no Firebase for now — closed-app AI/email alerts show on next open) |
 | 9 | Companion intelligence | local | ⬜ superseded by 16 |
 | 10 | PDF pipeline | web/app · render | ✅ done (OCR on the web) |
 | 11 | The clock | web/app · local | ✅ done |

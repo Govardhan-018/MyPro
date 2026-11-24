@@ -78,10 +78,13 @@ migration to apply by hand: **`0022_scheduler_reliability.sql`**.
 2. Google Cloud → OAuth client → add the redirect URI shown in Settings → Mail
    → Developer setup (normally `https://<render-service>/api/v1/gmail/callback`).
    Existing users must reconnect Gmail as **read & send** for email schedules.
-3. For closed-app instant alerts (AI done / email sent): create an EAS project
-   + Firebase app, upload the FCM v1 key to Expo, set repo secrets
-   `EAS_PROJECT_ID` and `GOOGLE_SERVICES_JSON` (file contents), rebuild the APK.
-   Reminders work without this.
+3. ~~Firebase push~~ — **deferred by decision (2026-11).** No Firebase for now.
+   Closed-app alerts for "AI task done" / "email sent/failed" are not delivered;
+   they appear in-app on next open. Reminders, calendar alerts and the brief
+   are unaffected (local alarms). The code is ready if push is added later
+   (`EAS_PROJECT_ID` + `GOOGLE_SERVICES_JSON`, see `android/app.config.js`);
+   a no-Firebase alternative (UnifiedPush/ntfy, or a ~15-min background check)
+   is still an open question.
 4. Install the new APK (native changes: notifications, shell bridge, Gmail return).
 
 ## Not verified here (needs a device / live services)
