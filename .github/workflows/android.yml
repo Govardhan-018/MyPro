@@ -1,10 +1,13 @@
 name: Android APK
 
-# Builds an installable debug APK on every push that touches the app or the
-# shared core, and on manual dispatch. No account or signing secret is needed
-# for a debug APK; the artifact is attached to the run.
+# Builds an installable APK when code that touches the app or the shared core
+# lands on `main` — never for feature branches (that doubled every build and
+# got the runners rate-limited by Maven Central). Manual dispatch still works
+# from any branch. No account or signing secret is needed; the artifact is
+# attached to the run.
 on:
   push:
+    branches: [main]
     paths:
       - 'android/**'
       - 'shared/**'
