@@ -1,63 +1,76 @@
 /**
- * Schedules (Roadmap Phase 5).
+ * Schedules — three things, at a time you choose:
  *
- * The scheduler has been running on Render all along and the assistant can
- * already create schedules through its skills — this is the screen that lets
- * you see, build, pause and delete them, and read what each run actually did.
+ *  1. **Remind me** — a notification with your words (fired by the phone's own
+ *     alarm clock in the app, so it arrives with the app closed).
+ *  2. **AI message** — the AI carries out your instructions at that moment and
+ *     replies in your chat; a notification says it's done.
+ *  3. **Email** — the AI writes the email from your instructions and sends it
+ *     from your connected Gmail. Only offered once Gmail can send.
+ *
+ * Mobile first: one column, only the fields the chosen mode needs, native
+ * date and time pickers, and every field scrolled into view above the keyboard.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
 import { Loading } from "../ui";
 import {
-  AlarmClock,
   Bell,
+  Bot,
   CalendarClock,
   Check,
   ChevronDown,
   History,
-  Loader2,
   Mail,
-  MessageSquare,
   Pause,
+  Pencil,
   Play,
   Plus,
+  RotateCw,
   Trash2,
   X,
 } from "lucide-react";
 import type { ScheduleRow } from "@mypro/shared";
 import {
-  rowToInput,
+  buildScheduleInput,
+  emptyScheduleForm,
+  formFromRow,
+  isFormEditable,
   useSchedules,
-  type ScheduleInput,
+  type ScheduleForm,
+  type ScheduleMode,
   type ScheduleRunRow,
 } from "../../lib/useSchedules";
+import { useGmail } from "../../lib/useGmail";
+import { gmailScopesGrantSend } from "../../lib/api";
 
-const ACTION_META: Record<
-  ScheduleRow["action_type"],
-  { label: string; hint: string; Icon: typeof Bell }
-> = {
-  notify: { label: "Notification", hint: "A message in the app", Icon: Bell },
-  report: { label: "Report", hint: "The assistant writes you a brief", Icon: CalendarClock },
-  chat_message: { label: "Chat message", hint: "Lands in your conversation", Icon: MessageSquare },
-  email: { label: "Email", hint: "Needs Gmail (Phase 7)", Icon: Mail },
-};
-
-const RECURRENCES: { id: ScheduleRow["recurrence"]; label: string }[] = [
-  { id: "daily", label: "Every day" },
-  { id: "weekly", label: "Certain weekdays" },
-  { id: "monthly", label: "Monthly" },
-  { id: "once", label: "Once" },
-  { id: "cron", label: "Cron" },
+const MODES: {
+  id: ScheduleMode;
+  label: string;
+  hint: string;
+  Icon: typeof Bell;
+}[] = [
+  { id: "notify", label: "Remind me", hint: "A notification at that time", Icon: Bell },
+  { id: "chat_message", label: "AI message", hint: "The AI does it and replies in chat", Icon: Bot },
+  { id: "email", label: "Email", hint: "The AI writes and sends it", Icon: Mail },
 ];
+
+const TYPE_META: Record<ScheduleRow["action_type"], { label: string; Icon: typeof Bell }> = {
+  notify: { label: "Reminder", Icon: Bell },
+  chat_message: { label: "AI message", Icon: Bot },
+  email: { label: "Email", Icon: Mail },
+  report: { label: "Brief", Icon: CalendarClock },
+};
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const WEEKDAYS = [1, 2, 3, 4, 5];
 
 const RUN_LABEL: Record<string, string> = {
-  success: "Ran",
+  success: "Done",
   failed: "Failed",
-  skipped: "Skipped",
-  pending_confirmation: "Waiting for you",
-  deferred: "Waited for your laptop",
+  skipped: "Missed",
+  pending_confirmation: "Waiting for approval",
+  deferred: "Retrying",
+  retrying: "Retrying",
 };
 
 const browserTimezone = (): string => {
@@ -69,7 +82,7 @@ const browserTimezone = (): string => {
 };
 
 /** "Thu 15 Nov, 08:30" — short, local, no library. */
-function when(iso: string | null): string {
+function when(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
@@ -92,15 +105,13 @@ function cadence(row: ScheduleRow): string {
       const days = (row.assistant_schedule_days ?? [])
         .map((day) => day.day_of_week)
         .sort((a, b) => a - b);
-      const names = days.map((day) => DAYS[day]).join(", ");
-      const weekdaysOnly =
-        days.length === 5 && WEEKDAYS.every((day) => days.includes(day));
-      return `${weekdaysOnly ? "Weekdays" : names || "No days"} at ${time}`;
+      const weekdaysOnly = days.length === 5 && WEEKDAYS.every((day) => days.includes(day));
+      return `${weekdaysOnly ? "Weekdays" : days.map((d) => DAYS[d]).join(", ") || "No days"} at ${time}`;
     }
     case "monthly":
       return `Day ${row.day_of_month} of each month at ${time}`;
     case "once":
-      return `Once, ${when(row.run_at)}`;
+      return when(row.run_at);
     case "cron":
       return `Cron: ${row.cron_expr}`;
     default:
@@ -108,85 +119,115 @@ function cadence(row: ScheduleRow): string {
   }
 }
 
-const emptyForm = {
-  name: "",
-  action_type: "report" as ScheduleRow["action_type"],
-  prompt: "",
-  recurrence: "daily" as ScheduleRow["recurrence"],
-  time_of_day: "08:30",
-  days: [...WEEKDAYS],
-  day_of_month: 1,
-  run_at: "",
-  cron_expr: "",
-  requires_confirmation: false,
+/** What the row is about, in the user's own words. */
+function summary(row: ScheduleRow): string {
+  const p = row.action_payload ?? {};
+  const text = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
+  if (row.action_type === "notify") return text("body") || text("text") || text("prompt") || row.name;
+  if (row.action_type === "email") return text("prompt");
+  return text("prompt") || text("text") || row.name;
+}
+
+/** The status chip: what happened last, or what will happen next. */
+function status(row: ScheduleRow): { label: string; tone: string; detail?: string | null } {
+  const last = row.last_run;
+  if ((row.deferred_count ?? 0) > 0 && row.enabled) {
+    return { label: `Retrying · ${when(row.next_run_at)}`, tone: "warn", detail: last?.detail };
+  }
+  if (row.enabled && row.next_run_at) {
+    if (last?.status === "failed") return { label: "Last run failed", tone: "bad", detail: last.detail };
+    return { label: "Scheduled", tone: "ok" };
+  }
+  if (!last) {
+    if (row.enabled) return { label: "Scheduled", tone: "ok" };
+    return { label: row.recurrence === "once" ? "Cancelled" : "Paused", tone: "muted" };
+  }
+  const tone =
+    last.status === "success" ? "ok" : last.status === "failed" ? "bad" : last.status === "skipped" ? "muted" : "warn";
+  if (!row.enabled && row.recurrence !== "once") return { label: "Paused", tone: "muted" };
+  return { label: RUN_LABEL[last.status] ?? last.status, tone, detail: last.status === "success" ? null : last.detail };
+}
+
+/** Keep a focused field visible above the on-screen keyboard. */
+const keepInView = (event: FocusEvent<HTMLElement>) => {
+  const el = event.currentTarget;
+  window.setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
 };
 
-export function SchedulesView() {
+export function SchedulesView({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const schedules = useSchedules(true);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const gmail = useGmail(true);
+  const canEmail = gmail.accounts.some((account) => gmailScopesGrantSend(account.scopes));
+
+  const [editing, setEditing] = useState<ScheduleRow | "new" | null>(null);
+  const [form, setForm] = useState<ScheduleForm>(() => emptyScheduleForm());
   const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<{ field?: string; message: string } | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [openRuns, setOpenRuns] = useState<string | null>(null);
-  const [runs, setRuns] = useState<Record<string, ScheduleRunRow[]>>({});
+  const [runs, setRuns] = useState<Record<string, ScheduleRunRow[] | "error">>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const formRef = useRef<HTMLElement>(null);
 
-  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
+  useEffect(() => {
+    if (!success) return;
+    const timer = window.setTimeout(() => setSuccess(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [success]);
+
+  const set = <K extends keyof ScheduleForm>(key: K, value: ScheduleForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
+    if (formError?.field === key || (formError?.field === "when" && (key === "date" || key === "time"))) {
+      setFormError(null);
+    }
+  };
+
+  const openNew = () => {
+    setForm(emptyScheduleForm());
+    setFormError(null);
+    setEditing("new");
+    window.setTimeout(() => formRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+  };
+  const openEdit = (row: ScheduleRow) => {
+    setForm(formFromRow(row));
+    setFormError(null);
+    setEditing(row);
+    window.setTimeout(() => formRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+  };
+  const close = () => {
+    setEditing(null);
+    setFormError(null);
+  };
 
   const toggleDay = (day: number) =>
-    setForm((current) => ({
-      ...current,
-      days: current.days.includes(day)
-        ? current.days.filter((d) => d !== day)
-        : [...current.days, day].sort((a, b) => a - b),
-    }));
+    set(
+      "days",
+      form.days.includes(day) ? form.days.filter((d) => d !== day) : [...form.days, day].sort((a, b) => a - b),
+    );
 
   const submit = async () => {
-    setFormError(null);
-    const name = form.name.trim();
-    if (!name) {
-      setFormError("Give it a name you'll recognise.");
+    if (saving) return;
+    if (form.mode === "email" && !canEmail) {
+      setFormError({ message: "Connect Gmail with send access first (Settings → Mail)." });
       return;
     }
-    if (form.recurrence === "weekly" && !form.days.length) {
-      setFormError("Pick at least one weekday.");
+    const built = buildScheduleInput(form, browserTimezone());
+    if ("error" in built) {
+      setFormError({ field: built.field, message: built.error });
       return;
     }
-    if (form.recurrence === "once" && !form.run_at) {
-      setFormError("Choose when it should run.");
-      return;
-    }
-    if (form.recurrence === "cron" && !form.cron_expr.trim()) {
-      setFormError("A cron expression is required.");
-      return;
-    }
-
-    const input: ScheduleInput = {
-      name,
-      action_type: form.action_type,
-      // What the agent is asked to do when the action needs words.
-      action_payload: form.prompt.trim() ? { prompt: form.prompt.trim() } : {},
-      channel: "in_app",
-      recurrence: form.recurrence,
-      timezone: browserTimezone(),
-      enabled: true,
-      requires_confirmation: form.requires_confirmation,
-    };
-    if (form.recurrence === "once") input.run_at = new Date(form.run_at).toISOString();
-    else input.time_of_day = form.time_of_day;
-    if (form.recurrence === "weekly") input.days = form.days;
-    if (form.recurrence === "monthly") input.day_of_month = form.day_of_month;
-    if (form.recurrence === "cron") input.cron_expr = form.cron_expr.trim();
-
     setSaving(true);
+    setFormError(null);
     try {
-      await schedules.create(input);
-      setShowForm(false);
-      setForm(emptyForm);
-    } catch {
-      setFormError(schedules.error ?? "Could not create that schedule.");
+      if (editing && editing !== "new") await schedules.update(editing.id, built.input);
+      else await schedules.create(built.input);
+      setSuccess(editing && editing !== "new" ? "Schedule updated." : "Scheduled.");
+      setEditing(null);
+    } catch (caught) {
+      setFormError({
+        message: caught instanceof Error ? caught.message : "Could not save that schedule.",
+      });
     } finally {
       setSaving(false);
     }
@@ -198,121 +239,173 @@ export function SchedulesView() {
       return;
     }
     setOpenRuns(id);
-    if (!runs[id]) {
-      try {
-        const rows = await schedules.runs(id);
-        setRuns((current) => ({ ...current, [id]: rows }));
-      } catch {
-        setRuns((current) => ({ ...current, [id]: [] }));
-      }
+    try {
+      const rows = await schedules.runs(id);
+      setRuns((current) => ({ ...current, [id]: rows }));
+    } catch {
+      setRuns((current) => ({ ...current, [id]: "error" }));
     }
   };
 
-  const active = schedules.items.filter((row) => row.enabled);
+  const sorted = useMemo(
+    () =>
+      [...schedules.items].sort((a, b) => {
+        // Upcoming first (soonest on top), then finished/paused, newest last run first.
+        const an = a.enabled && a.next_run_at ? Date.parse(a.next_run_at) : Infinity;
+        const bn = b.enabled && b.next_run_at ? Date.parse(b.next_run_at) : Infinity;
+        if (an !== bn) return an - bn;
+        return Date.parse(b.last_run_at ?? "0") - Date.parse(a.last_run_at ?? "0");
+      }),
+    [schedules.items],
+  );
+  const activeCount = schedules.items.filter((row) => row.enabled).length;
+  const isEdit = Boolean(editing && editing !== "new");
 
   return (
-    <div className="page-content foundation-view schedules-view">
-      <header className="page-heading">
+    <div className="page-content foundation-view schedules-view sched">
+      <header className="page-heading sched-heading">
         <div>
           <div className="eyebrow muted-eyebrow">SCHEDULES</div>
-          <h1>What reaches you, and when.</h1>
-          <p>
-            Standing instructions your companion runs on its own — briefs, reminders and
-            check-ins. Your assistant can create these too; they all land here.
-          </p>
+          <h1>Later, handled.</h1>
+          <p>A reminder, an AI task or an email — at the time you pick.</p>
         </div>
-        <button className="primary-button" onClick={() => setShowForm((open) => !open)}>
-          {showForm ? <X size={17} /> : <Plus size={17} />}
-          {showForm ? "Close" : "New schedule"}
-        </button>
+        {!editing && (
+          <button className="primary-button sched-new" onClick={openNew} disabled={!schedules.configured}>
+            <Plus size={17} />
+            New
+          </button>
+        )}
       </header>
 
-      {schedules.error && (
-        <div className="data-banner data-banner-error" role="alert">
-          {schedules.error}
-        </div>
-      )}
-      {schedules.loading && !schedules.error && (
-        <div className="data-banner" aria-live="polite">
-          <Loading variant="inline" size={18} text="Loading your schedules…" />
-        </div>
-      )}
       {!schedules.configured && (
         <div className="data-banner" role="status">
           Schedules need the backend configured — set VITE_API_URL.
         </div>
       )}
+      {schedules.error && !editing && (
+        <div className="data-banner data-banner-error" role="alert">
+          {schedules.error}
+          <button type="button" className="sched-link" onClick={schedules.reload}>
+            Try again
+          </button>
+        </div>
+      )}
+      {success && (
+        <div className="data-banner sched-success" role="status">
+          <Check size={15} /> {success}
+        </div>
+      )}
 
-      {showForm && (
-        <section className="glass-card schedule-form">
-          <div className="schedule-form-head">
-            <span className="section-kicker">NEW SCHEDULE</span>
-            <h2>Tell it what to do, and when.</h2>
+      {editing && (
+        <section className="glass-card sched-form" ref={formRef} aria-label={isEdit ? "Edit schedule" : "New schedule"}>
+          <div className="sched-form-head">
+            <h2>{isEdit ? "Edit schedule" : "New schedule"}</h2>
+            <button type="button" className="icon-button" aria-label="Close" onClick={close} disabled={saving}>
+              <X size={17} />
+            </button>
           </div>
 
-          <label className="field-label">
-            NAME
-            <div className="link-input">
-              <AlarmClock size={15} />
+          <div className="sched-modes" role="radiogroup" aria-label="What should happen">
+            {MODES.map((mode) => {
+              const locked = mode.id === "email" && !canEmail;
+              const selected = form.mode === mode.id;
+              return (
+                <button
+                  key={mode.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-disabled={locked}
+                  className={`sched-mode ${selected ? "selected" : ""} ${locked ? "locked" : ""}`}
+                  disabled={isEdit && !selected}
+                  onClick={() => {
+                    if (locked) {
+                      setFormError({ message: "Email needs Gmail connected with send access." });
+                      return;
+                    }
+                    set("mode", mode.id);
+                    setFormError(null);
+                  }}
+                >
+                  <mode.Icon size={18} />
+                  <strong>{mode.label}</strong>
+                  <small>{locked ? (gmail.loading ? "Checking Gmail…" : "Connect Gmail first") : mode.hint}</small>
+                </button>
+              );
+            })}
+          </div>
+
+          {form.mode === "email" && !canEmail && !gmail.loading && (
+            <div className="data-banner sched-inline-banner" role="status">
+              Email schedules send from your Gmail, which isn’t connected with send access yet.
+              {onOpenSettings && (
+                <button type="button" className="sched-link" onClick={onOpenSettings}>
+                  Open Settings → Mail
+                </button>
+              )}
+            </div>
+          )}
+
+          {form.mode === "email" && (
+            <label className={`sched-field ${formError?.field === "to" ? "invalid" : ""}`}>
+              <span>Send to</span>
               <input
-                value={form.name}
-                onChange={(event) => set("name", event.target.value)}
-                placeholder="Morning brief"
-              />
-            </div>
-          </label>
-
-          <div className="field-label">
-            WHAT HAPPENS
-            <div className="schedule-action-grid">
-              {(Object.keys(ACTION_META) as ScheduleRow["action_type"][]).map((type) => {
-                const meta = ACTION_META[type];
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    className={`schedule-action-option ${
-                      form.action_type === type ? "selected" : ""
-                    }`}
-                    onClick={() => set("action_type", type)}
-                  >
-                    <meta.Icon size={16} />
-                    <strong>{meta.label}</strong>
-                    <small>{meta.hint}</small>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {(form.action_type === "report" ||
-            form.action_type === "chat_message" ||
-            form.action_type === "notify") && (
-            <label className="field-label">
-              {form.action_type === "notify" ? "MESSAGE" : "WHAT TO WRITE"}
-              <textarea
-                className="schedule-textarea"
-                rows={3}
-                value={form.prompt}
-                onChange={(event) => set("prompt", event.target.value)}
-                placeholder={
-                  form.action_type === "notify"
-                    ? "Stretch and look away from the screen."
-                    : "Summarise my day: calendar, open commitments, anything I said I'd do."
-                }
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="name@example.com"
+                value={form.to}
+                onChange={(event) => set("to", event.target.value)}
+                onFocus={keepInView}
+                aria-invalid={formError?.field === "to"}
               />
             </label>
           )}
 
-          <div className="field-label">
-            HOW OFTEN
-            <div className="type-switch schedule-recurrence">
-              {RECURRENCES.map(({ id, label }) => (
+          <label className={`sched-field ${formError?.field === "text" ? "invalid" : ""}`}>
+            <span>
+              {form.mode === "notify"
+                ? "Remind me to…"
+                : form.mode === "chat_message"
+                  ? "What should the AI do?"
+                  : "What should the email say?"}
+            </span>
+            <textarea
+              rows={form.mode === "notify" ? 2 : 3}
+              maxLength={2000}
+              value={form.text}
+              onChange={(event) => set("text", event.target.value)}
+              onFocus={keepInView}
+              aria-invalid={formError?.field === "text"}
+              placeholder={
+                form.mode === "notify"
+                  ? "Call the dentist"
+                  : form.mode === "chat_message"
+                    ? "Summarise today's top tech news in five bullets"
+                    : "Thank Priya for the interview and ask about next steps"
+              }
+            />
+          </label>
+
+          <div className="sched-field">
+            <span>Repeat</span>
+            <div className="sched-segment" role="radiogroup" aria-label="Repeat">
+              {(
+                [
+                  ["once", "Once"],
+                  ["daily", "Daily"],
+                  ["weekly", "Weekly"],
+                ] as const
+              ).map(([id, label]) => (
                 <button
                   key={id}
                   type="button"
-                  className={form.recurrence === id ? "active" : ""}
-                  onClick={() => set("recurrence", id)}
+                  role="radio"
+                  aria-checked={form.repeat === id}
+                  className={form.repeat === id ? "selected" : ""}
+                  onClick={() => set("repeat", id)}
                 >
                   {label}
                 </button>
@@ -320,64 +413,33 @@ export function SchedulesView() {
             </div>
           </div>
 
-          <div className="schedule-when-row">
-            {form.recurrence === "once" ? (
-              <label className="field-label">
-                WHEN
-                <div className="link-input">
-                  <input
-                    type="datetime-local"
-                    value={form.run_at}
-                    onChange={(event) => set("run_at", event.target.value)}
-                  />
-                </div>
-              </label>
-            ) : form.recurrence === "cron" ? (
-              <label className="field-label">
-                CRON EXPRESSION
-                <div className="link-input">
-                  <input
-                    value={form.cron_expr}
-                    onChange={(event) => set("cron_expr", event.target.value)}
-                    placeholder="30 8 * * 1-5"
-                  />
-                </div>
-              </label>
-            ) : (
-              <label className="field-label">
-                AT
-                <div className="link-input">
-                  <input
-                    type="time"
-                    value={form.time_of_day}
-                    onChange={(event) => set("time_of_day", event.target.value)}
-                  />
-                </div>
+          <div className={`sched-when ${form.repeat === "once" ? "" : "time-only"}`}>
+            {form.repeat === "once" && (
+              <label className={`sched-field ${formError?.field === "when" ? "invalid" : ""}`}>
+                <span>Date</span>
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(event) => set("date", event.target.value)}
+                  aria-invalid={formError?.field === "when"}
+                />
               </label>
             )}
-
-            {form.recurrence === "monthly" && (
-              <label className="field-label">
-                DAY OF MONTH
-                <div className="link-input">
-                  <input
-                    type="number"
-                    min={1}
-                    max={31}
-                    value={form.day_of_month}
-                    onChange={(event) =>
-                      set("day_of_month", Math.min(31, Math.max(1, Number(event.target.value) || 1)))
-                    }
-                  />
-                </div>
-              </label>
-            )}
+            <label className={`sched-field ${formError?.field === "when" ? "invalid" : ""}`}>
+              <span>Time</span>
+              <input
+                type="time"
+                value={form.time}
+                onChange={(event) => set("time", event.target.value)}
+                aria-invalid={formError?.field === "when"}
+              />
+            </label>
           </div>
 
-          {form.recurrence === "weekly" && (
-            <div className="field-label">
-              ON THESE DAYS
-              <div className="schedule-day-pills">
+          {form.repeat === "weekly" && (
+            <div className={`sched-field ${formError?.field === "days" ? "invalid" : ""}`}>
+              <span>On</span>
+              <div className="sched-days">
                 {DAYS.map((label, day) => (
                   <button
                     key={label}
@@ -385,148 +447,167 @@ export function SchedulesView() {
                     className={form.days.includes(day) ? "selected" : ""}
                     onClick={() => toggleDay(day)}
                     aria-pressed={form.days.includes(day)}
+                    aria-label={label}
                   >
-                    {label}
+                    {label.slice(0, 2)}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  className="schedule-day-preset"
-                  onClick={() => set("days", [...WEEKDAYS])}
-                >
-                  Weekdays
-                </button>
               </div>
             </div>
           )}
 
-          <label className="schedule-confirm-row">
-            <input
-              type="checkbox"
-              checked={form.requires_confirmation}
-              onChange={(event) => set("requires_confirmation", event.target.checked)}
-            />
-            <span>
-              <strong>Ask me before it acts</strong>
-              <small>
-                Runs land in your approvals queue instead of happening straight away.
-              </small>
-            </span>
-          </label>
+          {form.mode === "email" && (
+            <label className="sched-check">
+              <input
+                type="checkbox"
+                checked={form.askFirst}
+                onChange={(event) => set("askFirst", event.target.checked)}
+              />
+              <span>
+                <strong>Let me approve it first</strong>
+                <small>The AI drafts it at that time and waits in your approvals instead of sending.</small>
+              </span>
+            </label>
+          )}
 
-          <p className="schedule-timezone-note">
-            Times are in <strong>{browserTimezone()}</strong>.
+          <p className="sched-note">
+            Times are in {browserTimezone()}.
+            {form.mode === "chat_message" && " The reply appears in your AI chat and you’ll get a notification."}
+            {form.mode === "email" && canEmail && " Sent from your connected Gmail."}
           </p>
 
           {formError && (
             <div className="data-banner data-banner-error" role="alert">
-              {formError}
+              {formError.message}
             </div>
           )}
 
-          <div className="schedule-form-actions">
-            <button className="secondary-button" onClick={() => setShowForm(false)} disabled={saving}>
+          <div className="sched-actions">
+            <button className="secondary-button" onClick={close} disabled={saving}>
               Cancel
             </button>
-            <button className="primary-button" onClick={submit} disabled={saving}>
+            <button
+              className="primary-button"
+              onClick={submit}
+              disabled={saving || (form.mode === "email" && !canEmail)}
+            >
               {saving ? <Loading variant="inline" size={16} /> : <Check size={16} />}
-              {saving ? "Creating…" : "Create schedule"}
+              {saving ? "Saving…" : isEdit ? "Save" : "Schedule"}
             </button>
           </div>
         </section>
       )}
 
-      <section className="glass-card schedule-list-card">
-        <div className="illness-history-heading">
-          <div>
-            <span className="section-kicker">STANDING INSTRUCTIONS</span>
-            <h2>Your schedules</h2>
-          </div>
-          <span>
-            {schedules.items.length
-              ? `${active.length} active of ${schedules.items.length}`
-              : ""}
-          </span>
+      <section className="glass-card sched-list" aria-busy={schedules.loading}>
+        <div className="sched-list-head">
+          <h2>Your schedules</h2>
+          {schedules.items.length > 0 && (
+            <span>
+              {activeCount} upcoming
+              <button
+                type="button"
+                className="icon-button sched-refresh"
+                aria-label="Refresh"
+                onClick={schedules.reload}
+              >
+                <RotateCw size={14} />
+              </button>
+            </span>
+          )}
         </div>
 
-        {!schedules.loading && !schedules.items.length && (
-          <div className="schedule-empty">
+        {schedules.loading && (
+          <div className="sched-empty" aria-live="polite">
+            <Loading variant="inline" size={18} text="Loading your schedules…" />
+          </div>
+        )}
+
+        {!schedules.loading && !schedules.error && !schedules.items.length && (
+          <div className="sched-empty">
             <CalendarClock size={20} />
             <div>
               <strong>Nothing scheduled yet</strong>
-              <p>
-                A good first one: a report every weekday at 08:30 that tells you what the day
-                holds. Or just ask your assistant for it.
-              </p>
+              <p>Set a reminder, have the AI do something later, or schedule an email.</p>
+              {!editing && schedules.configured && (
+                <button type="button" className="secondary-button" onClick={openNew}>
+                  <Plus size={15} /> New schedule
+                </button>
+              )}
             </div>
           </div>
         )}
 
-        <div className="schedule-rows">
-          {schedules.items.map((row) => {
-            const meta = ACTION_META[row.action_type] ?? ACTION_META.notify;
+        <ul className="sched-rows">
+          {sorted.map((row) => {
+            const meta = TYPE_META[row.action_type] ?? TYPE_META.notify;
+            const chip = status(row);
             const rowRuns = runs[row.id];
+            const busy = busyId === row.id;
+            const finishedOnce = row.recurrence === "once" && !row.next_run_at;
             return (
-              <article
-                key={row.id}
-                className={`schedule-row ${row.enabled ? "" : "paused"}`}
-              >
-                <div className="schedule-row-main">
-                  <span className="schedule-row-icon">
-                    <meta.Icon size={16} />
+              <li key={row.id} className={`sched-row ${row.enabled ? "" : "paused"}`}>
+                <div className="sched-row-top">
+                  <span className={`sched-type type-${row.action_type}`}>
+                    <meta.Icon size={13} />
+                    {meta.label}
                   </span>
-                  <div className="schedule-row-text">
-                    <strong>{row.name}</strong>
-                    <small>{cadence(row)}</small>
-                    <span className="schedule-row-meta">
-                      {row.enabled ? `Next: ${when(row.next_run_at)}` : "Paused"}
-                      {row.last_run_at ? ` · Last: ${when(row.last_run_at)}` : ""}
-                      {row.requires_confirmation ? " · asks first" : ""}
-                    </span>
-                  </div>
+                  <span className={`sched-chip tone-${chip.tone}`}>{chip.label}</span>
                 </div>
+                <p className="sched-row-text">{summary(row)}</p>
+                <div className="sched-row-meta">
+                  <span>
+                    {row.recurrence === "once" ? (finishedOnce ? `Was ${cadence(row)}` : cadence(row)) : cadence(row)}
+                  </span>
+                  {row.recurrence !== "once" && row.enabled && row.next_run_at && (
+                    <span>Next {when(row.next_run_at)}</span>
+                  )}
+                  {row.action_type === "email" && typeof row.action_payload?.to === "string" && (
+                    <span>To {row.action_payload.to as string}</span>
+                  )}
+                </div>
+                {chip.detail && <p className="sched-row-detail">{chip.detail}</p>}
 
-                <div className="schedule-row-actions">
+                <div className="sched-row-actions">
+                  {isFormEditable(row) && (
+                    <button type="button" className="sched-action" onClick={() => openEdit(row)} disabled={busy}>
+                      <Pencil size={14} /> {finishedOnce ? "Reschedule" : "Edit"}
+                    </button>
+                  )}
+                  {!finishedOnce && (
+                    <button
+                      type="button"
+                      className="sched-action"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusyId(row.id);
+                        try {
+                          await schedules.setEnabled(row, !row.enabled);
+                        } catch {
+                          /* surfaced by the hook's error banner */
+                        } finally {
+                          setBusyId(null);
+                        }
+                      }}
+                    >
+                      {row.enabled ? <Pause size={14} /> : <Play size={14} />}
+                      {row.enabled ? (row.recurrence === "once" ? "Cancel" : "Pause") : "Resume"}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="icon-button schedule-icon-button"
-                    title={row.enabled ? "Pause" : "Resume"}
-                    aria-label={row.enabled ? `Pause ${row.name}` : `Resume ${row.name}`}
-                    disabled={busyId === row.id}
-                    onClick={async () => {
-                      setBusyId(row.id);
-                      try {
-                        await schedules.setEnabled(row, !row.enabled);
-                      } catch {
-                        /* surfaced by the hook's error banner */
-                      } finally {
-                        setBusyId(null);
-                      }
-                    }}
-                  >
-                    {row.enabled ? <Pause size={15} /> : <Play size={15} />}
-                  </button>
-
-                  <button
-                    type="button"
-                    className="icon-button schedule-icon-button"
-                    title="Run history"
-                    aria-label={`Run history for ${row.name}`}
+                    className="sched-action"
+                    aria-expanded={openRuns === row.id}
                     onClick={() => void showRuns(row.id)}
                   >
-                    <History size={15} />
-                    <ChevronDown
-                      size={13}
-                      className={openRuns === row.id ? "rotated" : ""}
-                    />
+                    <History size={14} /> History
+                    <ChevronDown size={13} className={openRuns === row.id ? "rotated" : ""} />
                   </button>
-
                   {confirmDelete === row.id ? (
-                    <span className="schedule-delete-confirm">
+                    <span className="sched-confirm">
                       <button
                         type="button"
-                        className="icon-button schedule-icon-button danger"
-                        aria-label={`Confirm deleting ${row.name}`}
+                        className="sched-action danger"
+                        disabled={busy}
                         onClick={async () => {
                           setBusyId(row.id);
                           try {
@@ -539,50 +620,48 @@ export function SchedulesView() {
                           }
                         }}
                       >
-                        <Check size={15} />
+                        {busy ? <Loading variant="inline" size={13} /> : <Trash2 size={14} />} Delete
                       </button>
-                      <button
-                        type="button"
-                        className="icon-button schedule-icon-button"
-                        aria-label="Keep it"
-                        onClick={() => setConfirmDelete(null)}
-                      >
-                        <X size={15} />
+                      <button type="button" className="sched-action" onClick={() => setConfirmDelete(null)}>
+                        Keep
                       </button>
                     </span>
                   ) : (
                     <button
                       type="button"
-                      className="icon-button schedule-icon-button"
-                      title="Delete"
+                      className="sched-action"
                       aria-label={`Delete ${row.name}`}
                       onClick={() => setConfirmDelete(row.id)}
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
                   )}
                 </div>
 
                 {openRuns === row.id && (
-                  <div className="schedule-runs">
-                    {!rowRuns && <Loading variant="inline" size={14} text="Loading runs…" />}
-                    {rowRuns && !rowRuns.length && <small>It hasn’t run yet.</small>}
-                    {rowRuns?.map((run) => (
-                      <div className={`schedule-run status-${run.status}`} key={run.id}>
-                        <span className="schedule-run-dot" aria-hidden="true" />
-                        <span className="schedule-run-when">{when(run.ran_at)}</span>
-                        <span className="schedule-run-status">
-                          {RUN_LABEL[run.status] ?? run.status}
-                        </span>
-                        {run.detail && <span className="schedule-run-detail">{run.detail}</span>}
-                      </div>
-                    ))}
+                  <div className="sched-runs">
+                    {!rowRuns && <Loading variant="inline" size={14} text="Loading…" />}
+                    {rowRuns === "error" && <small>Could not load the history.</small>}
+                    {Array.isArray(rowRuns) && !rowRuns.length && <small>It hasn’t run yet.</small>}
+                    {Array.isArray(rowRuns) &&
+                      rowRuns.map((run) => (
+                        <div className={`sched-run status-${run.status}`} key={run.id}>
+                          <span className="sched-run-dot" aria-hidden="true" />
+                          <span className="sched-run-when">{when(run.ran_at)}</span>
+                          <span className="sched-run-status">{RUN_LABEL[run.status] ?? run.status}</span>
+                          {(run.detail || run.result) && (
+                            <span className="sched-run-detail">
+                              {[run.result, run.detail].filter(Boolean).join(" — ")}
+                            </span>
+                          )}
+                        </div>
+                      ))}
                   </div>
                 )}
-              </article>
+              </li>
             );
           })}
-        </div>
+        </ul>
       </section>
     </div>
   );

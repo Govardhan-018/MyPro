@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defineSkill, type Skill, type SkillContext } from './types';
+import { computeNextRun } from '../schedules/recurrence';
 
 /**
  * Every capability the companion has. These mirror the features of the web
@@ -708,6 +709,26 @@ const createSchedule = defineSkill({
     text: z.string().max(500).optional().describe('message body for notify/chat_message'),
   }),
   async run(args, ctx) {
+    // The first occurrence, computed now. This used to be "now" for every
+    // recurring schedule — the drain loop then ran "brief me every morning"
+    // the moment it was created, at 3pm.
+    // A recurring schedule with no time would never run; 09:00 local is the
+    // sensible reading of "every Monday".
+    const timeOfDay =
+      args.time_of_day ?? (args.recurrence === 'once' ? undefined : '09:00');
+    const next = computeNextRun(
+      {
+        recurrence: args.recurrence,
+        run_at: args.run_at ?? null,
+        time_of_day: timeOfDay ?? null,
+        day_of_month: args.day_of_month ?? null,
+        cron_expr: null,
+        timezone: ctx.timezone,
+        days: args.days ?? [],
+      },
+      ctx.now,
+    );
+    if (!next) throw new Error('That schedule has no future time to run at.');
     const created = check(
       await ctx.db
         .from('assistant_schedules')
@@ -717,12 +738,11 @@ const createSchedule = defineSkill({
           action_type: args.action_type,
           action_payload: args.text ? { text: args.text, title: args.name, body: args.text } : {},
           recurrence: args.recurrence,
-          time_of_day: args.time_of_day ? `${args.time_of_day}:00` : null,
+          time_of_day: timeOfDay ? `${timeOfDay}:00` : null,
           run_at: args.run_at ?? null,
           day_of_month: args.day_of_month ?? null,
           timezone: ctx.timezone,
-          // The scheduler on render arms next_run_at on its next tick.
-          next_run_at: args.run_at ?? ctx.now.toISOString(),
+          next_run_at: next.toISOString(),
         })
         .select('id, name, recurrence, time_of_day')
         .single(),

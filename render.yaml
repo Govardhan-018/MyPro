@@ -80,7 +80,8 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-      # Must match the console exactly, including the /api/v1 prefix.
+      # Optional override. The callback is derived from RENDER_EXTERNAL_URL
+      # (<service URL>/api/v1/gmail/callback); register that URL in Google Cloud.
       - key: GOOGLE_REDIRECT_URI
         sync: false
       # Where the OAuth callback returns the browser. Also reported by the

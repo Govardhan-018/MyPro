@@ -144,38 +144,31 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-/**
- * Upload simulation for Supabase Storage with real granular progress updates.
- * User must explicitly click "Sync with MyPro" before this executes.
- */
-export function performSupabaseUpload(
-  fileName: string,
-  totalBytes: number,
-  onProgress: (percent: number, uploadedBytes: number) => void,
-): Promise<{ success: boolean; url: string }> {
-  return new Promise((resolve) => {
-    let currentPercent = 0;
-    const intervalTime = 60; // ms
-    const stepIncrement = 6; // ~1.5s total upload time
+/** Thrown while cloud storage for PDF files does not exist on the server. */
+export class CloudSyncUnavailableError extends Error {
+  constructor() {
+    super(
+      "Cloud storage for PDF files isn’t available yet, so this book stays on this device. " +
+        "Your reading progress and highlights still sync.",
+    );
+    this.name = "CloudSyncUnavailableError";
+  }
+}
 
-    const timer = setInterval(() => {
-      currentPercent += Math.floor(Math.random() * stepIncrement) + 4;
-      if (currentPercent >= 100) {
-        currentPercent = 100;
-        clearInterval(timer);
-        onProgress(100, totalBytes);
-        resolve({
-          success: true,
-          url: `https://supabase.mypro.internal/storage/v1/object/user-library-vault/${encodeURIComponent(
-            fileName,
-          )}`,
-        });
-      } else {
-        const uploaded = Math.round((currentPercent / 100) * totalBytes);
-        onProgress(currentPercent, uploaded);
-      }
-    }, intervalTime);
-  });
+/**
+ * Upload a PDF to cloud storage.
+ *
+ * There is no PDF-file storage endpoint on the server yet (only the extracted
+ * text is cached). This used to *simulate* an upload — a progress bar and a
+ * made-up URL — after which "Move to cloud" deleted the only real copy on the
+ * device. It now refuses honestly, so callers keep the local file.
+ */
+export async function performSupabaseUpload(
+  _fileName: string,
+  _totalBytes: number,
+  _onProgress: (percent: number, uploadedBytes: number) => void,
+): Promise<{ success: boolean; url: string }> {
+  throw new CloudSyncUnavailableError();
 }
 
 // ---------------------------------------------------------------------------

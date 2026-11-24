@@ -41,6 +41,23 @@ export interface Auth {
   signInWithOAuth(provider: 'google' | 'apple'): Promise<void>;
   signOut(): Promise<void>;
   onAuthChange(cb: (session: AuthSession | null) => void): () => void;
+  /**
+   * Central recovery for a request the server answered 401.
+   *
+   * `usedToken` is the bearer that was rejected. If another request has
+   * already refreshed past it, the current token is returned without a second
+   * round-trip; otherwise one (shared) refresh is attempted. Returns the token
+   * to retry with, or null when the session is gone — in which case the
+   * session has been cleared and {@link onSessionExpired} listeners fired
+   * exactly once.
+   */
+  handleUnauthorized(usedToken: string): Promise<string | null>;
+  /**
+   * Fired once when a session ends *involuntarily* (refresh token rejected),
+   * never on an explicit sign-out — so the UI can say "your session expired"
+   * rather than silently dropping the user on the sign-in page.
+   */
+  onSessionExpired(cb: () => void): () => void;
 }
 
 export interface AuthOptions {
@@ -60,6 +77,11 @@ export interface AuthOptions {
    *    out. One refresher, posted outward, is what keeps the session alive.
    */
   refreshMode?: 'self' | 'follower';
+  /**
+   * Revoke the server-side session on sign-out (`POST /auth/logout`). Default
+   * true. Followers never revoke: the primary owns the session.
+   */
+  revokeOnSignOut?: boolean;
 }
 
 /** A refresh attempt's outcome, so a transient failure never clears a session. */
@@ -87,10 +109,20 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
     opts.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
   const storage = opts.storage ?? memoryStorage();
   const refreshMode = opts.refreshMode ?? 'self';
+  const revokeOnSignOut = opts.revokeOnSignOut ?? true;
   const listeners = new Set<(session: AuthSession | null) => void>();
+
+  const expiredListeners = new Set<() => void>();
 
   let cached: AuthSession | null | undefined;
   let refreshing: Promise<AuthSession | null> | null = null;
+  /**
+   * Bumped on every sign-in, sign-out and adopted session. A refresh that
+   * started under an older epoch must not write its result: otherwise a
+   * refresh in flight when the user signs out *resurrects* the session, and a
+   * late "invalid" from a previous session signs out the new one.
+   */
+  let epoch = 0;
 
   async function load(): Promise<AuthSession | null> {
     if (cached !== undefined) return cached;
@@ -101,6 +133,16 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
       cached = null;
     }
     return cached;
+  }
+
+  /** Re-read the stored session, bypassing the in-memory cache. */
+  async function readStored(): Promise<AuthSession | null> {
+    try {
+      const raw = await storage.getItem(STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as AuthSession) : null;
+    } catch {
+      return null;
+    }
   }
 
   async function save(session: AuthSession | null): Promise<void> {
@@ -129,8 +171,17 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
       body: JSON.stringify(body),
     });
     const text = await res.text();
-    const parsed: unknown = text ? JSON.parse(text) : null;
+    let parsed: unknown = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      // An HTML error page from a waking Render instance or a proxy.
+      if (res.ok) throw new Error('The server sent an unreadable response. Try again.');
+    }
     if (!res.ok) {
+      if (res.status >= 502 && res.status <= 504) {
+        throw new Error('The server is waking up — try again in a few seconds.');
+      }
       const message =
         parsed && typeof parsed === 'object' && 'message' in parsed
           ? String((parsed as { message: unknown }).message)
@@ -176,20 +227,46 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
     }
   }
 
+  /** Clear an involuntarily-ended session and tell the UI, exactly once. */
+  async function expire(): Promise<void> {
+    const hadSession = Boolean(await load());
+    epoch += 1;
+    await save(null);
+    if (hadSession) for (const listener of expiredListeners) listener();
+  }
+
   async function refresh(session: AuthSession): Promise<AuthSession | null> {
     // A follower never refreshes — it rides on sessions posted to setSession,
     // so it can't rotate the shared refresh token out from under the primary.
     if (refreshMode === 'follower') return session;
     if (refreshing) return refreshing;
+    const startedAt = epoch;
     refreshing = (async () => {
       try {
+        // Another tab (same localStorage) may already have rotated the
+        // refresh token. Supabase treats reuse of a rotated token as theft and
+        // revokes the whole session family, so adopt the newer stored session
+        // instead of refreshing with the stale one we hold in memory.
+        const stored = await readStored();
+        if (
+          stored &&
+          stored.refresh_token !== session.refresh_token &&
+          stored.user?.id === session.user?.id
+        ) {
+          cached = stored;
+          if (!isExpired(stored)) return stored;
+          session = stored;
+        }
+
         const result = await refreshRequest(session.refresh_token);
+        // Signed out / signed in as someone else meanwhile: drop the result.
+        if (epoch !== startedAt) return (await load()) ?? null;
         if (result.kind === 'ok') {
           await save(result.session);
           return result.session;
         }
         if (result.kind === 'invalid') {
-          await save(null);
+          await expire();
           return null;
         }
         // Transient: keep the stored session untouched so a later call can try
@@ -207,6 +284,7 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
       return (await load()) ?? null;
     },
     async setSession(session) {
+      epoch += 1;
       await save(session);
     },
     async getAccessToken() {
@@ -231,23 +309,55 @@ export function createAuth(env: EnvConfig, opts: AuthOptions = {}): Auth {
     },
     async signInWithPassword(email, password) {
       const out = await post('/auth/login', { email, password });
+      epoch += 1;
       await save(out.session);
       return out.session;
     },
     async signUpWithPassword(email, password) {
       const out = await post('/auth/signup', { email, password });
-      if (out.session) await save(out.session);
+      if (out.session) {
+        epoch += 1;
+        await save(out.session);
+      }
       return out.session;
     },
     async signInWithOAuth() {
       throw new Error('Social sign-in is not available yet — use email and password.');
     },
     async signOut() {
+      const current = await load();
+      epoch += 1;
+      // Clear locally first: sign-out must never wait on (or fail because of)
+      // the network. The server-side revoke is best effort.
       await save(null);
+      if (current && revokeOnSignOut && refreshMode === 'self') {
+        void doFetch(`${env.apiUrl}/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${current.access_token}`,
+          },
+          body: JSON.stringify({ refresh_token: current.refresh_token }),
+        }).catch(() => undefined);
+      }
     },
     onAuthChange(cb) {
       listeners.add(cb);
       return () => void listeners.delete(cb);
+    },
+    async handleUnauthorized(usedToken) {
+      const session = await load();
+      if (!session) return null;
+      // Someone already refreshed past the rejected token: just retry.
+      if (session.access_token !== usedToken) return session.access_token;
+      // A follower cannot refresh; the primary will post a fresh session.
+      if (refreshMode === 'follower') return null;
+      const next = await refresh(session);
+      return next ? next.access_token : null;
+    },
+    onSessionExpired(cb) {
+      expiredListeners.add(cb);
+      return () => void expiredListeners.delete(cb);
     },
   };
 }

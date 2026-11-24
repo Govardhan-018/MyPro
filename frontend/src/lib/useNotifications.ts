@@ -85,6 +85,13 @@ export function useNotifications(enabled: boolean): NotificationsState {
         seen.current.add(row.id);
         setItems((current) => [row, ...current]);
         if (!row.read_at) show(row);
+        // The server just wrote into the chat (a scheduled AI task, the brief):
+        // let an open conversation pull it in.
+        if (row.deeplink === '/assistant') {
+          window.dispatchEvent(new Event('mypro:assistant-updated'));
+        }
+        // A schedule ran: its status in the list has changed.
+        if (row.schedule_id) window.dispatchEvent(new Event('mypro:schedules-updated'));
       },
       onUpdate: (row) => {
         setItems((current) => current.map((item) => (item.id === row.id ? row : item)));

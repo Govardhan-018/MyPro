@@ -54,7 +54,15 @@ export interface ScheduleRow {
   requires_confirmation: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
+  /** Attempts made at the current occurrence; > 0 while a retry is pending. */
+  deferred_count?: number;
   assistant_schedule_days?: { day_of_week: number }[];
+  /** The most recent run, when the API includes it (`GET /schedules`). */
+  last_run?: {
+    status: 'success' | 'failed' | 'skipped' | 'pending_confirmation' | 'deferred' | 'retrying';
+    detail: string | null;
+    ran_at: string;
+  } | null;
 }
 
 export type CommitmentKind = 'promise' | 'goal' | 'decision' | 'intention';
@@ -314,6 +322,10 @@ export interface NotificationRow {
   title: string;
   body: string | null;
   kind: string | null;
+  /** In-app route a tap opens, e.g. '/assistant'. */
+  deeplink?: string | null;
+  /** The schedule that produced it, if any. */
+  schedule_id?: string | null;
   read_at: string | null;
   created_at: string;
 }
@@ -353,7 +365,7 @@ export interface ScheduleOccurrence {
    */
   kind?: 'schedule' | 'calendar';
   /** Which app section tapping the notification should open. */
-  deeplink?: 'today' | 'calendar' | 'assistant';
+  deeplink?: 'today' | 'calendar' | 'assistant' | 'schedules';
   /** The specific row to focus on tap (a calendar event id), if any. */
   deeplink_id?: string;
   /** The focused item's instant, so the app can jump to the right day. */

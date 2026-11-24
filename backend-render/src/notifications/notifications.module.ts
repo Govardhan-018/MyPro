@@ -10,6 +10,12 @@ const registerDevice = z.object({
   channel_type: z.enum(['web_push', 'fcm', 'telegram']),
   token: z.string().min(4).max(4000),
   platform: z.string().max(60).optional(),
+  /**
+   * When this device last armed its local notifications (Android clock). The
+   * laptop skips pushing a reminder the phone already holds locally, so a
+   * reminder is never shown twice. Needs migration 0022; ignored without it.
+   */
+  armed_at: z.string().datetime().optional(),
 });
 
 @Injectable()
@@ -51,17 +57,35 @@ export class NotificationsService {
   }
 
   async registerDevice(user: AuthUser, input: z.infer<typeof registerDevice>) {
+    // A device belongs to one account at a time. When someone else signs in on
+    // this phone/browser, the previous owner's row for the same token must go,
+    // or their reminders keep arriving on a device they no longer use — on the
+    // lock screen, to whoever holds it now.
+    await this.supabase.admin
+      .from('device_tokens')
+      .delete()
+      .eq('token', input.token)
+      .neq('user_id', user.id);
+
     const db = this.supabase.forUser(user.token);
-    return one(
-      await db
+    const upsert = (row: Record<string, unknown>) =>
+      db
         .from('device_tokens')
         .upsert(
-          { ...input, user_id: user.id, last_seen_at: new Date().toISOString() },
+          { ...row, user_id: user.id, last_seen_at: new Date().toISOString() },
           { onConflict: 'user_id,token' },
         )
         .select('id, channel_type, platform')
-        .single(),
-    );
+        .single();
+
+    const first = await upsert(input);
+    // Before migration 0022 the column does not exist; register without it
+    // rather than losing push entirely.
+    if (first.error && input.armed_at && /armed_at/.test(first.error.message)) {
+      const { armed_at: _ignored, ...rest } = input;
+      return one(await upsert(rest));
+    }
+    return one(first);
   }
 
   async removeDevice(user: AuthUser, id: string) {

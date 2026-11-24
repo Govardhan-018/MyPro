@@ -20,3 +20,5 @@ export const signInWithOAuth = (provider: 'google' | 'apple') => auth.signInWith
 export const signOut = (): Promise<void> => auth.signOut();
 export const onAuthChange = (cb: (session: AuthSession | null) => void): (() => void) =>
   auth.onAuthChange(cb);
+export const onSessionExpired = (cb: () => void): (() => void) => auth.onSessionExpired(cb);
+export const adoptSession = (session: AuthSession | null): Promise<void> => auth.setSession(session);

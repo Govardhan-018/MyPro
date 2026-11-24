@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { GoogleCredsService } from '../src/gmail/google-creds.service';
+import { afterEach } from 'vitest';
+import { GoogleCredsService, deriveRedirectUri } from '../src/gmail/google-creds.service';
 
 /**
  * Resolving the Google OAuth app credentials (Feature: credentials in Settings).
@@ -72,7 +73,78 @@ describe('GoogleCredsService.forUser', () => {
       redirect_uri: 'https://x',
     });
     const svc = new GoogleCredsService(supabase, fakeCrypto);
-    expect(await svc.status('u1')).toEqual({ configured: true, source: 'settings' });
+    expect(await svc.status('u1')).toEqual({
+      configured: true,
+      source: 'settings',
+      redirect_uri: 'https://x',
+    });
+  });
+});
+
+/**
+ * Gmail OAuth UX fix: the redirect URI is owned by the server. A user never
+ * types it, and a stale or mistyped stored value no longer breaks connect.
+ */
+describe('redirect URI is derived server-side', () => {
+  afterEach(() => {
+    delete process.env.RENDER_EXTERNAL_URL;
+    delete process.env.PUBLIC_API_URL;
+    delete process.env.GOOGLE_REDIRECT_URI;
+  });
+
+  it('derives the callback from Render\'s own public URL', () => {
+    expect(deriveRedirectUri({ RENDER_EXTERNAL_URL: 'https://mypro-km2k.onrender.com' })).toBe(
+      'https://mypro-km2k.onrender.com/api/v1/gmail/callback',
+    );
+  });
+
+  it('prefers PUBLIC_API_URL, tolerating a trailing slash or the /api/v1 prefix', () => {
+    expect(
+      deriveRedirectUri({
+        PUBLIC_API_URL: 'https://api.example.com/api/v1/',
+        RENDER_EXTERNAL_URL: 'https://ignored.onrender.com',
+      }),
+    ).toBe('https://api.example.com/api/v1/gmail/callback');
+  });
+
+  it('an explicit GOOGLE_REDIRECT_URI override wins', () => {
+    expect(
+      deriveRedirectUri({
+        GOOGLE_REDIRECT_URI: 'https://custom/cb',
+        RENDER_EXTERNAL_URL: 'https://x.onrender.com',
+      }),
+    ).toBe('https://custom/cb');
+  });
+
+  it('returns null when the server cannot know its address', () => {
+    expect(deriveRedirectUri({})).toBeNull();
+    expect(deriveRedirectUri({ PUBLIC_API_URL: 'not a url' })).toBeNull();
+  });
+
+  it('the derived URI replaces a stale stored one for in-app credentials', async () => {
+    process.env.RENDER_EXTERNAL_URL = 'https://live.onrender.com';
+    const { supabase } = fakeSupabase({
+      client_id: 'cid',
+      client_secret_enc: 'enc(shh)',
+      redirect_uri: 'https://typo.example/wrong',
+    });
+    const svc = new GoogleCredsService(supabase, fakeCrypto);
+    expect((await svc.forUser('u1'))?.redirectUri).toBe(
+      'https://live.onrender.com/api/v1/gmail/callback',
+    );
+    expect((await svc.status('u1')).redirect_uri).toBe(
+      'https://live.onrender.com/api/v1/gmail/callback',
+    );
+  });
+
+  it('saving credentials needs no redirect URI from the user', async () => {
+    process.env.RENDER_EXTERNAL_URL = 'https://live.onrender.com';
+    const { supabase, writes } = fakeSupabase(null);
+    const svc = new GoogleCredsService(supabase, fakeCrypto);
+    await svc.save('u1', { clientId: 'cid', clientSecret: 'topsecret' });
+    expect((writes.upserted as Record<string, unknown>).redirect_uri).toBe(
+      'https://live.onrender.com/api/v1/gmail/callback',
+    );
   });
 });
 

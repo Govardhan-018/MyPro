@@ -33,7 +33,56 @@ export const scheduleInput = z
     if (v.recurrence === 'monthly')
       need(!!v.time_of_day && !!v.day_of_month, 'time_of_day and day_of_month are required');
     if (v.recurrence === 'cron') need(!!v.cron_expr, 'cron_expr is required');
+
   });
+
+/**
+ * What a schedule of each mode must say, or it would fire empty. Checked on
+ * create and whenever an active schedule is saved — not on a pause, so a
+ * legacy row can always be paused. A reminder may fall back to its name.
+ * Pure; unit-tested.
+ */
+export function contentProblem(input: {
+  action_type: string;
+  action_payload?: Record<string, unknown>;
+}): string | null {
+  const p = input.action_payload ?? {};
+  const has = (key: string) => typeof p[key] === 'string' && (p[key] as string).trim().length > 0;
+  if (input.action_type === 'chat_message' && !has('prompt') && !has('text')) {
+    return 'Describe what the AI should do.';
+  }
+  if (input.action_type === 'email') {
+    const to = typeof p.to === 'string' ? p.to.trim() : '';
+    if (!z.string().email().safeParse(to).success) return 'Enter a valid email address to send to.';
+    if (!has('prompt')) return 'Describe what the email should say.';
+  }
+  return null;
+}
+
+/** Clock skew allowance when checking that a one-off is in the future. */
+const PAST_GRACE_MS = 60_000;
+
+/**
+ * A one-off whose moment has already passed would be created disabled and
+ * never run — silently. Reject it with a reason instead. Pure; unit-tested.
+ */
+export function oneOffInPast(input: { recurrence: string; run_at?: string }, now = Date.now()): boolean {
+  if (input.recurrence !== 'once' || !input.run_at) return false;
+  const at = new Date(input.run_at).getTime();
+  return Number.isFinite(at) && at < now - PAST_GRACE_MS;
+}
+
+/**
+ * Which schedules the phone arms as its own local notifications. Only "Remind
+ * me" (and the legacy brief): an AI message or an email must not ping the
+ * phone at the scheduled minute claiming something happened — the agent
+ * notifies when the work is actually done (or failed). Pure; unit-tested.
+ */
+export function armsOnPhone(actionType: string): boolean {
+  return actionType === 'notify' || actionType === 'report';
+}
+
+const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 
 export type ScheduleInput = z.infer<typeof scheduleInput>;
 
@@ -56,6 +105,15 @@ interface ScheduleRowShape {
 
 const SELECT = '*, assistant_schedule_days(day_of_week)';
 
+/** The words of a reminder, whichever key an older row stored them under. */
+function reminderBody(payload: Record<string, unknown> | null): string | null {
+  for (const key of ['body', 'message', 'text', 'prompt']) {
+    const v = payload?.[key];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return null;
+}
+
 /** The flat occurrence shape the phone arms notifications from. */
 interface ScheduleOccurrenceOut {
   id: string;
@@ -66,7 +124,7 @@ interface ScheduleOccurrenceOut {
   body: string | null;
   at: string;
   kind: 'schedule' | 'calendar';
-  deeplink: 'today' | 'calendar' | 'assistant';
+  deeplink: 'today' | 'calendar' | 'assistant' | 'schedules';
   deeplink_id?: string;
   deeplink_at?: string;
 }
@@ -117,12 +175,56 @@ export class SchedulesService {
       .select(SELECT)
       .order('next_run_at', { ascending: true, nullsFirst: false });
     if (error) throw new BadRequestException(error.message);
-    return data ?? [];
+    const rows = (data ?? []) as { id: string }[];
+    if (!rows.length) return rows;
+
+    // The latest run per schedule, so the list can show "Sent", "Failed —
+    // retrying", "Waiting for approval" without a request per row.
+    const { data: runs } = await db
+      .from('schedule_runs')
+      .select('schedule_id, status, detail, ran_at')
+      .in('schedule_id', rows.map((r) => r.id))
+      .order('ran_at', { ascending: false })
+      .limit(500);
+    const latest = new Map<string, unknown>();
+    for (const run of (runs ?? []) as { schedule_id: string }[]) {
+      if (!latest.has(run.schedule_id)) latest.set(run.schedule_id, run);
+    }
+    return rows.map((r) => ({ ...r, last_run: latest.get(r.id) ?? null }));
+  }
+
+  /** Email schedules need a mailbox that may send; say so at creation, not at 08:30. */
+  private async assertCanSendEmail(user: AuthUser, input: ScheduleInput): Promise<void> {
+    if (input.action_type !== 'email' || !input.enabled) return;
+    const db = this.supabase.forUser(user.token);
+    const { data } = await db.from('gmail_accounts').select('scopes');
+    const canSend = ((data ?? []) as { scopes: string | null }[]).some((r) =>
+      (r.scopes ?? '').split(/\s+/).includes(GMAIL_SEND_SCOPE),
+    );
+    if (!canSend) {
+      throw new BadRequestException(
+        'Email schedules need Gmail connected with send access — connect it in Settings → Mail.',
+      );
+    }
+  }
+
+  private assertRunnable(input: ScheduleInput): Date | null {
+    const problem = contentProblem(input);
+    if (problem) throw new BadRequestException(problem);
+    if (oneOffInPast(input)) {
+      throw new BadRequestException('That time has already passed — pick a time in the future.');
+    }
+    const next = computeNextRun({ ...input, days: input.days });
+    if (input.enabled && !next) {
+      throw new BadRequestException('That schedule never runs — check the date and time.');
+    }
+    return next;
   }
 
   async create(user: AuthUser, input: ScheduleInput) {
     const db = this.supabase.forUser(user.token);
-    const next = computeNextRun({ ...input, days: input.days });
+    const next = this.assertRunnable(input);
+    await this.assertCanSendEmail(user, input);
 
     const { days, ...row } = input;
     const { data, error } = await db
@@ -156,12 +258,15 @@ export class SchedulesService {
     const db = this.supabase.forUser(user.token);
     await this.get(user, id); // 404s if not the caller's row (RLS)
 
-    const next = computeNextRun({ ...input, days: input.days });
+    // Pausing a finished one-off is fine; *enabling* one in the past is not.
+    const next = input.enabled ? this.assertRunnable(input) : computeNextRun({ ...input, days: input.days });
+    await this.assertCanSendEmail(user, input);
     const { days, ...row } = input;
 
     const { error } = await db
       .from('assistant_schedules')
-      .update({ ...row, next_run_at: next?.toISOString() ?? null })
+      // An edit starts a fresh occurrence: reset any retry in progress.
+      .update({ ...row, next_run_at: input.enabled ? (next?.toISOString() ?? null) : null, deferred_count: 0 })
       .eq('id', id);
     if (error) throw new BadRequestException(error.message);
 
@@ -208,7 +313,7 @@ export class SchedulesService {
     const until = new Date(from.getTime() + hours * 3600_000);
 
     const scheduleOccurrences = rows
-      .filter((s) => s.enabled)
+      .filter((s) => s.enabled && armsOnPhone(s.action_type))
       .flatMap((s) =>
         expandOccurrences(
           {
@@ -230,11 +335,15 @@ export class SchedulesService {
           name: s.name,
           action_type: s.action_type,
           /* The body the phone should show if it has to compose one itself. */
-          title: typeof s.action_payload?.title === 'string' ? s.action_payload.title : s.name,
-          body: typeof s.action_payload?.body === 'string' ? s.action_payload.body : null,
+          title: typeof s.action_payload?.title === 'string' && s.action_payload.title.trim()
+            ? s.action_payload.title
+            : s.name,
+          body: reminderBody(s.action_payload),
           at: at.toISOString(),
           kind: 'schedule' as const,
-          deeplink: (s.action_type === 'report' ? 'assistant' : 'today') as 'assistant' | 'today',
+          deeplink: (s.action_type === 'report' ? 'assistant' : 'schedules') as
+            | 'assistant'
+            | 'schedules',
         })),
       );
 

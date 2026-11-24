@@ -4,88 +4,90 @@ What the last session changed. `docs/PHASES.md` is the durable plan and
 `docs/BACKEND_PLAN.md` is the architecture contract; this file is the volatile
 "what just happened". Read `AGENTS.md` too.
 
-## This session (shipped to `main`, four commits)
+## This session — reliability audit (branch `claude/clever-dirac-7r1fbd`)
 
-Six feature areas. Everything typechecks in all four packages, the full test
-suites pass (shared 30 · backend-render 43 · frontend 4 · backend-local 314;
-**44 new tests this session**), and the web builds. Three migrations must be
-applied by hand: **`0019`, `0020`, `0021`**.
+Session management, Android notifications, Gmail OAuth UX, the three-mode
+scheduler, plus audit fixes. Suites: shared 38 · frontend 14 · backend-render
+58 · backend-local 337 (**+45 tests**); all typecheck; the web builds. One
+migration to apply by hand: **`0022_scheduler_reliability.sql`**.
 
-### 1. Session durability — the "mobile logs out too quickly" fix
-`shared/src/auth.ts`: refresh no longer wipes the session on *any* failure —
-only on a real rejection (401/400/403). A network blink or a cold Render at
-token-expiry now keeps the session. Added **`refreshMode`** (`'self'` default /
-`'follower'`): the native WebView shell client is a `follower`
-(`android/src/lib/client.ts`, gated on `shellEnabled()`) so it never rotates the
-shared Supabase refresh token out from under the web app — the real cause of the
-hourly logout. Threaded `Platform → createClient → createAuth`.
-Tests: `shared/src/auth.test.ts`.
+### Session
+- `shared/src/api.ts` detects 401 centrally → one shared refresh → retry; a
+  dead refresh token clears the session and fires `auth.onSessionExpired`
+  **once**; later calls short-circuit without network. A transient refresh
+  failure is a 503 "could not renew", never a logout.
+- `shared/src/auth.ts`: epoch guard (a refresh in flight during sign-out no
+  longer resurrects the session); adopts a session another tab already rotated
+  (reusing a rotated Supabase refresh token revokes the whole family);
+  `signOut` revokes server-side (`POST /auth/logout`).
+- Render `/auth/refresh`: 401 only for a dead token, **503** when Supabase is
+  unreachable (it used to log everyone out on a Supabase hiccup).
+- Web: "Your session expired" on the sign-in page; refresh on resume/online;
+  cross-tab `storage` sync; Enter can't double-submit login. Shell clears the
+  WebView back stack on sign-out/expiry.
 
-### 2. Notifications — native, verifiable, and they open the right thing
-- **Calendar reminders now fire.** `/schedules/upcoming` (backend-render) folds
-  in calendar events: **1h before + at the start + any custom `event_reminders`**
-  (all-day → at-start only). No device change — the phone already arms whatever
-  that endpoint returns.
-- **Shared mapping** `shared/src/notify.ts`: `notificationChannelFor`,
-  `notificationHash` (tap → the exact route, to the calendar event),
-  `hashFromDeeplink`, `NOTIFICATION_VIEWS` (one whitelist for web + shell).
-- **Android** `lib/notifications.ts`: two channels (`reminders`, `briefs`),
-  accent from the theme token; each notification carries a prebuilt `hash`.
-  `ShellApp.tsx` opens it (local), or maps a push `deeplink` via
-  `hashFromDeeplink`. `backend-local` push routes to the right channel by kind.
-- **Web** `App.tsx`: hash router tolerates `#calendar?event=…&at=…`; a tap opens
-  that event's day and sheet (`CalendarView focus`).
-- **Podcast media bar** `frontend/src/lib/useMediaSession.ts`: OS media controls
-  (lock screen / headset keys). Caveat: the audio is a cross-origin YouTube
-  iframe, which can own the lock-screen session; the handlers still catch keys.
-- **Podcast playback fix**: the shell WebView blocked media by default — added
-  `mediaPlaybackRequiresUserAction={false}`, `allowsInlineMediaPlayback`,
-  `allowsFullscreenVideo`, so the player actually plays in the app.
-- **Test path**: Settings → Notifications (in the shell) has "Send a test
-  notification" → `requestShellTestNotification` → `fireTestNotification`, so
-  the pipeline is verifiable on a real phone.
+### Notifications (Android shell)
+- Re-arm the phone clock the moment a schedule/calendar event changes (web →
+  `rearm`), and on background — a reminder set for "in 10 minutes" then
+  swiped away never fired before.
+- Sign-out/expiry cancels armed reminders, dismisses ours and withdraws the
+  push token (another account's reminders stayed on the lock screen for 48h).
+  Device tokens now belong to one user (`registerDevice` drops other owners).
+  Web push is withdrawn on sign-out too.
+- Channels: HIGH importance (heads-up), PRIVATE lock-screen visibility (user's
+  privacy setting decides), no DND bypass. Expo push `priority: 'high'` (was
+  batched in Doze). `USE_EXACT_ALARM` + boot re-arm permissions.
+- No duplicate reminders: the agent skips pushing a "Remind me" to devices
+  that armed it (`device_tokens.armed_at`). The phone arms only reminders —
+  AI/email schedules notify when actually done.
+- Settings → Notifications (in the app) shows real permission/push status, and
+  "Allow notifications" / "Open Android settings" for denied permission.
+- Push config is build config: `EAS_PROJECT_ID` + `GOOGLE_SERVICES_JSON`
+  (`android/app.config.js`; CI writes the secret to a file).
 
-### 3. Gmail — access level + credentials in Settings
-- **Per-account access**: connect as **read-only** or **read + send**
-  (`POST /gmail/connect {mode}`); the send path is **gated on the stored scope**
-  (`scopesGrantSend`). Settings shows a chooser + a per-mailbox access tag.
-- **OAuth app credentials in the app** (`0021`): paste Client ID / Secret /
-  Redirect URI into Settings → Mail instead of setting Render env vars. The
-  **client secret is encrypted** (AES-256-GCM, same key as the tokens) and
-  **write-only** — never returned; change = delete + re-enter.
-  `GoogleCredsService` resolves per user (in-app row first, env fallback) and
-  reports the source. `GoogleOAuthService` now takes resolved creds as params
-  (connect / callback / refresh). Endpoints: `GET/POST/DELETE /gmail/oauth-config`.
-  Tests: `backend-render/test/{gmail-scopes,google-creds}.test.ts`.
+### Gmail
+- The redirect URI is **derived server-side** (`PUBLIC_API_URL` or Render's
+  `RENDER_EXTERNAL_URL` + `/api/v1/gmail/callback`); users never type it.
+  Settings → Mail is just status + "Connect Gmail"; the one-time OAuth app
+  setup is under a collapsed "Developer setup" that shows the URI to register.
+- From the Android app the consent screen opens in the system browser and
+  returns via `mypro://gmail?...` (signed `return_to` in state). Returning
+  opens Settings → Mail with the outcome.
 
-### 4. Calendar "Done" + edit lock
-- `0020` adds `calendar_events.completed_at`. `POST/DELETE
-  /calendar/events/:id/complete`. **Done only on the day, after the start, for a
-  12h window** (`completionWindow`); **editing rejected once started**
-  (`isEventEditable`) — enforced server-side, mirrored in the modal (inputs +
-  Save disabled, "Mark done" only in-window). Completed events are struck
-  through across week/day/month. Past events still delete fine.
-  Tests: `backend-render/test/{calendar-reminders,event-completion}.test.ts`.
+### Scheduler (three modes)
+- **Remind me / AI message / Email**, mobile-first form, edit/cancel/delete,
+  per-row status, run history with results. Email only when a mailbox can send.
+- Agent drain loop: **claims a row before acting** (no double execution);
+  AI message runs the full agent as the user (`UserSessionBroker`, short-lived
+  session, revoked after) and posts to chat + "Done" notification; email is
+  AI-written then sent via render; safe retries (2/10/30 min) only when nothing
+  outward happened — a send timeout is never retried.
+- Fixed: reminders delivered only their name (payload key mismatch);
+  `create_schedule` skill fired recurring schedules immediately at creation.
 
-### 5. Supabase retention
-`0019_retention.sql`: a daily `pg_cron` job `prune_old_history()` deletes aged
-log/history rows and sweeps expired `research_cache`; live content untouched.
-(Retention half of Phase 18.1 — see BACKEND_PLAN §3.)
+### Audit fixes
+- **Data loss:** "Move PDF to cloud" ran a *simulated* upload then deleted the
+  local file; "Move to device" stored a dummy blob. Now honest and
+  non-destructive (no PDF-file cloud storage exists yet).
+- Settings: row-header button styles leaked into every panel button (mobile
+  overhang, stray borders). Chat polling pauses while hidden. Non-JSON error
+  pages no longer surface as "Unexpected token <".
 
-## Your steps (nothing here is automatic)
-1. **Apply migrations** in the Supabase SQL editor: `0019`, `0020`, `0021`.
-2. **Install the new APK** (GitHub → Actions → "Android APK" → latest run →
-   `mypro-apk`) — the podcast fix and the notification test button are native.
-3. **Gmail**: create the OAuth app once in Google Cloud Console, then paste its
-   credentials into Settings → Mail (or set the `GOOGLE_*` env vars on Render).
-   The read/read-&-send chooser appears once credentials are present.
-4. **Closed-app push** for ad-hoc assistant messages still needs the EAS project
-   id (8.4); calendar/schedule/brief *local* notifications work without it.
+## Your steps
+1. Apply **`0022`** in the Supabase SQL editor (code degrades without it).
+2. Google Cloud → OAuth client → add the redirect URI shown in Settings → Mail
+   → Developer setup (normally `https://<render-service>/api/v1/gmail/callback`).
+   Existing users must reconnect Gmail as **read & send** for email schedules.
+3. For closed-app instant alerts (AI done / email sent): create an EAS project
+   + Firebase app, upload the FCM v1 key to Expo, set repo secrets
+   `EAS_PROJECT_ID` and `GOOGLE_SERVICES_JSON` (file contents), rebuild the APK.
+   Reminders work without this.
+4. Install the new APK (native changes: notifications, shell bridge, Gmail return).
 
-## Not done this session (the two remaining asks)
-- **Chat interface polish** (make the mobile assistant feel like ChatGPT/Claude).
-- **Offline book download** (Phase 13.2) — cache book text + annotations for the
-  reader to work with no connection.
+## Not verified here (needs a device / live services)
+Real Android delivery (heads-up, lock screen, Doze, OEM battery killers),
+FCM/Expo push, Google consent + real Gmail send, the magic-link session broker
+against the live Supabase project, podcast lock-screen controls.
 
 ## Still true from earlier sessions
 - Web `https://mypro-by-gova.vercel.app` · Render `https://mypro-km2k.onrender.com`

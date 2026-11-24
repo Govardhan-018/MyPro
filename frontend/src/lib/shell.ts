@@ -34,7 +34,43 @@ export type ShellMessage =
   /** A short tactile tap on a meaningful action. */
   | { type: 'haptic'; kind: 'light' | 'medium' | 'success' }
   /** Ask the shell to post a test notification, so the user can verify them. */
-  | { type: 'test-notification' };
+  | { type: 'test-notification' }
+  /** Schedules or calendar changed: re-arm the phone's clock now, not on next launch. */
+  | { type: 'rearm' }
+  /** Ask the shell where notifications stand on this phone (answers via an event). */
+  | { type: 'notification-status' }
+  /** Re-request permission, or open Android's settings if it was refused. */
+  | { type: 'fix-notifications' };
+
+/** What the native shell reports about notifications on the phone. */
+export interface ShellNotificationStatus {
+  permission: 'granted' | 'denied' | 'undetermined';
+  canAskAgain: boolean;
+  push: 'ready' | 'unconfigured' | 'unavailable';
+  pushReason: string | null;
+  armed: number;
+}
+
+/** Replies the shell sends back into the page. */
+export type ShellEvent =
+  | { type: 'notification-status'; status: ShellNotificationStatus }
+  | { type: 'test-notification'; result: { ok: boolean; reason?: string } };
+
+/** Listen for the shell's replies. Returns an unsubscribe. No-op in a browser. */
+export function onShellEvent(cb: (event: ShellEvent) => void): () => void {
+  if (!inShell || typeof window === 'undefined') return () => undefined;
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<ShellEvent>).detail;
+    if (detail && typeof detail === 'object' && 'type' in detail) cb(detail);
+  };
+  window.addEventListener('mypro-shell', handler);
+  return () => window.removeEventListener('mypro-shell', handler);
+}
+
+/** Tell the phone its schedules changed, so a reminder set now is armed now. */
+export function requestShellRearm(): void {
+  if (inShell) postToShell({ type: 'rearm' });
+}
 
 /**
  * Are we running inside the native shell? Read once at module load: the marker

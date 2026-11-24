@@ -19,7 +19,13 @@ import {
 } from 'react-native-webview';
 import { Text } from './components/Typography';
 import { client } from './lib/client';
-import { armUpcoming, fireTestNotification, registerForPush } from './lib/notifications';
+import {
+  clearDeviceForSignOut,
+  fireTestNotification,
+  notificationStatus,
+  requestPermissionOrOpenSettings,
+  syncClock,
+} from './lib/notifications';
 import { hashFromDeeplink } from '@mypro/shared';
 import { INJECTED_BEFORE, WEB_URL, isWebConfigured } from './lib/shell';
 
@@ -50,7 +56,13 @@ const STATUS_BAR = Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24)
 type IncomingMessage =
   | { type: 'session'; session: Parameters<typeof client.auth.setSession>[0] }
   | { type: 'haptic'; kind: string }
-  | { type: 'test-notification' };
+  | { type: 'test-notification' }
+  /** Schedules or calendar changed in the web: re-arm the clock right now. */
+  | { type: 'rearm' }
+  /** Settings wants to know where notifications stand on this phone. */
+  | { type: 'notification-status' }
+  /** Ask for permission again, or open Android's settings if it was refused. */
+  | { type: 'fix-notifications' };
 
 export function ShellApp() {
   if (!isWebConfigured) return <SetupScreen />;
@@ -65,6 +77,9 @@ function Shell() {
   const canGoBack = useRef(false);
   /** A deep-link requested before the page was ready; applied once it loads. */
   const pendingDeepLink = useRef<string | null>(null);
+  /** A full navigation (Gmail return) requested before the page was ready. */
+  const pendingNavigation = useRef<string | null>(null);
+  const loadedRef = useRef(false);
 
   /**
    * Drive the web to a route by setting the hash its router reads. `hash` is
@@ -81,43 +96,100 @@ function Shell() {
     webRef.current?.injectJavaScript(`window.location.hash = ${JSON.stringify(hash)}; true;`);
   }, [loaded]);
 
-  /**
-   * Adopt a session posted by the web, so the native clock has a token. We
-   * persist it (via the shared auth store) and re-arm immediately; on sign-out
-   * we just stop re-arming — whatever is already scheduled lapses on its own.
-   */
-  const onMessage = useCallback((event: WebViewMessageEvent) => {
-    let message: IncomingMessage;
-    try {
-      message = JSON.parse(event.nativeEvent.data) as IncomingMessage;
-    } catch {
-      return;
-    }
-    if (message.type === 'session') {
-      const { session } = message;
-      void client.auth.setSession(session).then(() => {
-        if (session) {
-          void armUpcoming();
-          void registerForPush();
-        }
-      });
-    } else if (message.type === 'test-notification') {
-      void fireTestNotification();
-    }
-    // Other message types (e.g. haptics) are ignored until the shell handles
-    // them — unknown messages must never throw.
+  /** Deliver a reply to the web, as a `mypro-shell` DOM event. */
+  const replyToWeb = useCallback((detail: unknown) => {
+    const payload = JSON.stringify(detail);
+    webRef.current?.injectJavaScript(
+      `window.dispatchEvent(new CustomEvent('mypro-shell', { detail: ${payload} })); true;`,
+    );
   }, []);
 
+  const sendStatus = useCallback(() => {
+    void notificationStatus()
+      .then((status) => replyToWeb({ type: 'notification-status', status }))
+      .catch(() => undefined);
+  }, [replyToWeb]);
+
+  /**
+   * Adopt a session posted by the web, so the native clock has a token. We
+   * persist it (via the shared auth store) and re-arm immediately. On
+   * sign-out or expiry, everything armed for the account is cancelled and the
+   * push token withdrawn *first* (while the old token still authenticates),
+   * then the WebView's back stack is cleared so the hardware back button
+   * cannot walk into screens of a session that no longer exists.
+   */
+  const hadSession = useRef(false);
+  const onMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      let message: IncomingMessage;
+      try {
+        message = JSON.parse(event.nativeEvent.data) as IncomingMessage;
+      } catch {
+        return;
+      }
+      if (message.type === 'session') {
+        const { session } = message;
+        if (session) {
+          hadSession.current = true;
+          void client.auth.setSession(session).then(() => syncClock());
+        } else {
+          const wasSignedIn = hadSession.current;
+          hadSession.current = false;
+          void clearDeviceForSignOut().finally(() => void client.auth.setSession(null));
+          if (wasSignedIn && Platform.OS === 'android') webRef.current?.clearHistory?.();
+          canGoBack.current = false;
+        }
+      } else if (message.type === 'test-notification') {
+        void fireTestNotification().then((result) => {
+          replyToWeb({ type: 'test-notification', result });
+          sendStatus();
+        });
+      } else if (message.type === 'rearm') {
+        void syncClock().then(sendStatus);
+      } else if (message.type === 'notification-status') {
+        sendStatus();
+      } else if (message.type === 'fix-notifications') {
+        void requestPermissionOrOpenSettings()
+          .then(() => syncClock())
+          .then(sendStatus);
+      }
+      // Other message types (e.g. haptics) are ignored until the shell handles
+      // them — unknown messages must never throw.
+    },
+    [replyToWeb, sendStatus],
+  );
+
   // Arm the clock from any already-stored session the moment the shell opens,
-  // then keep it armed on every foreground. The web's session bridge refreshes
-  // the token; this is the belt-and-braces path for when the web is slow or
-  // offline on launch.
+  // then keep it armed on every foreground *and* on the way to the background
+  // (the last chance before a swipe-away to pick up a reminder created moments
+  // ago). The web's session bridge refreshes the token; this is the
+  // belt-and-braces path for when the web is slow or offline on launch.
   useEffect(() => {
-    void armUpcoming();
-    void registerForPush();
+    void syncClock();
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void armUpcoming();
+      if (state === 'active' || state === 'background') void syncClock();
+      // Returning from Android's settings page: report the new permission.
+      if (state === 'active') sendStatus();
     });
+    return () => sub.remove();
+  }, [sendStatus]);
+
+  // The Gmail connect flow runs in the system browser (Google refuses OAuth
+  // inside a WebView). Render ends it on `mypro://gmail?...`, which reopens
+  // the app here; hand the outcome to the web as the query its Settings reads.
+  useEffect(() => {
+    const open = (url: string | null) => {
+      if (!url || !url.startsWith('mypro://gmail')) return;
+      const query = url.split('?')[1] ?? '';
+      const target = `${WEB_URL}/?${query}`;
+      if (!loadedRef.current) {
+        pendingNavigation.current = target;
+        return;
+      }
+      webRef.current?.injectJavaScript(`window.location.replace(${JSON.stringify(target)}); true;`);
+    };
+    void Linking.getInitialURL().then(open);
+    const sub = Linking.addEventListener('url', ({ url }) => open(url));
     return () => sub.remove();
   }, []);
 
@@ -158,7 +230,14 @@ function Shell() {
 
   const onLoadEnd = useCallback(() => {
     setLoaded(true);
+    loadedRef.current = true;
     setFailed(false);
+    if (pendingNavigation.current) {
+      const target = pendingNavigation.current;
+      pendingNavigation.current = null;
+      webRef.current?.injectJavaScript(`window.location.replace(${JSON.stringify(target)}); true;`);
+      return;
+    }
     if (pendingDeepLink.current !== null) {
       const hash = pendingDeepLink.current;
       pendingDeepLink.current = null;
@@ -171,6 +250,7 @@ function Shell() {
   const reload = useCallback(() => {
     setFailed(false);
     setLoaded(false);
+    loadedRef.current = false;
     setReloadKey((k) => k + 1);
   }, []);
 

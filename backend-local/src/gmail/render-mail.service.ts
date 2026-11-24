@@ -11,7 +11,12 @@ export interface SendRequest {
 
 export type SendOutcome =
   | { ok: true; id: string; from: string }
-  | { ok: false; reason: string };
+  /**
+   * `retryable` is true only when the message *certainly* was not sent — the
+   * request never reached the mail service. A timeout is never retryable:
+   * Gmail may have sent it, and sending twice is worse than reporting once.
+   */
+  | { ok: false; reason: string; retryable?: boolean };
 
 const SEND_TIMEOUT_MS = 20_000;
 
@@ -42,6 +47,7 @@ export class RenderMailService {
         ok: false,
         reason:
           'Sending is not wired up on this machine — set RENDER_API_URL in backend-local/.env.',
+        retryable: false,
       };
     }
 
@@ -66,14 +72,24 @@ export class RenderMailService {
       });
 
       const text = await res.text();
-      const parsed: unknown = text ? JSON.parse(text) : null;
+      let parsed: unknown = null;
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch {
+        parsed = null;
+      }
 
       if (!res.ok) {
+        // 502/503/504 come from Render's edge while the instance wakes: the
+        // request never reached the app, so nothing was sent.
+        const waking = res.status === 502 || res.status === 503 || res.status === 504;
         const message =
           parsed && typeof parsed === 'object' && 'message' in parsed
             ? String((parsed as { message: unknown }).message)
-            : `Render refused the send (${res.status})`;
-        return { ok: false, reason: message };
+            : waking
+              ? 'The mail service is waking up.'
+              : `Render refused the send (${res.status})`;
+        return { ok: false, reason: message, retryable: waking };
       }
 
       const body = parsed as { id?: string; from?: string } | null;
@@ -82,10 +98,15 @@ export class RenderMailService {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.logger.warn(`send via render failed: ${reason}`);
+      const timedOut = err instanceof Error && err.name === 'AbortError';
       // Render's free instance sleeps; a cold start can outlast the timeout.
       return {
         ok: false,
-        reason: 'Could not reach the mail service just now — try approving again in a moment.',
+        reason: timedOut
+          ? 'The mail service did not answer in time, so it is unclear whether it sent. Check your Sent folder before retrying.'
+          : 'Could not reach the mail service just now — try again in a moment.',
+        // A connection that failed outright sent nothing; a timeout might have.
+        retryable: !timedOut,
       };
     }
   }

@@ -8,15 +8,26 @@
     "userInterfaceStyle": "dark",
     "backgroundColor": "#000000",
     "icon": "./assets/icon.png",
-    "platforms": ["android", "ios"],
-    "assetBundlePatterns": ["**/*"],
+    "platforms": [
+      "android",
+      "ios"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "android": {
       "package": "com.mypro.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#F4F1EA"
       },
-      "permissions": ["POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"]
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
     },
     "plugins": [
       [

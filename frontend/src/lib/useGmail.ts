@@ -10,12 +10,25 @@ import { useCallback, useEffect, useState } from 'react';
 import type { GmailAccountRow, GmailAccessLevel } from '@mypro/shared';
 import { api } from './api';
 import { isApiConfigured } from './env';
+import { inShell } from './shell';
+
+/**
+ * Whether the page was opened by Render's Gmail callback (`?gmail=…`). The app
+ * reads this at boot to open Settings → Mail, so the outcome is shown where
+ * the user started instead of on whatever page happened to load.
+ */
+export function isGmailReturn(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('gmail');
+}
 
 export interface GmailState {
   /** Whether the server has Google credentials at all. */
   configured: boolean;
   /** Where the credentials come from: the app's Settings, Render's env, or none. */
   source: 'settings' | 'env' | null;
+  /** The server's own OAuth callback URL, shown read-only for developer setup. */
+  redirectUri: string | null;
   accounts: GmailAccountRow[];
   loading: boolean;
   busy: boolean;
@@ -27,11 +40,7 @@ export interface GmailState {
   disconnect: (id: string) => Promise<void>;
   sync: () => Promise<void>;
   /** Save the in-app Google OAuth app credentials (encrypted server-side). */
-  saveOauthConfig: (input: {
-    client_id: string;
-    client_secret: string;
-    redirect_uri: string;
-  }) => Promise<void>;
+  saveOauthConfig: (input: { client_id: string; client_secret: string }) => Promise<void>;
   /** Delete the in-app credentials. */
   deleteOauthConfig: () => Promise<void>;
   reload: () => void;
@@ -41,6 +50,7 @@ export function useGmail(enabled: boolean): GmailState {
   const active = isApiConfigured && enabled;
   const [configured, setConfigured] = useState(false);
   const [source, setSource] = useState<'settings' | 'env' | null>(null);
+  const [redirectUri, setRedirectUri] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<GmailAccountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -60,6 +70,7 @@ export function useGmail(enabled: boolean): GmailState {
       ]);
       setConfigured(status.configured);
       setSource(status.source);
+      setRedirectUri(status.redirect_uri ?? null);
       setAccounts(rows);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load your mailboxes.');
@@ -86,7 +97,9 @@ export function useGmail(enabled: boolean): GmailState {
       setNote(email ? `${email} is connected.` : 'Mailbox connected.');
       void load();
     } else if (outcome === 'denied') {
-      setError('Google sign-in was cancelled.');
+      setError('Google sign-in was cancelled, so nothing was connected.');
+    } else if (outcome === 'expired') {
+      setError('That sign-in took too long and expired. Tap Connect Gmail to try again.');
     } else {
       setError('That mailbox could not be connected. Try again.');
     }
@@ -105,10 +118,15 @@ export function useGmail(enabled: boolean): GmailState {
     setBusy(true);
     setError(null);
     try {
-      const { url } = await api.gmail.connect(mode);
+      // From the Android app the consent screen opens in the system browser
+      // (Google refuses OAuth in a WebView); ask Render to return us to the app.
+      const { url } = await api.gmail.connect(mode, inShell ? 'app' : 'web');
       // Leaves the app. The state in that URL is short-lived and signed, so
       // it cannot be saved and replayed later.
       window.location.assign(url);
+      // In the app the page stays put (the browser opened instead), so do not
+      // leave the button spinning; the result arrives via the app link.
+      if (inShell) window.setTimeout(() => setBusy(false), 1500);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not start the connect flow.');
       setBusy(false);
@@ -160,7 +178,7 @@ export function useGmail(enabled: boolean): GmailState {
   }, [load]);
 
   const saveOauthConfig = useCallback(
-    async (input: { client_id: string; client_secret: string; redirect_uri: string }) => {
+    async (input: { client_id: string; client_secret: string }) => {
       setBusy(true);
       setError(null);
       setNote(null);
@@ -168,6 +186,7 @@ export function useGmail(enabled: boolean): GmailState {
         const status = await api.gmail.saveOauthConfig(input);
         setConfigured(status.configured);
         setSource(status.source);
+        setRedirectUri(status.redirect_uri ?? null);
         setNote('Google app credentials saved. You can connect a mailbox now.');
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not save those credentials.');
@@ -197,6 +216,7 @@ export function useGmail(enabled: boolean): GmailState {
   return {
     configured,
     source,
+    redirectUri,
     accounts,
     loading,
     busy,

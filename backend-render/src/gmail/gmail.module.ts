@@ -19,13 +19,45 @@ import { GmailSyncService } from './gmail-sync.service';
 const connectInput = z.object({
   /** How much access to request for this mailbox. Defaults to read-only. */
   mode: z.enum(['read', 'send']).default('read'),
+  /**
+   * Where Google's redirect should finally land: the web app, or back into the
+   * Android app (the consent screen runs in the system browser there, because
+   * Google refuses OAuth inside a WebView).
+   */
+  return_to: z.enum(['web', 'app']).default('web'),
 });
 
 const oauthConfigInput = z.object({
   client_id: z.string().min(10).max(500),
   client_secret: z.string().min(10).max(500),
-  redirect_uri: z.string().url().max(500),
+  /**
+   * Legacy and optional: the server derives its own callback URL. Only used
+   * when the server cannot work out its public address.
+   */
+  redirect_uri: z.string().url().max(500).optional(),
 });
+
+/** The app's own URL scheme (android/app.json `scheme`). */
+const APP_RETURN_URL = 'mypro://gmail';
+
+/**
+ * A tiny page that hands the browser back to the Android app. A bare 302 to a
+ * custom scheme is silently dropped by some browsers; a page with an automatic
+ * redirect *and* a button always works. `params` is built by us from a fixed
+ * set of keys plus a URL-encoded address, and is HTML-escaped regardless.
+ */
+export function appReturnPage(params: string): string {
+  const target = `${APP_RETURN_URL}?${params}`;
+  const safe = target.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="0;url=${safe}"><title>Back to MyPro</title>
+<style>body{background:#000;color:#fff;font:16px system-ui,sans-serif;display:flex;min-height:100vh;
+align-items:center;justify-content:center;margin:0;padding:16px;text-align:center}
+a{display:inline-block;margin-top:16px;padding:12px 22px;border:1px solid rgba(255,255,255,.4);
+border-radius:999px;color:#fff;text-decoration:none}</style></head>
+<body><div><p>Gmail sign-in finished.</p><a href="${safe}">Return to MyPro</a></div></body></html>`;
+}
 
 const sendInput = z.object({
   user_id: z.string().uuid(),
@@ -63,11 +95,15 @@ export class GmailService {
 
   /** Save the in-app Google OAuth app credentials (secret encrypted at rest). */
   async saveOauthConfig(user: AuthUser, input: z.infer<typeof oauthConfigInput>) {
-    await this.creds.save(user.id, {
-      clientId: input.client_id,
-      clientSecret: input.client_secret,
-      redirectUri: input.redirect_uri,
-    });
+    try {
+      await this.creds.save(user.id, {
+        clientId: input.client_id,
+        clientSecret: input.client_secret,
+        redirectUri: input.redirect_uri ?? null,
+      });
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : 'Could not save.');
+    }
     await this.audit.record({
       userId: user.id,
       actor: 'user',
@@ -102,8 +138,7 @@ export class GmailService {
 
   /** Whether the server can run a connect flow at all (Phase 7.1). */
   async status(user: AuthUser) {
-    const { configured, source } = await this.creds.status(user.id);
-    return { configured, source };
+    return this.creds.status(user.id);
   }
 
   /**
@@ -113,15 +148,19 @@ export class GmailService {
    * read + send. The user picks this per mailbox in Settings, so one account
    * can be summarise-only while another is allowed to reply.
    */
-  async connectUrl(user: AuthUser, mode: GmailAccessLevel = 'read') {
+  async connectUrl(
+    user: AuthUser,
+    mode: GmailAccessLevel = 'read',
+    returnTo: 'web' | 'app' = 'web',
+  ) {
     const creds = await this.creds.forUser(user.id);
     if (!creds) {
       throw new BadRequestException(
-        'Google OAuth is not configured. Add the app credentials in Settings → Mail ' +
-          '(or set them in the Render environment).',
+        'Gmail sign-in is not set up on this server yet. It needs a Google OAuth app ' +
+          '(GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET on the API) — see Settings → Mail → Developer setup.',
       );
     }
-    return { url: this.oauth.authUrl(creds, user.id, mode) };
+    return { url: this.oauth.authUrl(creds, user.id, mode, returnTo) };
   }
 
   /**
@@ -136,7 +175,7 @@ export class GmailService {
    * reconnecting the same one updates its tokens in place.
    */
   async handleCallback(code: string, state: string): Promise<{ email: string }> {
-    const userId = this.oauth.verifyState(state);
+    const userId = this.oauth.verifyState(state)?.userId ?? null;
     if (!userId) throw new BadRequestException('This connect link has expired. Try again.');
 
     const creds = await this.creds.forUser(userId);
@@ -184,6 +223,11 @@ export class GmailService {
     });
 
     return { email };
+  }
+
+  /** Where a (valid) state says the browser should end up. */
+  returnTarget(state: string): 'web' | 'app' {
+    return this.oauth.verifyState(state)?.returnTo ?? 'web';
   }
 
   async removeAccount(user: AuthUser, id: string) {
@@ -301,7 +345,12 @@ export class GmailController {
     @Query('error') error?: string,
   ) {
     const appUrl = env().APP_URL ?? env().CORS_ORIGINS[0] ?? '/';
-    const back = (params: string) => res.redirect(`${appUrl.replace(/\/$/, '')}/?${params}`);
+    // Where this flow started: the web app, or the Android app (system browser).
+    const toApp = state ? this.gmail.returnTarget(state) === 'app' : false;
+    const back = (params: string) =>
+      toApp
+        ? res.status(200).type('html').send(appReturnPage(params))
+        : res.redirect(`${appUrl.replace(/\/$/, '')}/?${params}`);
 
     if (error) return back(`gmail=denied`);
     if (!code || !state) return back(`gmail=error`);
@@ -311,8 +360,9 @@ export class GmailController {
       // The address goes in the fragment-free query only as a confirmation
       // the UI can show; it is the user's own address.
       return back(`gmail=connected&email=${encodeURIComponent(email)}`);
-    } catch {
-      return back(`gmail=error`);
+    } catch (err) {
+      const expired = err instanceof BadRequestException && /expired/i.test(err.message);
+      return back(expired ? `gmail=expired` : `gmail=error`);
     }
   }
 
@@ -352,8 +402,8 @@ export class GmailController {
   @Post('connect')
   @UseGuards(AuthGuard)
   connect(@CurrentUser() user: AuthUser, @Body() body: unknown) {
-    const { mode } = connectInput.parse(body ?? {});
-    return this.gmail.connectUrl(user, mode);
+    const { mode, return_to } = connectInput.parse(body ?? {});
+    return this.gmail.connectUrl(user, mode, return_to);
   }
 
   @Delete('accounts/:id')

@@ -72,8 +72,20 @@ const schema = z.object({
 
   GOOGLE_CLIENT_ID: optionalText(),
   GOOGLE_CLIENT_SECRET: optionalText(),
-  /** Must match the console exactly, e.g. https://…/api/v1/gmail/callback */
+  /**
+   * Optional override. Normally **derived** — `<public API base>/api/v1/gmail/callback`
+   * from `PUBLIC_API_URL` or Render's own `RENDER_EXTERNAL_URL` — so nobody types
+   * a redirect URL. Set it only if the API sits behind a different public host.
+   */
   GOOGLE_REDIRECT_URI: optionalUrl(),
+  /**
+   * This API's public origin, e.g. https://mypro-api.onrender.com. Optional on
+   * Render, which sets `RENDER_EXTERNAL_URL` itself; needed elsewhere (local
+   * dev behind a tunnel) for the OAuth callback URL to be derived.
+   */
+  PUBLIC_API_URL: optionalUrl(),
+  /** Set automatically by Render to the service's public URL. Never set by hand. */
+  RENDER_EXTERNAL_URL: optionalUrl(),
   /** Where the callback sends the browser once the mailbox is connected. */
   APP_URL: optionalUrl(),
 

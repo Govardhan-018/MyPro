@@ -4,8 +4,21 @@ import { SupabaseService } from '../common/supabase.service';
 import { AuditService } from '../common/audit.service';
 import { LlmService } from '../llm/llm.service';
 import { PushService } from '../notifications/push.service';
+import { AssistantService } from '../assistant/assistant.service';
+import { RenderMailService } from '../gmail/render-mail.service';
 import { computeNextRun, type Recurrence } from '../schedules/recurrence';
 import { env } from '../config/env';
+import { UserSessionBroker } from './user-session.broker';
+import {
+  afterFailure,
+  chatInstruction,
+  emailInstruction,
+  excerpt,
+  parseEmailDraft,
+  reminderContent,
+} from './run-policy';
+
+const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 
 interface DueSchedule {
   id: string;
@@ -21,12 +34,23 @@ interface DueSchedule {
   cron_expr: string | null;
   timezone: string;
   requires_confirmation: boolean;
+  /** Attempts already made at the current occurrence (0 = first try). */
   deferred_count: number;
   next_run_at: string | null;
+  updated_at?: string | null;
   assistant_schedule_days: { day_of_week: number }[] | null;
 }
 
-type RunStatus = 'success' | 'failed' | 'skipped' | 'pending_confirmation' | 'deferred';
+type RunStatus = 'success' | 'failed' | 'skipped' | 'pending_confirmation' | 'retrying';
+
+interface RunOutcome {
+  status: RunStatus;
+  detail: string;
+  /** The AI reply / email subject, kept with the run. */
+  result?: string;
+  /** For a failure: safe to try again (nothing outward happened). */
+  retryable?: boolean;
+}
 
 /** Most rows due at once after a long sleep; keep each pass bounded. */
 const BATCH_SIZE = 50;
@@ -63,6 +87,9 @@ export class SchedulerService implements OnModuleInit {
     private readonly audit: AuditService,
     private readonly llm: LlmService,
     private readonly push: PushService,
+    private readonly assistant: AssistantService,
+    private readonly mail: RenderMailService,
+    private readonly broker: UserSessionBroker,
   ) {}
 
   /**
@@ -106,63 +133,322 @@ export class SchedulerService implements OnModuleInit {
   }
 
   private async runOne(s: DueSchedule): Promise<void> {
+    const attempt = (s.deferred_count ?? 0) + 1;
+    const nextOccurrence = this.nextOccurrence(s);
+
+    // Claim before doing anything outward. The row moves on to its next
+    // occurrence *first*, conditional on nobody else having moved it: if two
+    // agents (or a slow tick overlapping the next) see the same due row, only
+    // one wins the claim and only one sends. The price is at-most-once — a
+    // crash mid-run loses that run rather than repeating it, which for an
+    // email or a notification is the right side to err on.
+    if (!(await this.claim(s, nextOccurrence))) return;
+
     if (this.isStale(s)) {
       const late = this.minutesLate(s);
       this.logger.log(`schedule ${s.id} is ${late} min late — skipping to the next occurrence`);
-      await this.advance(s, 'skipped', `missed by ${late} min while this machine was asleep`);
+      await this.finish(s, attempt, {
+        status: 'skipped',
+        detail: `missed by ${late} min while this machine was asleep`,
+      });
       return;
     }
 
-    let status: RunStatus = 'success';
-    let detail = '';
-
+    let outcome: RunOutcome;
     try {
-      switch (s.action_type) {
-        case 'notify':
-          await this.notify(
-            s.user_id,
-            this.text(s, 'title') ?? s.name,
-            this.text(s, 'body') ?? '',
-            s.id,
-          );
-          break;
-
-        case 'chat_message':
-          await this.chatMessage(s.user_id, this.text(s, 'text') ?? s.name, s.id);
-          break;
-
-        case 'report':
-          detail = await this.report(s);
-          break;
-
-        case 'email': {
-          const allowed = await this.autoSendAllowed(s.user_id);
-          if (s.requires_confirmation || !allowed) {
-            status = 'pending_confirmation';
-            detail = 'Email send needs your confirmation';
-            await this.notify(
-              s.user_id,
-              `Confirm: ${s.name}`,
-              'This scheduled email is waiting for your approval.',
-              s.id,
-            );
-          } else {
-            status = 'failed';
-            detail = 'Email sending is not wired yet (Gmail phase)';
-          }
-          break;
-        }
-      }
+      outcome = await this.execute(s, attempt);
     } catch (err) {
-      status = 'failed';
-      detail = err instanceof Error ? err.message : String(err);
+      const detail = err instanceof Error ? err.message : String(err);
       this.logger.error(`schedule ${s.id} failed: ${detail}`);
+      outcome = { status: 'failed', detail, retryable: true };
     }
 
-    await this.advance(s, status, detail);
+    if (outcome.status === 'failed') {
+      const plan = afterFailure({
+        attempt,
+        retryable: Boolean(outcome.retryable),
+        now: new Date(),
+        nextOccurrence,
+      });
+      if ('retryAt' in plan) {
+        await this.scheduleRetry(s, attempt, plan.retryAt);
+        await this.recordRun(s, attempt, {
+          status: 'retrying',
+          detail: `${outcome.detail} — retrying at ${plan.retryAt.toISOString()}`,
+        });
+        return;
+      }
+      await this.notifyFailure(s, outcome.detail);
+    }
+
+    await this.finish(s, attempt, outcome);
   }
 
-  // ---- staleness --------------------------------------------------------
+  /** What one attempt does, by type. Throws only on the unexpected. */
+  private async execute(s: DueSchedule, attempt: number): Promise<RunOutcome> {
+    switch (s.action_type) {
+      case 'notify':
+        return this.runReminder(s);
+      case 'chat_message':
+        return this.runAiMessage(s);
+      case 'email':
+        return this.runEmail(s, attempt);
+      case 'report':
+        return { status: 'success', detail: await this.report(s) };
+      default:
+        return { status: 'failed', detail: `unknown action ${String(s.action_type)}` };
+    }
+  }
+
+  // ---- 1. Remind me -----------------------------------------------------
+
+  private async runReminder(s: DueSchedule): Promise<RunOutcome> {
+    const { title, body } = reminderContent(s);
+    const id = await this.push.send(s.user_id, {
+      title,
+      body,
+      kind: 'reminder',
+      deeplink: '/schedules',
+      scheduleId: s.id,
+      // The phone armed this itself (android/src/lib/notifications.ts); a
+      // device that did is not pushed a second copy.
+      localCopy:
+        s.next_run_at && s.updated_at
+          ? { dueAt: new Date(s.next_run_at), scheduleUpdatedAt: new Date(s.updated_at) }
+          : undefined,
+    });
+    if (!id) return { status: 'failed', detail: 'could not record the notification', retryable: true };
+    return { status: 'success', detail: 'reminder sent', result: excerpt(`${title}: ${body}`) };
+  }
+
+  // ---- 2. AI message ----------------------------------------------------
+
+  /**
+   * Run the task as if the user had typed it at this moment: the full agent,
+   * with its skills, under the user's own row-level security (a short-lived
+   * session from {@link UserSessionBroker}). The reply lands in the main chat
+   * like any other, and a notification says it is done.
+   *
+   * If the full agent cannot run (no session could be opened), a plain model
+   * completion with the persona answers instead — the run history says which.
+   */
+  private async runAiMessage(s: DueSchedule): Promise<RunOutcome> {
+    const instruction = chatInstruction(s);
+    if (instruction.kind === 'text') {
+      await this.chatMessage(s.user_id, instruction.text, s.id);
+      return { status: 'success', detail: 'message posted', result: excerpt(instruction.text) };
+    }
+
+    let reply: string;
+    let via = 'agent';
+    try {
+      reply = await this.broker.withUser(s.user_id, async (user) => {
+        const out = await this.assistant.send(user, `⏰ Scheduled task: ${instruction.prompt}`);
+        return String((out.message as { content?: string | null } | null)?.content ?? '');
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (/model|rate|429|timeout|unavailable|ECONN|fetch failed/i.test(reason)) {
+        // The model itself is down: the fallback would fail the same way.
+        return { status: 'failed', detail: `AI unavailable: ${reason}`, retryable: true };
+      }
+      this.logger.warn(`scheduled AI run ${s.id}: agent path failed (${reason}); answering directly`);
+      try {
+        reply = await this.directAnswer(s.user_id, instruction.prompt);
+        via = 'direct';
+      } catch (inner) {
+        const why = inner instanceof Error ? inner.message : String(inner);
+        return { status: 'failed', detail: `AI unavailable: ${why}`, retryable: true };
+      }
+    }
+
+    if (!reply.trim()) {
+      return { status: 'failed', detail: 'the AI returned an empty reply', retryable: true };
+    }
+
+    await this.push.send(s.user_id, {
+      title: `Done: ${s.name}`,
+      body: excerpt(reply),
+      kind: 'schedule_result',
+      deeplink: '/assistant',
+      scheduleId: s.id,
+    });
+    return {
+      status: 'success',
+      detail: via === 'agent' ? 'AI replied in chat' : 'AI replied in chat (without tools)',
+      result: excerpt(reply, 500),
+    };
+  }
+
+  /** The no-tools path: persona + the request, posted to the main chat. */
+  private async directAnswer(userId: string, prompt: string): Promise<string> {
+    const { persona, settings } = await this.briefInputs(userId);
+    const result = await this.llm.generate({
+      model: settings?.model ?? undefined,
+      temperature: settings?.temperature != null ? Number(settings.temperature) : undefined,
+      system:
+        `You are ${persona?.name ?? 'MyPro'}, the user's companion, carrying out a task they ` +
+        `scheduled earlier. Do it now and reply with the result.` +
+        (persona?.tone ? ` Tone: ${persona.tone}.` : ''),
+      messages: [{ role: 'user', text: `${prompt}\n\n(It is now ${new Date().toISOString()}.)` }],
+    });
+    const text = result.text.trim();
+    if (!text) throw new Error('model returned nothing');
+    await this.postToChat(userId, [
+      { role: 'user', content: `⏰ Scheduled task: ${prompt}` },
+      { role: 'assistant', content: text },
+    ]);
+    return text;
+  }
+
+  // ---- 3. Email ---------------------------------------------------------
+
+  /**
+   * Write the email with the model, then send it from the connected Gmail.
+   *
+   * Duplicate-safe by construction: the row was claimed before we got here,
+   * and a send is retried only when the mail service certainly never got it.
+   * A schedule marked "ask me first" drafts the email and parks it in the
+   * approvals queue (the same `send_email` approval the assistant uses).
+   */
+  private async runEmail(s: DueSchedule, attempt: number): Promise<RunOutcome> {
+    const instruction = emailInstruction(s);
+    if ('error' in instruction) return { status: 'failed', detail: instruction.error };
+
+    const account = await this.sendingAccount(s.user_id);
+    if (!account) {
+      return {
+        status: 'failed',
+        detail:
+          'No Gmail account with send access is connected. Connect Gmail (read & send) in Settings → Mail.',
+      };
+    }
+    if (!this.mail.configured()) {
+      return { status: 'failed', detail: 'Mail sending is not configured on the agent (RENDER_API_URL).' };
+    }
+
+    let draft: { subject: string; body: string } | null;
+    try {
+      draft = await this.draftEmail(s, instruction.prompt, instruction.to, account.email);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return { status: 'failed', detail: `AI could not write the email: ${reason}`, retryable: true };
+    }
+    if (!draft) {
+      return { status: 'failed', detail: 'the AI returned an empty email', retryable: true };
+    }
+
+    if (s.requires_confirmation) {
+      const { error } = await this.supabase.admin.from('pending_actions').insert({
+        user_id: s.user_id,
+        skill: 'send_email',
+        args: { to: instruction.to, subject: draft.subject, body: draft.body },
+        summary: `Send "${draft.subject}" to ${instruction.to} (scheduled: ${s.name})`,
+      });
+      if (error) return { status: 'failed', detail: `could not queue for approval: ${error.message}`, retryable: true };
+      await this.push.send(s.user_id, {
+        title: `Approve email: ${s.name}`,
+        body: `"${draft.subject}" to ${instruction.to} is drafted and waiting for you.`,
+        kind: 'schedule_result',
+        deeplink: '/assistant',
+        scheduleId: s.id,
+      });
+      return {
+        status: 'pending_confirmation',
+        detail: 'drafted — waiting for your approval',
+        result: excerpt(`${draft.subject} → ${instruction.to}`),
+      };
+    }
+
+    const sent = await this.mail.send({
+      userId: s.user_id,
+      to: instruction.to,
+      subject: draft.subject,
+      body: draft.body,
+      accountId: account.id,
+    });
+    if (!sent.ok) {
+      return {
+        status: 'failed',
+        detail: `email not sent (attempt ${attempt}): ${sent.reason}`,
+        retryable: Boolean(sent.retryable),
+      };
+    }
+
+    await this.push.send(s.user_id, {
+      title: `Email sent: ${s.name}`,
+      body: `"${draft.subject}" to ${instruction.to}`,
+      kind: 'schedule_result',
+      deeplink: '/schedules',
+      scheduleId: s.id,
+    });
+    return {
+      status: 'success',
+      detail: `sent from ${sent.from || account.email} (Gmail id ${sent.id})`,
+      result: excerpt(`${draft.subject} → ${instruction.to}`),
+    };
+  }
+
+  private async draftEmail(
+    s: DueSchedule,
+    prompt: string,
+    to: string,
+    from: string,
+  ): Promise<{ subject: string; body: string } | null> {
+    const { persona, settings } = await this.briefInputs(s.user_id);
+    const profile = await this.supabase.admin
+      .from('profiles')
+      .select('display_name')
+      .eq('user_id', s.user_id)
+      .maybeSingle();
+    const name = (profile.data as { display_name?: string | null } | null)?.display_name ?? null;
+    const result = await this.llm.generate({
+      model: settings?.model ?? undefined,
+      temperature: 0.7,
+      system:
+        'You write emails on behalf of the user, ready to send as-is. Follow their instructions ' +
+        'exactly. Plain text, a natural greeting and sign-off, no placeholders like [Name], ' +
+        'no commentary. Reply ONLY with JSON: {"subject": "...", "body": "..."}.' +
+        (persona?.tone ? ` Match this tone where it fits: ${persona.tone}.` : ''),
+      messages: [
+        {
+          role: 'user',
+          text:
+            `Instructions: ${prompt}\n` +
+            `To: ${to}\nFrom: ${from}${name ? ` (${name})` : ''}\n` +
+            `Today is ${new Date().toUTCString()}.`,
+        },
+      ],
+    });
+    return parseEmailDraft(result.text, s.name);
+  }
+
+  /** The first connected mailbox that may send, or null. */
+  private async sendingAccount(userId: string): Promise<{ id: string; email: string } | null> {
+    const { data } = await this.supabase.admin
+      .from('gmail_accounts')
+      .select('id, email, scopes')
+      .eq('user_id', userId)
+      .order('created_at');
+    const rows = (data ?? []) as { id: string; email: string; scopes: string | null }[];
+    const ok = rows.find((r) => (r.scopes ?? '').split(/\s+/).includes(GMAIL_SEND_SCOPE));
+    return ok ? { id: ok.id, email: ok.email } : null;
+  }
+
+  // ---- failure / staleness ----------------------------------------------
+
+  private async notifyFailure(s: DueSchedule, detail: string): Promise<void> {
+    if (s.action_type === 'notify') return; // a reminder that failed cannot remind about itself
+    await this.push
+      .send(s.user_id, {
+        title: `Scheduled ${s.action_type === 'email' ? 'email' : 'task'} failed: ${s.name}`,
+        body: excerpt(detail),
+        kind: 'schedule_result',
+        deeplink: '/schedules',
+        scheduleId: s.id,
+      })
+      .catch(() => null);
+  }
 
   private minutesLate(s: DueSchedule): number {
     if (!s.next_run_at) return 0;
@@ -171,10 +457,11 @@ export class SchedulerService implements OnModuleInit {
 
   /**
    * A recurring job whose moment has well and truly passed. One-shots are
-   * never stale — missing them entirely is worse than running them late.
+   * never stale — missing them entirely is worse than running them late — and
+   * neither is a retry already in progress.
    */
   private isStale(s: DueSchedule): boolean {
-    if (s.recurrence === 'once') return false;
+    if (s.recurrence === 'once' || (s.deferred_count ?? 0) > 0) return false;
     const grace = env().SCHEDULER_STALE_MINUTES;
     if (grace <= 0) return false;
     return this.minutesLate(s) > grace;
@@ -182,9 +469,8 @@ export class SchedulerService implements OnModuleInit {
 
   // ---- bookkeeping ------------------------------------------------------
 
-  /** Record the run and arm the next occurrence. */
-  private async advance(s: DueSchedule, status: RunStatus, detail: string): Promise<void> {
-    const next = computeNextRun(
+  private nextOccurrence(s: DueSchedule): Date | null {
+    return computeNextRun(
       {
         recurrence: s.recurrence,
         run_at: s.run_at,
@@ -196,32 +482,50 @@ export class SchedulerService implements OnModuleInit {
       },
       new Date(),
     );
+  }
 
-    const { error } = await this.supabase.admin
+  /** Move the row on, only if it is still where we found it. True = ours. */
+  private async claim(s: DueSchedule, next: Date | null): Promise<boolean> {
+    if (!s.next_run_at) return false;
+    const { data, error } = await this.supabase.admin
       .from('assistant_schedules')
       .update({
         last_run_at: new Date().toISOString(),
         next_run_at: next?.toISOString() ?? null,
         enabled: next !== null,
-        deferred_count: 0,
       })
-      .eq('id', s.id);
-
-    // If re-arming fails the row stays due and the next tick runs it again.
-    // Say so loudly rather than leaving a silent repeat-notification loop.
+      .eq('id', s.id)
+      .eq('next_run_at', s.next_run_at)
+      .select('id');
     if (error) {
-      this.logger.error(`could not re-arm schedule ${s.id}: ${error.message}`);
+      this.logger.error(`could not claim schedule ${s.id}: ${error.message}`);
+      return false;
     }
+    return (data ?? []).length > 0;
+  }
 
-    await this.recordRun(s, status, detail);
+  /** Put the row back on the clock for another attempt. */
+  private async scheduleRetry(s: DueSchedule, attempt: number, at: Date): Promise<void> {
+    const { error } = await this.supabase.admin
+      .from('assistant_schedules')
+      .update({ next_run_at: at.toISOString(), enabled: true, deferred_count: attempt })
+      .eq('id', s.id);
+    if (error) this.logger.error(`could not re-arm ${s.id} for a retry: ${error.message}`);
+  }
 
+  /** The occurrence is done (any final status): reset the attempt counter, record it. */
+  private async finish(s: DueSchedule, attempt: number, outcome: RunOutcome): Promise<void> {
+    if ((s.deferred_count ?? 0) > 0) {
+      await this.supabase.admin.from('assistant_schedules').update({ deferred_count: 0 }).eq('id', s.id);
+    }
+    await this.recordRun(s, attempt, outcome);
     await this.audit.record({
       userId: s.user_id,
       actor: 'system',
       action: 'schedule.execute',
       targetType: 'assistant_schedule',
       targetId: s.id,
-      detail: { status, action_type: s.action_type },
+      detail: { status: outcome.status, action_type: s.action_type, attempt },
     });
   }
 
@@ -229,29 +533,46 @@ export class SchedulerService implements OnModuleInit {
    * Write a row to the run history.
    *
    * The result is checked deliberately: a status the table's check constraint
-   * rejects (as 'deferred' was until migration 0007) otherwise disappears
-   * without a trace, and the run history quietly lies about what happened.
-   * A broken history must not fail the job, so this logs rather than throws.
+   * rejects otherwise disappears without a trace, and the run history quietly
+   * lies about what happened. Before migration 0022 there is no `attempt` /
+   * `result` column and no 'retrying' status, so it falls back to the old
+   * shape rather than losing the record. Logs rather than throws.
    */
-  private async recordRun(s: DueSchedule, status: RunStatus, detail: string): Promise<void> {
-    const { error } = await this.supabase.admin.from('schedule_runs').insert({
+  private async recordRun(
+    s: DueSchedule,
+    attempt: number,
+    outcome: Pick<RunOutcome, 'status' | 'detail' | 'result'>,
+  ): Promise<void> {
+    const db = this.supabase.admin;
+    const { error } = await db.from('schedule_runs').insert({
       schedule_id: s.id,
       user_id: s.user_id,
-      status,
-      detail: detail || null,
+      status: outcome.status,
+      detail: outcome.detail || null,
+      attempt,
+      result: outcome.result ?? null,
     });
-    if (error) {
-      this.logger.error(`could not record run for schedule ${s.id} (${status}): ${error.message}`);
+    if (!error) return;
+    const legacy = await db.from('schedule_runs').insert({
+      schedule_id: s.id,
+      user_id: s.user_id,
+      status: outcome.status === 'retrying' ? 'deferred' : outcome.status,
+      detail: [outcome.detail, outcome.result].filter(Boolean).join(' — ') || null,
+    });
+    if (legacy.error) {
+      this.logger.error(
+        `could not record run for schedule ${s.id} (${outcome.status}): ${legacy.error.message}`,
+      );
     }
   }
 
-  // ---- actions ----------------------------------------------------------
+  // ---- shared actions ---------------------------------------------------
 
-  private async notify(userId: string, title: string, body: string, scheduleId?: string) {
-    await this.push.send(userId, { title, body, kind: 'schedule', scheduleId });
-  }
-
-  private async chatMessage(userId: string, text: string, scheduleId: string) {
+  /** Append messages to the user's main conversation (admin; filtered by user). */
+  private async postToChat(
+    userId: string,
+    messages: { role: 'user' | 'assistant'; content: string }[],
+  ): Promise<void> {
     const { data: conversation } = await this.supabase.admin
       .from('assistant_conversations')
       .select('id')
@@ -259,15 +580,24 @@ export class SchedulerService implements OnModuleInit {
       .eq('is_primary', true)
       .is('archived_at', null)
       .maybeSingle();
-
-    if (conversation) {
+    if (!conversation) return;
+    const conversationId = (conversation as { id: string }).id;
+    for (const m of messages) {
       await this.supabase.admin.from('assistant_messages').insert({
         user_id: userId,
-        conversation_id: (conversation as { id: string }).id,
-        role: 'assistant',
-        content: text,
+        conversation_id: conversationId,
+        role: m.role,
+        content: m.content,
       });
     }
+    await this.supabase.admin
+      .from('assistant_conversations')
+      .update({ last_message_at: new Date().toISOString() })
+      .eq('id', conversationId);
+  }
+
+  private async chatMessage(userId: string, text: string, scheduleId: string) {
+    await this.postToChat(userId, [{ role: 'assistant', content: text }]);
     await this.push.send(userId, {
       title: 'MyPro',
       body: text,
@@ -367,22 +697,6 @@ export class SchedulerService implements OnModuleInit {
 
   // Inactivity nudging moved into the Pulse (the 'silence' signal), so it is
   // scored and budgeted with everything else rather than firing on its own.
-
-  // ---- helpers ----------------------------------------------------------
-
-  private text(s: DueSchedule, key: string): string | undefined {
-    const v = s.action_payload?.[key];
-    return typeof v === 'string' && v.trim() ? v : undefined;
-  }
-
-  private async autoSendAllowed(userId: string): Promise<boolean> {
-    const { data } = await this.supabase.admin
-      .from('assistant_settings')
-      .select('allow_auto_send_email')
-      .eq('user_id', userId)
-      .maybeSingle();
-    return Boolean((data as { allow_auto_send_email?: boolean } | null)?.allow_auto_send_email);
-  }
 
   // ---- Phase 16: memory refresh (narrative + episodic) ------------------
 

@@ -12,12 +12,42 @@ export interface NotifyPayload {
   /** brief | nudge | reminder | email_alert | schedule */
   kind?: string;
   scheduleId?: string;
+  /**
+   * For a "Remind me" the phone may already hold locally: the instant it was
+   * due and when its schedule was last edited. An Android device that armed
+   * its clock after that edit (and before the moment) already shows it, so it
+   * is not pushed a second copy. Absent → push everywhere.
+   */
+  localCopy?: { dueAt: Date; scheduleUpdatedAt: Date };
 }
 
 interface DeviceRow {
   id: string;
   channel_type: 'web_push' | 'fcm' | 'telegram';
   token: string;
+  armed_at?: string | null;
+}
+
+/** How far ahead the phone arms (`ARM_WINDOW_HOURS` in android/src/lib/notifications.ts). */
+const PHONE_ARM_WINDOW_MS = 48 * 3600_000;
+
+/**
+ * Whether an Android device already holds this reminder as a local
+ * notification. Pure, so the dedupe rule is unit-tested.
+ */
+export function deviceHoldsLocalCopy(
+  armedAt: string | null | undefined,
+  local: { dueAt: Date; scheduleUpdatedAt: Date },
+): boolean {
+  if (!armedAt) return false;
+  const armed = new Date(armedAt).getTime();
+  if (!Number.isFinite(armed)) return false;
+  const due = local.dueAt.getTime();
+  return (
+    armed >= local.scheduleUpdatedAt.getTime() && // armed after the last edit
+    armed < due && // ...before it fired
+    due - armed <= PHONE_ARM_WINDOW_MS // ...and it was inside the armed window
+  );
 }
 
 /** Expo's push gateway — no key, no project credentials, no cost. */
@@ -93,7 +123,10 @@ export class PushService {
 
   /** @returns how many devices accepted the push. */
   private async fanOut(userId: string, notificationId: string, payload: NotifyPayload) {
-    const devices = await this.devicesFor(userId);
+    const local = payload.localCopy;
+    const devices = (await this.devicesFor(userId)).filter(
+      (d) => !(local && d.channel_type === 'fcm' && deviceHoldsLocalCopy(d.armed_at, local)),
+    );
     if (!devices.length) return 0;
 
     const results = await Promise.all(
@@ -109,10 +142,15 @@ export class PushService {
    */
   private async devicesFor(userId: string): Promise<DeviceRow[]> {
     const db = this.supabase.admin;
-    const [devicesRes, channelsRes] = await Promise.all([
-      db.from('device_tokens').select('id, channel_type, token').eq('user_id', userId),
+    const [firstDevices, channelsRes] = await Promise.all([
+      db.from('device_tokens').select('id, channel_type, token, armed_at').eq('user_id', userId),
       db.from('notification_channels').select('type, enabled').eq('user_id', userId),
     ]);
+    // Before migration 0022 there is no armed_at; push everywhere instead.
+    const devicesRes =
+      firstDevices.error && /armed_at/.test(firstDevices.error.message)
+        ? await db.from('device_tokens').select('id, channel_type, token').eq('user_id', userId)
+        : firstDevices;
 
     if (devicesRes.error) {
       this.logger.warn(`device lookup failed: ${devicesRes.error.message}`);
@@ -246,6 +284,13 @@ export class PushService {
           title: payload.title,
           body: payload.body ?? '',
           sound: 'default',
+          // FCM "high" priority: delivered immediately even in Doze and shown
+          // as a heads-up. Without it Android batches the message until the
+          // next maintenance window — the "notification arrived 20 minutes
+          // late" bug.
+          priority: 'high',
+          // A reminder that cannot be delivered within a day is stale.
+          ttl: 60 * 60 * 24,
           channelId: channelForKind(payload.kind),
           data: {
             id: notificationId,

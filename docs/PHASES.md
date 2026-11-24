@@ -76,7 +76,7 @@ never a second implementation.
 | 2 | Real auth | web/app · render | ✅ done |
 | 3 | Wire the web to the API | web/app | ✅ done |
 | 4 | Assistant UI | web/app · local | ✅ done |
-| 5 | Schedules UI | web/app | ✅ done |
+| 5 | Schedules UI | web/app | ✅ done — three modes (Remind me · AI message · Email), 2026-11 |
 | 6 | Notifications that reach you | all | ✅ done (6.3 dropped) |
 | 7 | Gmail | render · local | ✅ code done — needs a Google OAuth app |
 | 8 | Android app | web/app | ✅ done (8.4 needs an EAS project) |
@@ -141,8 +141,14 @@ indicator from `/nodes/status`, persona editor, pending-approvals queue.
 ### ✅ Phase 5 — Schedules UI
 **Goal:** see, build, pause and delete the standing instructions the agent can
 already create, and read what each run did.
-Builder (daily / weekdays / monthly / once / cron), pause-resume, delete, and
-run history from `/schedules/:id/runs`.
+Exactly three modes, mobile-first (`SchedulesView.tsx`, mapping in
+`buildScheduleInput` / `formFromRow`, tested): **Remind me** (notification),
+**AI message** (the agent does the task and replies in chat, then notifies),
+**Email** (AI writes it, sends from Gmail; only offered when a mailbox can
+send). Once / daily / weekly; edit, cancel/pause, delete, per-row status from
+the latest run, run history with results. Execution and retry rules:
+`docs/BACKEND_PLAN.md` § scheduled actions. Migration **0022** adds run
+`attempt`/`result`, `retrying`, and `device_tokens.armed_at`.
 *Note:* PATCH validates a **whole** schedule, so `rowToInput()` rebuilds the
 row before a one-field edit.
 

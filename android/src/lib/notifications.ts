@@ -21,7 +21,7 @@
  * work (the laptop does). Android throttles background execution hard, and a
  * phone that tried to be a worker would be a phone that quietly stopped.
  */
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -64,12 +64,15 @@ const CHANNELS: Record<string, { name: string; description: string }> = {
 };
 
 /** Foreground behaviour: a notification that arrives while you are looking at
- * the app should still be visible — it is the same information either way. */
+ * the app should still be visible — it is the same information either way.
+ * HIGH priority so it still drops down as a heads-up banner in the foreground;
+ * a sound, because a reminder you do not notice is a reminder that failed. */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge: false,
+    priority: Notifications.AndroidNotificationPriority.HIGH,
   }),
 });
 
@@ -85,9 +88,20 @@ export async function ensureChannel(): Promise<void> {
       Notifications.setNotificationChannelAsync(id, {
         name: meta.name,
         description: meta.description,
+        // HIGH is what makes Android show a heads-up banner (8.0+). Note the
+        // OS keeps whatever importance the user last chose for an existing
+        // channel — this only sets the default, and never overrides them.
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
+        enableVibrate: true,
         lightColor: ACCENT,
+        // Show on the lock screen, but let the user's own "hide sensitive
+        // content" setting redact the text on a secure lock screen. PUBLIC
+        // would override that privacy choice; SECRET would hide it entirely.
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+        showBadge: true,
+        // Never punch through Do Not Disturb on our own say-so.
+        bypassDnd: false,
       }),
     ),
   );
@@ -121,6 +135,11 @@ export async function ensurePermission(): Promise<boolean> {
 export async function armUpcoming(): Promise<number | null> {
   if (!(await ensurePermission())) return null;
   await ensureChannel();
+  // Signed out: nothing of anyone's should be armed on this device.
+  if (!(await client.auth.getSession())) {
+    await cancelOwned();
+    return null;
+  }
 
   let occurrences: ScheduleOccurrence[];
   try {
@@ -150,6 +169,10 @@ export async function armUpcoming(): Promise<number | null> {
           title: occurrence.title || 'MyPro',
           body: occurrence.body ?? bodyFor(occurrence),
           color: ACCENT,
+          // Heads-up on Android 7 and below (8+ takes it from the channel).
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+          sound: 'default',
+          autoDismiss: true,
           data: {
             owner: OWNED,
             schedule_id: occurrence.schedule_id,
@@ -217,6 +240,8 @@ export async function fireTestNotification(): Promise<{ ok: boolean; reason?: st
         title: 'MyPro notifications are on',
         body: 'This is a test. Event reminders and your brief will arrive like this.',
         color: ACCENT,
+        priority: Notifications.AndroidNotificationPriority.HIGH,
+        sound: 'default',
         data: { owner: OWNED, hash: '' },
       },
       // A small delay rather than null: an immediate trigger can be swallowed
@@ -233,6 +258,9 @@ export async function fireTestNotification(): Promise<{ ok: boolean; reason?: st
   }
 }
 
+/** The Expo push token this device registered with, kept to withdraw it. */
+let pushToken: string | null = null;
+
 /**
  * Register this device for push (Phase 8.4).
  *
@@ -240,33 +268,129 @@ export async function fireTestNotification(): Promise<{ ok: boolean; reason?: st
  * the token is an **Expo** push token: Expo's gateway fronts FCM and needs no
  * server key, which is what keeps this inside the zero-cost rule.
  *
- * It needs an EAS project id, and a standalone APK additionally needs a
- * Firebase `google-services.json`. Neither is set up yet, so this returns a
- * reason instead of throwing — the clock does not depend on it.
+ * It needs an EAS project id (`EAS_PROJECT_ID` at build time, see
+ * `app.config.js`) and a Firebase `google-services.json` in the APK. Without
+ * them this returns a reason instead of throwing — the clock does not depend
+ * on it, and nothing pretends push works when it cannot.
+ *
+ * `armedAt` tells the laptop when this device last armed its local reminders,
+ * so it never pushes a reminder the phone will already show itself.
  */
-export async function registerForPush(): Promise<{ ok: boolean; reason?: string }> {
+export async function registerForPush(armedAt?: Date): Promise<{ ok: boolean; reason?: string }> {
   if (!Device.isDevice) return { ok: false, reason: 'Push needs a real device, not an emulator.' };
   if (!(await ensurePermission())) return { ok: false, reason: 'Notifications are not allowed.' };
+  if (!(await client.auth.getSession())) return { ok: false, reason: 'Not signed in.' };
   await ensureChannel();
 
-  const projectId =
-    Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId ?? null;
+  const projectId = easProjectId();
   if (!projectId) {
     return {
       ok: false,
-      reason: 'No EAS project id — local notifications still work; push does not.',
+      reason: 'Push is not configured in this build — reminders still arrive; instant alerts do not.',
     };
   }
 
   try {
     const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
+    pushToken = token;
     await client.api.devices.register({
       channel_type: 'fcm',
       token,
       platform: `android/${Device.modelName ?? 'unknown'}`,
+      ...(armedAt ? { armed_at: armedAt.toISOString() } : {}),
     });
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : 'Could not register for push.' };
   }
+}
+
+function easProjectId(): string | null {
+  return (
+    (Constants.expoConfig?.extra?.eas?.projectId as string | undefined) ??
+    Constants.easConfig?.projectId ??
+    null
+  );
+}
+
+/**
+ * The whole native clock, in order: arm the next 48 hours, then (re)register
+ * for push stamped with the arming time. One function so every trigger —
+ * launch, foreground, background, a schedule edited in the web — does both.
+ * Serialised: overlapping arms would cancel each other's work half-way.
+ */
+let syncing: Promise<void> | null = null;
+let syncAgain = false;
+export function syncClock(): Promise<void> {
+  if (syncing) {
+    syncAgain = true;
+    return syncing;
+  }
+  syncing = (async () => {
+    try {
+      do {
+        syncAgain = false;
+        const armed = await armUpcoming();
+        await registerForPush(armed !== null ? new Date() : undefined);
+      } while (syncAgain);
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+/**
+ * Sign-out cleanup, run *before* the native session is cleared so the push
+ * withdrawal still carries a valid token. Cancels every reminder we armed and
+ * dismisses ours from the shade — a signed-out phone must not keep showing the
+ * account's reminders on its lock screen for the next 48 hours.
+ */
+export async function clearDeviceForSignOut(): Promise<void> {
+  await cancelOwned().catch(() => undefined);
+  await Notifications.dismissAllNotificationsAsync().catch(() => undefined);
+  const token = pushToken;
+  pushToken = null;
+  if (token) await client.api.devices.unregister(token).catch(() => undefined);
+}
+
+/** What the web's Settings shows about notifications on this phone. */
+export interface NotificationStatus {
+  permission: 'granted' | 'denied' | 'undetermined';
+  canAskAgain: boolean;
+  push: 'ready' | 'unconfigured' | 'unavailable';
+  pushReason: string | null;
+  armed: number;
+}
+
+export async function notificationStatus(): Promise<NotificationStatus> {
+  const perm = await Notifications.getPermissionsAsync();
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
+  const armed = scheduled.filter(
+    (n) => (n.content.data as { owner?: string } | null)?.owner === OWNED,
+  ).length;
+  const projectId = easProjectId();
+  return {
+    permission: perm.granted ? 'granted' : perm.status === 'denied' ? 'denied' : 'undetermined',
+    canAskAgain: perm.canAskAgain,
+    push: pushToken ? 'ready' : projectId ? 'unavailable' : 'unconfigured',
+    pushReason: pushToken
+      ? null
+      : projectId
+        ? Device.isDevice
+          ? 'Could not register for instant alerts yet.'
+          : 'Push needs a real device.'
+        : 'This build has no push configuration; scheduled reminders still work.',
+    armed,
+  };
+}
+
+/** Ask again if Android still lets us; otherwise open the app's settings page. */
+export async function requestPermissionOrOpenSettings(): Promise<void> {
+  const perm = await Notifications.getPermissionsAsync();
+  if (!perm.granted && perm.canAskAgain) {
+    const asked = await Notifications.requestPermissionsAsync();
+    if (asked.granted) return;
+  }
+  await Linking.openSettings().catch(() => undefined);
 }

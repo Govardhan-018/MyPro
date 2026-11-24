@@ -185,3 +185,21 @@ export function usePush(enabled: boolean): PushState {
 
   return { status, reason, subscribe, unsubscribe };
 }
+
+/**
+ * Sign-out cleanup: withdraw this browser's push subscription *while the
+ * session is still valid*, so a signed-out browser stops receiving the
+ * account's notifications (on a shared computer, to whoever is there next).
+ * Bounded so a slow network never holds up the sign-out itself.
+ */
+export async function releasePushOnSignOut(timeoutMs = 2500): Promise<void> {
+  if (!canPush()) return;
+  const work = (async () => {
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return;
+    await api.devices.unregister(JSON.stringify(sub.toJSON())).catch(() => undefined);
+    await sub.unsubscribe().catch(() => undefined);
+  })().catch(() => undefined);
+  await Promise.race([work, new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
+}

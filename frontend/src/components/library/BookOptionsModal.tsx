@@ -157,22 +157,28 @@ export function BookOptionsModal({
 
   // Option 2: Explicitly Begin Upload & Sync with MyPro (Supabase)
   const handleBeginCloudSync = async () => {
-    setStorageOption("sync");
     setIsUploading(true);
     setUploadPercent(0);
     setUploadedBytes(0);
 
     const fName = selectedFileName || `${book.title}.pdf`;
-    await performSupabaseUpload(fName, fileSizeBytes, (pct, bytes) => {
-      setUploadPercent(pct);
-      setUploadedBytes(bytes);
-    });
-
-    setIsUploading(false);
-    setCurrentSyncStatus("synced");
-    onImportPdf(book.title, fName, "sync", detectedPages, "synced", fileSizeBytes);
-    setActionNotice("Uploaded to your private Supabase storage bucket & synced!");
-    setTimeout(() => setActionNotice(""), 3500);
+    try {
+      await performSupabaseUpload(fName, fileSizeBytes, (pct, bytes) => {
+        setUploadPercent(pct);
+        setUploadedBytes(bytes);
+      });
+      setStorageOption("sync");
+      setCurrentSyncStatus("synced");
+      onImportPdf(book.title, fName, "sync", detectedPages, "synced", fileSizeBytes);
+      setActionNotice("Uploaded and synced.");
+    } catch (error) {
+      // Never report a sync that did not happen; the file stays on the device.
+      setStorageOption("device");
+      setActionNotice(error instanceof Error ? error.message : "Could not upload this PDF.");
+    } finally {
+      setIsUploading(false);
+      setTimeout(() => setActionNotice(""), 5000);
+    }
   };
 
   const handleLaunchReader = () => {

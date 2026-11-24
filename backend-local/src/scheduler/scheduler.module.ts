@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { LlmModule } from '../llm/llm.module';
 import { LocalNotificationsModule } from '../notifications/notifications.module';
+import { AssistantModule } from '../assistant/assistant.module';
+import { LocalGmailModule } from '../gmail/gmail.module';
 import { SchedulerService } from './scheduler.service';
+import { UserSessionBroker } from './user-session.broker';
 
 /**
  * The laptop owns the clock's *work* (Phase 11.1). Firing on time is the
@@ -9,8 +12,8 @@ import { SchedulerService } from './scheduler.service';
  * drains whatever fell due while the machine was shut.
  */
 @Module({
-  imports: [LlmModule, LocalNotificationsModule],
-  providers: [SchedulerService],
+  imports: [LlmModule, LocalNotificationsModule, AssistantModule, LocalGmailModule],
+  providers: [SchedulerService, UserSessionBroker],
   exports: [SchedulerService],
 })
 export class SchedulerModule {}

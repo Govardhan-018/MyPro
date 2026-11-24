@@ -80,7 +80,12 @@ export class GoogleOAuthService {
    * cannot attach their mailbox to someone else's account by crafting a
    * callback URL, which is the whole CSRF surface of an OAuth connect flow.
    */
-  authUrl(creds: GoogleCreds, userId: string, level: GmailAccessLevel = 'send'): string {
+  authUrl(
+    creds: GoogleCreds,
+    userId: string,
+    level: GmailAccessLevel = 'send',
+    returnTo: 'web' | 'app' = 'web',
+  ): string {
     const { clientId, redirectUri } = creds;
     const params = new URLSearchParams({
       client_id: clientId,
@@ -92,19 +97,24 @@ export class GoogleOAuthService {
       access_type: 'offline',
       prompt: 'consent',
       include_granted_scopes: 'true',
-      state: this.signState(userId),
+      state: this.signState(userId, returnTo),
     });
     return `${AUTH_ENDPOINT}?${params.toString()}`;
   }
 
-  signState(userId: string): string {
+  signState(userId: string, returnTo: 'web' | 'app' = 'web'): string {
     const nonce = randomBytes(8).toString('hex');
-    const payload = `${userId}.${Date.now()}.${nonce}`;
+    // returnTo is inside the signed payload, so it cannot be flipped to send a
+    // web user's browser into an app link (or the other way round).
+    const payload = `${userId}.${Date.now()}.${nonce}.${returnTo}`;
     return `${Buffer.from(payload).toString('base64url')}.${this.sign(payload)}`;
   }
 
-  /** @returns the user id the state was issued for, or null if it is not ours. */
-  verifyState(state: string): string | null {
+  /**
+   * @returns who the state was issued for and where the flow returns to, or
+   * null if it is not ours or has expired.
+   */
+  verifyState(state: string): { userId: string; returnTo: 'web' | 'app' } | null {
     const [encoded, signature] = state.split('.');
     if (!encoded || !signature) return null;
 
@@ -123,10 +133,10 @@ export class GoogleOAuthService {
       return null;
     }
 
-    const [userId, issuedAt] = payload.split('.');
+    const [userId, issuedAt, , returnTo] = payload.split('.');
     if (!userId || !issuedAt) return null;
     if (Date.now() - Number(issuedAt) > STATE_TTL_MS) return null;
-    return userId;
+    return { userId, returnTo: returnTo === 'app' ? 'app' : 'web' };
   }
 
   /**

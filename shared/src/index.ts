@@ -42,7 +42,7 @@ export {
   type AuthSession,
   type AuthUser,
 } from './auth';
-export { createApi, type ApiClient, ApiError, AgentOfflineError } from './api';
+export { createApi, type ApiClient, type GmailOAuthStatus, ApiError, AgentOfflineError } from './api';
 export {
   createPdfTextSource,
   groupBlocks,

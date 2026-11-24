@@ -2959,7 +2959,7 @@ button {
   max-width: 700px;
   padding: 8px 18px;
 }
-.settings-card button {
+.settings-card > button {
   width: 100%;
   border: 0;
   border-top: 1px solid var(--line);
@@ -2973,19 +2973,19 @@ button {
   color: var(--graphite);
   font-size: 11px;
 }
-.settings-card button:first-child {
+.settings-card > button:first-child {
   border: 0;
 }
-.settings-card small {
+.settings-card > button small {
   color: var(--soft);
   font-size: 9px;
 }
-.settings-card button.settings-signout {
+.settings-card > button.settings-signout {
   display: flex;
   gap: 12px;
   color: #ffffff;
 }
-.settings-card button.settings-signout small {
+.settings-card > button.settings-signout small {
   margin-left: auto;
 }
 
@@ -5898,11 +5898,11 @@ button {
   .settings-card {
     padding: 4px 16px;
   }
-  .settings-card button {
+  .settings-card > button {
     min-height: 60px;
     font-size: 15px;
   }
-  .settings-card button:first-child {
+  .settings-card > button:first-child {
     border-top: 0;
   }
 
@@ -7898,4 +7898,515 @@ button {
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- Settings: error hint, collapsed developer setup, copyable field ---- */
+.settings-hint.settings-hint-error {
+  color: #ff8a8a;
+}
+.settings-advanced {
+  margin-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+.settings-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.55);
+  list-style: none;
+  padding: 6px 0;
+}
+.settings-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-advanced[open] > summary {
+  color: rgba(255, 255, 255, 0.8);
+}
+.copy-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.copy-field input {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* =====================================================================
+   Scheduler — three modes, mobile first (Remind me · AI message · Email)
+   One column by default; nothing is allowed to push past the viewport.
+   ===================================================================== */
+
+.sched {
+  min-width: 0;
+  max-width: 760px;
+}
+.sched *,
+.sched *::before,
+.sched *::after {
+  min-width: 0;
+}
+.sched-heading {
+  align-items: flex-start;
+  gap: 14px;
+}
+.sched-heading p {
+  margin: 0;
+}
+.sched-new {
+  flex: none;
+}
+.sched-link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  font: inherit;
+  cursor: pointer;
+}
+.sched-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sched-inline-banner {
+  margin: 0;
+}
+
+/* ---- the form ---- */
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  margin-bottom: 18px;
+  scroll-margin-top: 12px;
+}
+.sched-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sched-form-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sched-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.sched-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.85);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+.sched-mode strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.sched-mode small {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.5);
+}
+.sched-mode.selected {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.08);
+}
+.color-mode .sched-mode.selected {
+  border-color: var(--accent);
+}
+.sched-mode.locked {
+  opacity: 0.5;
+}
+.sched-mode:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sched-field > span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+.sched-field input,
+.sched-field textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  /* 16px keeps mobile browsers from zooming into the field on focus. */
+  font-size: 16px;
+  line-height: 1.4;
+  color-scheme: dark;
+  scroll-margin: 96px 0;
+}
+.sched-field textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+.sched-field input:focus,
+.sched-field textarea:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.sched-field.invalid input,
+.sched-field.invalid textarea,
+.sched-field.invalid .sched-days {
+  border-color: rgba(255, 120, 120, 0.7);
+}
+
+.sched-segment {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 3px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sched-segment button {
+  padding: 9px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 14px;
+  cursor: pointer;
+}
+.sched-segment button.selected {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-weight: 600;
+}
+
+.sched-when {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.sched-when.time-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sched-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+.sched-days button {
+  aspect-ratio: 1;
+  max-height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+}
+.sched-days button.selected {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
+  font-weight: 600;
+}
+
+.sched-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.sched-check input {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.sched-check span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sched-check strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.sched-check small {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.sched-note {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.sched-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 10px;
+}
+.sched-actions button {
+  justify-content: center;
+  min-height: 46px;
+}
+
+/* ---- the list ---- */
+.sched-list {
+  padding: 18px;
+}
+.sched-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.sched-list-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.sched-list-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.sched-refresh {
+  width: 30px;
+  height: 30px;
+}
+.sched-empty {
+  display: flex;
+  gap: 12px;
+  padding: 18px 2px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.sched-empty p {
+  margin: 4px 0 12px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.sched-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sched-row {
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sched-row:first-child {
+  border-top: 0;
+}
+.sched-row.paused .sched-row-text {
+  opacity: 0.55;
+}
+.sched-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sched-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: rgba(255, 255, 255, 0.75);
+}
+.sched-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+}
+.sched-chip.tone-bad {
+  border-color: rgba(255, 120, 120, 0.55);
+  color: #ffb3b3;
+}
+.sched-chip.tone-warn {
+  border-color: rgba(255, 210, 120, 0.5);
+  color: #ffe2a8;
+}
+.sched-chip.tone-muted {
+  color: rgba(255, 255, 255, 0.45);
+}
+.sched-row-text {
+  margin: 6px 0 4px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: #fff;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sched-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.sched-row-meta span {
+  overflow-wrap: anywhere;
+}
+.sched-row-detail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #ffb3b3;
+  overflow-wrap: anywhere;
+}
+.sched-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.sched-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  cursor: pointer;
+}
+.sched-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sched-action.danger {
+  border-color: rgba(255, 120, 120, 0.55);
+  color: #ffb3b3;
+}
+.sched-action .rotated {
+  transform: rotate(180deg);
+}
+.sched-confirm {
+  display: inline-flex;
+  gap: 6px;
+}
+.sched-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.sched-run {
+  display: grid;
+  grid-template-columns: 8px auto 1fr;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+.sched-run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+.sched-run.status-success .sched-run-dot {
+  background: #9be59b;
+}
+.sched-run.status-failed .sched-run-dot {
+  background: #ff8a8a;
+}
+.sched-run.status-retrying .sched-run-dot,
+.sched-run.status-deferred .sched-run-dot,
+.sched-run.status-pending_confirmation .sched-run-dot {
+  background: #ffd27a;
+}
+.sched-run-when {
+  color: rgba(255, 255, 255, 0.55);
+}
+.sched-run-status {
+  color: #fff;
+}
+.sched-run-detail {
+  grid-column: 2 / -1;
+  color: rgba(255, 255, 255, 0.5);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .sched-form,
+  .sched-list {
+    padding: 14px;
+    border-radius: 18px;
+  }
+  .sched-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sched-mode {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+  }
+  .sched-mode small {
+    margin-left: auto;
+    text-align: right;
+  }
+  .sched-heading h1 {
+    font-size: 26px;
+  }
+}
+@media (max-width: 360px) {
+  .sched-when {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sched-mode small {
+    display: none;
+  }
 }

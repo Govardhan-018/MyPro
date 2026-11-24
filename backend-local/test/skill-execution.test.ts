@@ -309,7 +309,7 @@ describe('update_interest', () => {
 });
 
 describe('create_schedule', () => {
-  it('formats the local time and seeds next_run_at', async () => {
+  it('formats the local time and seeds next_run_at with the first real occurrence', async () => {
     const { client, calls } = makeDb();
     await skill('create_schedule').run(
       { name: 'Morning brief', action_type: 'report', recurrence: 'daily', time_of_day: '08:30' },
@@ -318,7 +318,9 @@ describe('create_schedule', () => {
     const row = only(calls, 'assistant_schedules').payload;
     expect(row.time_of_day).toBe('08:30:00');
     expect(row.timezone).toBe('Asia/Kolkata');
-    expect(row.next_run_at).toBe(NOW.toISOString());
+    // Not "now" (that fired a morning brief the moment it was created): the
+    // next 08:30 in the user's zone. NOW is 15:30 IST, so tomorrow 08:30 IST.
+    expect(row.next_run_at).toBe('2026-11-24T03:00:00.000Z');
   });
 
   it('writes de-duplicated weekday rows for a weekly schedule', async () => {

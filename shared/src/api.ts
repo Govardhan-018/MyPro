@@ -47,6 +47,14 @@ export class AgentOfflineError extends Error {
 
 type Query = Record<string, string | number | boolean | undefined>;
 
+/** What `/gmail/status` reports. */
+export interface GmailOAuthStatus {
+  configured: boolean;
+  source: 'settings' | 'env' | null;
+  /** This server's OAuth callback URL (derived server-side), or null if unknown. */
+  redirect_uri: string | null;
+}
+
 function withQuery(path: string, query?: Query): string {
   if (!query) return path;
   const params = new URLSearchParams();
@@ -78,7 +86,7 @@ export type ApiClient = ReturnType<typeof createApi>;
  */
 export function createApi(
   env: EnvConfig,
-  auth: Pick<Auth, 'getAccessToken'>,
+  auth: Pick<Auth, 'getAccessToken'> & Partial<Pick<Auth, 'handleUnauthorized' | 'getSession'>>,
   fetchImpl?: typeof fetch,
 ) {
   const doFetch: typeof fetch =
@@ -127,19 +135,52 @@ export function createApi(
     const token = await auth.getAccessToken();
     if (!token) throw new ApiError('Not signed in', 401);
 
-    const res = await doFetch(`${root}${withQuery(path, query)}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const send = (bearer: string) =>
+      doFetch(`${root}${withQuery(path, query)}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+
+    let res = await send(token);
+
+    // The one place an expired/revoked session is detected. A 401 means the
+    // server rejected the bearer (expired early, revoked on another device, a
+    // clock skew): refresh once (shared across concurrent callers) and retry.
+    // If the refresh token is dead the auth layer clears the session and fires
+    // the expiry event exactly once — the UI then routes to sign-in. Every
+    // later call short-circuits on "Not signed in" without touching the
+    // network, so nothing keeps hammering the API with a dead token.
+    if (res.status === 401 && auth.handleUnauthorized) {
+      const retryWith = await auth.handleUnauthorized(token);
+      if (retryWith) {
+        res = await send(retryWith);
+      } else {
+        const still = auth.getSession ? await auth.getSession() : null;
+        if (!still) throw new ApiError('Your session has expired. Sign in again.', 401);
+        // The session survives (a transient refresh failure): say so honestly
+        // instead of pretending the user was signed out.
+        throw new ApiError('Could not renew your session — check your connection.', 503);
+      }
+    }
 
     if (res.status === 204) return undefined as T;
 
     const text = await res.text();
-    const parsed: unknown = text ? JSON.parse(text) : null;
+    // A cold Render instance or a proxy answers with an HTML error page; never
+    // surface "Unexpected token <" to a person.
+    let parsed: unknown = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        if (res.ok) throw new ApiError('The server sent an unreadable response.', res.status);
+        parsed = null;
+      }
+    }
 
     if (!res.ok) {
       const message =
@@ -318,6 +359,8 @@ export function createApi(
         channel_type: 'web_push' | 'fcm' | 'telegram';
         token: string;
         platform?: string;
+        /** ISO time this device last armed its local notifications. */
+        armed_at?: string;
       }) => post<{ id: string; channel_type: string; platform: string | null }>('/devices', body),
       remove: (id: string) => del(`/devices/${id}`),
       /**
@@ -335,31 +378,28 @@ export function createApi(
      * OAuth tokens and the key that decrypts them.
      */
     gmail: {
-      /** Whether the server can run a connect flow at all, and from where. */
-      status: () =>
-        get<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/status'),
+      /**
+       * Whether the server can run a connect flow at all, where its Google app
+       * credentials come from, and the callback URL the server answers on (for
+       * the one-time developer setup — never something a user types).
+       */
+      status: () => get<GmailOAuthStatus>('/gmail/status'),
       /** Status of the in-app Google OAuth app credentials (never the secret). */
-      oauthConfig: () =>
-        get<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config'),
+      oauthConfig: () => get<GmailOAuthStatus>('/gmail/oauth-config'),
       /** Save the Google OAuth app credentials (stored encrypted, write-only). */
-      saveOauthConfig: (body: {
-        client_id: string;
-        client_secret: string;
-        redirect_uri: string;
-      }) =>
-        post<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config', body),
-      /** Delete the in-app credentials (connect then falls back to env, if any). */
-      deleteOauthConfig: () =>
-        del<{ configured: boolean; source: 'settings' | 'env' | null }>('/gmail/oauth-config'),
+      saveOauthConfig: (body: { client_id: string; client_secret: string }) =>
+        post<GmailOAuthStatus>('/gmail/oauth-config', body),
+      /** Delete the in-app credentials. */
+      deleteOauthConfig: () => del<GmailOAuthStatus>('/gmail/oauth-config'),
       accounts: () => get<GmailAccountRow[]>('/gmail/accounts'),
       /**
-       * Returns Google's consent URL. The caller navigates to it; Google
-       * redirects back to render, which returns the browser to the app with
-       * `?gmail=connected`. `mode` chooses the access requested for this
-       * mailbox — `'read'` (read-only) or `'send'` (read + send).
+       * Start connecting a mailbox: returns Google's consent URL. Google's
+       * redirect lands on render, which returns to the web app (`?gmail=…`)
+       * or, from the Android app, to `mypro://gmail?…`. `mode` chooses the
+       * access requested for this mailbox: read-only, or read + send.
        */
-      connect: (mode: GmailAccessLevel = 'read') =>
-        post<{ url: string }>('/gmail/connect', { mode }),
+      connect: (mode: GmailAccessLevel = 'send', returnTo: 'web' | 'app' = 'web') =>
+        post<{ url: string }>('/gmail/connect', { mode, return_to: returnTo }),
       removeAccount: (id: string) => del(`/gmail/accounts/${id}`),
       /**
        * Sync now. Request-driven on purpose — render is allowed to sleep, so

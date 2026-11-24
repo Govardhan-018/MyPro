@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from './api';
 import { isApiConfigured } from './env';
+import { requestShellRearm } from './shell';
 
 export interface CalEvent {
   id: string;
@@ -337,6 +338,8 @@ export function useCalendar(focus: Date): CalendarState {
     }
     const row = await api.calendar.createEvent(body);
     setEvents((cur) => [...cur, rowToEvent(row as Record<string, unknown>)].sort(byStart));
+    // Its reminders (1h before, at start) belong on the phone's clock now.
+    requestShellRearm();
   };
 
   const updateEvent = async (id: string, input: NewEventInput) => {
@@ -367,11 +370,14 @@ export function useCalendar(focus: Date): CalendarState {
     setEvents((cur) =>
       cur.map((ev) => (ev.id === id ? rowToEvent(row as Record<string, unknown>) : ev)).sort(byStart),
     );
+    requestShellRearm();
   };
 
   const deleteEvent = async (id: string) => {
     if (configured) await api.calendar.deleteEvent(id);
     setEvents((cur) => cur.filter((ev) => ev.id !== id));
+    // A deleted event's reminders must not fire.
+    if (configured) requestShellRearm();
   };
 
   const setCompletion = (id: string, completedAt: string | undefined) =>

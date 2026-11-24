@@ -40,6 +40,11 @@ jobs:
       # the legacy native screens instead of the shell.
       EXPO_PUBLIC_WEB_URL: ${{ secrets.EXPO_PUBLIC_WEB_URL }}
       EXPO_PUBLIC_SHELL: ${{ vars.EXPO_PUBLIC_SHELL }}
+      # Push (instant alerts with the app closed). Optional: without them the
+      # APK still builds and scheduled reminders still fire locally. See
+      # android/app.config.js.
+      EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+      GOOGLE_SERVICES_JSON_CONTENT: ${{ secrets.GOOGLE_SERVICES_JSON }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +83,13 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Write google-services.json (push)
+        if: ${{ env.GOOGLE_SERVICES_JSON_CONTENT != '' }}
+        working-directory: android
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON_CONTENT" > google-services.json
+          echo "GOOGLE_SERVICES_JSON=./google-services.json" >> "$GITHUB_ENV"
 
       - name: Generate native Android project
         working-directory: android

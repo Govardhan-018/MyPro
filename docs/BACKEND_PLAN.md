@@ -413,7 +413,8 @@ device_tokens(
   token text,                           -- web-push subscription JSON or FCM token
   telegram_chat_id text,
   platform text, last_seen_at timestamptz,
-  unique(user_id, token)
+  armed_at timestamptz,                 -- 0022: when an Android device last armed its local clock
+  unique(user_id, token)                -- and a token belongs to ONE user: register() drops other owners
 )
 notifications(
   id, user_id, title, body, deeplink text,
@@ -422,10 +423,11 @@ notifications(
 ```
 
 **Run history:** `schedule_runs.status` is
-`success | failed | skipped | pending_confirmation | deferred`. `deferred` was
+`success | failed | skipped | pending_confirmation | deferred | retrying`. `deferred` was
 added in `0007_schedule_run_deferred.sql` — the scheduler had always written it
 when a job waited for the sleeping laptop, but the original constraint rejected
-it and the error was discarded, so those runs were never recorded.
+it and the error was discarded, so those runs were never recorded. `0022` adds
+`retrying` plus `attempt` and `result` (the AI reply / email subject) per run.
 
 **4NF notes:** multivalued facts (a message's labels, an event's reminders, a record's medications/symptoms/documents, a task's tags, a user's phones) each live in their own table — no arrays, no repeating columns, no type-discriminated nullable blobs. Subtype tables keep `library_items` lean. Junctions (`*_tags`, `collection_items`, `email_message_labels`) carry only the relationship.
 
@@ -602,8 +604,23 @@ verification review for the restricted `gmail.readonly` scope.
     If nothing generated one, the app composes the plain version itself.
   - **Inactivity nudge** — if `now - last_active_at > inactivity_hours` and
     not already nudged in this quiet stretch.
-  - **Scheduled actions** from `assistant_schedules` (`notify`, `report`,
-    `chat_message`, `email`).
+  - **Scheduled actions** from `assistant_schedules` — the three user modes
+    plus the legacy brief:
+    - `notify` (**Remind me**, `{title, body}`): armed on the phone as a local
+      notification; the agent pushes only to devices that did not arm it
+      (`device_tokens.armed_at` vs the row's `updated_at`).
+    - `chat_message` (**AI message**, `{prompt}`): the full agent runs *as the
+      user* (a short-lived session minted by `UserSessionBroker`, revoked after
+      the run, so RLS applies), the reply lands in the primary chat, and a
+      "Done" notification follows. Legacy `{text}` rows post verbatim.
+    - `email` (**Email**, `{to, prompt}`): the model writes `{subject, body}`,
+      render's `/internal/gmail/send` sends it from a send-scoped mailbox;
+      `requires_confirmation` parks it as a `send_email` pending action instead.
+    - **Exactly-once-or-not-at-all:** a due row is *claimed* (conditional
+      update on `next_run_at`) before anything outward happens. Failures that
+      certainly did nothing (model down, mail service unreachable) retry at
+      2/10/30 min (`deferred_count` = attempts); a timeout that may have sent
+      is never retried.
   - A *recurring* job more than `SCHEDULER_STALE_MINUTES` late is **skipped**
     to its next occurrence; one-shots always fire. Catch-up is right for
     syncing and summarising, wrong for anything whose value is its timing.
@@ -665,7 +682,8 @@ channels: `push | telegram | email | in_app`. Full field table in `backend/READM
 **render** — everything except `/assistant/*` and `/skills/*`:
 
 ```
-/api/v1/auth/signup|login|refresh        POST          (auth is brokered here)
+/api/v1/auth/signup|login|refresh        POST          (auth is brokered here; refresh: 401 = token dead, 503 = Supabase unreachable)
+/api/v1/auth/logout                      POST          (revokes this device's session; no guard — works with an expired token)
 /api/v1/me                               GET/PATCH
 /api/v1/me/activity                      POST          (heartbeat → inactivity nudge)
 /api/v1/me/realtime                      GET           (project URL + publishable key)

@@ -23,7 +23,7 @@ import {
   getLocalDbUsage,
   formatBytes,
   performSupabaseUpload,
-  storePdfLocally,
+  getPdfLocally,
   deletePdfLocally,
 } from "../../utils/pdfStorage";
 
@@ -114,29 +114,36 @@ export function StorageSyncView({
     setConfirmDialog({ isOpen: false, book: null, targetMode: "device" });
 
     if (targetMode === "sync") {
-      // Move from Local to Cloud
+      // Move from Local to Cloud — and only delete the local copy once the
+      // cloud really holds it. (It used to delete after a *simulated* upload,
+      // destroying the only copy of the book.)
       setSyncingTitle(book.title);
       setSyncProgress(0);
-      await performSupabaseUpload(
-        book.pdfFileName || `${book.title}.pdf`,
-        book.fileSizeBytes || 5000000,
-        (pct) => setSyncProgress(pct),
-      );
-      await deletePdfLocally(book.title);
-      onUpdateBookStorage(book.title, "sync", "synced", "Just now");
-      setSyncingTitle(null);
-      triggerToast(`“${book.title}” moved to encrypted Supabase Cloud Storage.`);
+      try {
+        await performSupabaseUpload(
+          book.pdfFileName || `${book.title}.pdf`,
+          book.fileSizeBytes || 0,
+          (pct) => setSyncProgress(pct),
+        );
+        await deletePdfLocally(book.title);
+        onUpdateBookStorage(book.title, "sync", "synced", "Just now");
+        triggerToast(`“${book.title}” moved to cloud storage.`);
+      } catch (error) {
+        triggerToast(error instanceof Error ? error.message : "Could not upload this PDF.");
+      } finally {
+        setSyncingTitle(null);
+      }
     } else {
-      // Move from Cloud to Local
-      setSyncingTitle(book.title);
-      setSyncProgress(30);
-      // Simulate local IndexedDB download
-      const dummyBlob = new Blob(["PDF_BINARY_DATA"], { type: "application/pdf" });
-      await storePdfLocally(book.title, dummyBlob, book.pdfFileName || `${book.title}.pdf`);
-      setSyncProgress(100);
-      onUpdateBookStorage(book.title, "device", "local");
-      setSyncingTitle(null);
-      triggerToast(`“${book.title}” stored locally in IndexedDB (Offline ready).`);
+      // Move from Cloud to Local. There is no cloud copy to download (see
+      // performSupabaseUpload), so never write a placeholder in its place —
+      // that used to store a fake "PDF" the reader could not open.
+      const existing = await getPdfLocally(book.title).catch(() => null);
+      if (existing) {
+        onUpdateBookStorage(book.title, "device", "local");
+        triggerToast(`“${book.title}” is stored on this device.`);
+      } else {
+        triggerToast(`There’s no cloud copy of “${book.title}” to download — import the PDF again on this device.`);
+      }
     }
   };
 
@@ -146,13 +153,17 @@ export function StorageSyncView({
     setSyncProgress(0);
     performSupabaseUpload(
       book.pdfFileName || `${book.title}.pdf`,
-      book.fileSizeBytes || 5000000,
+      book.fileSizeBytes || 0,
       (pct) => setSyncProgress(pct),
-    ).then(() => {
-      onUpdateBookStorage(book.title, "sync", "synced", "Just now");
-      setSyncingTitle(null);
-      triggerToast(`“${book.title}” reading progress synchronized.`);
-    });
+    )
+      .then(() => {
+        onUpdateBookStorage(book.title, "sync", "synced", "Just now");
+        triggerToast(`“${book.title}” synchronized.`);
+      })
+      .catch((error: unknown) => {
+        triggerToast(error instanceof Error ? error.message : "Could not sync this PDF.");
+      })
+      .finally(() => setSyncingTitle(null));
   };
 
   const cloudLimitBytes = 5 * 1024 * 1024 * 1024; // 5 GB Supabase Free Tier

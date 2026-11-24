@@ -106,10 +106,11 @@ import { useSession } from "./lib/useSession";
 import { useActivityHeartbeat } from "./lib/useActivityHeartbeat";
 import { useLibrary } from "./lib/useLibrary";
 import { useNotifications, type NotificationsState } from "./lib/useNotifications";
-import { usePush, type PushStatus } from "./lib/usePush";
-import { inShell, requestShellTestNotification } from "./lib/shell";
+import { releasePushOnSignOut, usePush, type PushStatus } from "./lib/usePush";
+import { useShellNotifications } from "./lib/useShellNotifications";
+import { inShell } from "./lib/shell";
 import { Loading } from "./components/ui";
-import { useGmail } from "./lib/useGmail";
+import { isGmailReturn, useGmail } from "./lib/useGmail";
 import { browserTimezone, useProfile, type ProfileState } from "./lib/useProfile";
 import { annotationRowToUi, bookmarkRowToUi, useReaderSync } from "./lib/readerSync";
 import {
@@ -316,17 +317,25 @@ function Welcome({
   onEnter,
   colorMode,
   onToggleColor,
+  notice,
 }: {
   onEnter: () => void;
   colorMode: boolean;
   onToggleColor: () => void;
+  /** Why the user is here, e.g. their session expired. Shown until they act. */
+  notice?: string;
 }) {
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [authState, setAuthState] = useState<"idle" | "loading" | "error" | "success">("idle");
-  const [feedback, setFeedback] = useState("");
+  const [feedback, setFeedback] = useState(notice ?? "");
+  // A notice that arrives while the page is already open (another tab's
+  // session expiring) replaces whatever idle text was there.
+  useEffect(() => {
+    if (notice) setFeedback(notice);
+  }, [notice]);
   const request = useSimulatedRequest();
 
   // Entrance plays once: the logo settles on first paint, and the copy and card
@@ -375,6 +384,9 @@ function Welcome({
   };
 
   const submitEmail = async () => {
+    // Enter in the password field bypasses the button's disabled state; one
+    // sign-in at a time, or two sessions race to be the stored one.
+    if (authState === "loading") return;
     if (!email.includes("@") || password.length < minPassword) {
       setAuthState("error");
       setFeedback(`Enter a valid email and a password with at least ${minPassword} characters.`);
@@ -2068,23 +2080,30 @@ function AssistantView() {
     if (!configured) return;
     let active = true;
 
-    api.assistant
-      .messages(50)
-      .then((history) => {
-        if (!active) return;
-        setMessages(
-          history
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({
-              id: m.id,
-              from: m.role === "assistant" ? "ai" : "user",
-              text: m.content ?? "",
-              time: fmtTime(m.created_at),
-              blocks: m.blocks,
-            })),
-        );
-      })
-      .catch(() => {});
+    const loadHistory = () =>
+      api.assistant
+        .messages(50)
+        .then((history) => {
+          if (!active) return;
+          setMessages(
+            history
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => ({
+                id: m.id,
+                from: m.role === "assistant" ? "ai" : "user",
+                text: m.content ?? "",
+                time: fmtTime(m.created_at),
+                blocks: m.blocks,
+              })),
+          );
+        })
+        .catch(() => {});
+    void loadHistory();
+    // A scheduled AI task (or the brief) writes into this conversation from
+    // the server. Its "done" notification arrives over Realtime; reload then,
+    // so the reply appears in an open chat without leaving and coming back.
+    const onServerMessage = () => void loadHistory();
+    window.addEventListener("mypro:assistant-updated", onServerMessage);
 
     // Who it is. Cosmetic, so a failure just leaves the default name.
     api.assistant
@@ -2110,10 +2129,15 @@ function AssistantView() {
       }
     };
     poll();
-    const timer = window.setInterval(poll, 30_000);
+    // Skip polling while the app is in the background: a hidden WebView or
+    // tab polling every 30s is battery and data spent on nothing.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void poll();
+    }, 30_000);
     return () => {
       active = false;
       window.clearInterval(timer);
+      window.removeEventListener("mypro:assistant-updated", onServerMessage);
     };
   }, [configured]);
 
@@ -4501,24 +4525,25 @@ function SettingsView({
   profile: ProfileState;
 }) {
   const [showStorage, setShowStorage] = useState(false);
+  // Coming back from Google's consent screen lands here with Mail open, so the
+  // result is shown where the user started.
   const [open, setOpen] = useState<
     "profile" | "notifications" | "mail" | "privacy" | null
-  >(null);
+  >(() => (isGmailReturn() ? "mail" : null));
   // Web push is disabled inside the native shell: the shell already runs its
   // own `registerForPush()` and `armUpcoming()`, so leaving this on would make
   // every notification arrive twice, drifting apart over time. The native clock
   // owns notifications in the app. (Android upgrade §2 — not optional.)
   const push = usePush(!!userEmail && !inShell);
+  const phone = useShellNotifications(!!userEmail && open === "notifications");
   const gmail = useGmail(!!userEmail);
   // The access a new mailbox is connected with — read-only, or read + send.
-  const [mailMode, setMailMode] = useState<GmailAccessLevel>("read");
+  // Read + send by default: scheduled emails need send access, and every send
+  // is still either scheduled by you or approved by you.
+  const [mailMode, setMailMode] = useState<GmailAccessLevel>("send");
   // The in-app Google OAuth app credentials form. Write-only: never pre-filled
   // from the server, since the secret is never returned.
-  const [oauthForm, setOauthForm] = useState({
-    client_id: "",
-    client_secret: "",
-    redirect_uri: "",
-  });
+  const [oauthForm, setOauthForm] = useState({ client_id: "", client_secret: "" });
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [savedNote, setSavedNote] = useState(false);
@@ -4674,25 +4699,76 @@ function SettingsView({
                  (it would double every alert), so offer a test instead. */
               <>
                 <div className="settings-status-row">
-                  <span className="settings-status-dot live-live" aria-hidden="true" />
+                  <span
+                    className={`settings-status-dot ${
+                      phone.status?.permission === "granted"
+                        ? "live-live"
+                        : phone.status
+                          ? "push-denied"
+                          : "live-connecting"
+                    }`}
+                    aria-hidden="true"
+                  />
                   <div>
-                    <strong>On this phone</strong>
+                    <strong>
+                      On this phone —{" "}
+                      {!phone.status
+                        ? "checking…"
+                        : phone.status.permission === "granted"
+                          ? "allowed"
+                          : "turned off"}
+                    </strong>
                     <small>
-                      Event reminders (an hour before and at the start) and your brief are scheduled
-                      on the device, so they arrive even with the app closed.
+                      {phone.status?.permission === "granted"
+                        ? `Reminders, event alerts and your brief are scheduled on the device, so they arrive with the app closed${
+                            phone.status.armed ? ` (${phone.status.armed} armed for the next 48 hours)` : ""
+                          }. They show as pop-ups and on the lock screen as your Android settings allow.`
+                        : phone.status
+                          ? "Android is blocking MyPro's notifications, so reminders cannot appear. Allow them to fix this."
+                          : "Asking the phone…"}
                     </small>
                   </div>
                 </div>
+                {phone.status && phone.status.permission === "granted" && (
+                  <div className="settings-status-row">
+                    <span
+                      className={`settings-status-dot ${
+                        phone.status.push === "ready" ? "live-live" : "live-offline"
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <strong>
+                        Instant alerts — {phone.status.push === "ready" ? "on" : "unavailable"}
+                      </strong>
+                      <small>
+                        {phone.status.push === "ready"
+                          ? "Finished AI tasks and sent emails reach you even with the app closed."
+                          : (phone.status.pushReason ??
+                            "Finished AI tasks show here and in the app; scheduled reminders are unaffected.")}
+                      </small>
+                    </div>
+                  </div>
+                )}
                 <div className="settings-panel-actions">
-                  <button
-                    className="primary-button"
-                    onClick={() => requestShellTestNotification()}
-                  >
-                    Send a test notification
+                  {phone.status && phone.status.permission !== "granted" ? (
+                    <button className="primary-button" onClick={phone.fix}>
+                      {phone.status.canAskAgain ? "Allow notifications" : "Open Android settings"}
+                    </button>
+                  ) : (
+                    <button className="primary-button" onClick={phone.sendTest}>
+                      Send a test notification
+                    </button>
+                  )}
+                  <button className="secondary-button" onClick={phone.fix}>
+                    Notification settings
                   </button>
                 </div>
+                {phone.testNote && <p className="settings-hint">{phone.testNote}</p>}
                 <p className="settings-hint">
-                  Not seeing it? Allow notifications for MyPro in Android Settings, then try again.
+                  Pop-ups not showing? In Android Settings → Notifications → MyPro, set the
+                  “Reminders” category to “Pop on screen”, and turn off battery optimisation for
+                  MyPro if alerts arrive late.
                 </p>
               </>
             ) : (
@@ -4758,109 +4834,25 @@ function SettingsView({
         </button>
         {open === "mail" && (
           <div className="settings-panel">
-            {!gmail.configured ? (
-              /* No Google app yet — let the user paste its credentials. They are
-                 stored encrypted server-side and never shown again (write-only). */
-              <>
-                <p className="settings-hint">
-                  To connect Gmail, create an OAuth app in{" "}
-                  <strong>Google Cloud Console</strong> (APIs &amp; Services →
-                  Credentials → OAuth client ID, type “Web application”), then paste its
-                  details here. They are stored <strong>encrypted</strong> and never shown
-                  again — to change them you delete and re-enter.
-                </p>
-                <label className="field-label">
-                  CLIENT ID
-                  <input
-                    value={oauthForm.client_id}
-                    onChange={(e) =>
-                      setOauthForm((f) => ({ ...f, client_id: e.target.value }))
-                    }
-                    placeholder="xxxxxxxx.apps.googleusercontent.com"
-                    autoComplete="off"
-                  />
-                </label>
-                <label className="field-label">
-                  CLIENT SECRET
-                  <input
-                    type="password"
-                    value={oauthForm.client_secret}
-                    onChange={(e) =>
-                      setOauthForm((f) => ({ ...f, client_secret: e.target.value }))
-                    }
-                    placeholder="GOCSPX-…"
-                    autoComplete="off"
-                  />
-                </label>
-                <label className="field-label">
-                  AUTHORISED REDIRECT URI
-                  <input
-                    value={oauthForm.redirect_uri}
-                    onChange={(e) =>
-                      setOauthForm((f) => ({ ...f, redirect_uri: e.target.value }))
-                    }
-                    placeholder="https://your-api.onrender.com/api/v1/gmail/callback"
-                    autoComplete="off"
-                  />
-                </label>
-                <p className="settings-hint">
-                  The redirect URI must be added to the OAuth client in Google Cloud, exactly
-                  as entered here. It ends in <code>/api/v1/gmail/callback</code>.
-                </p>
-                <div className="settings-panel-actions">
-                  <button
-                    className="primary-button"
-                    disabled={
-                      gmail.busy ||
-                      !oauthForm.client_id.trim() ||
-                      !oauthForm.client_secret.trim() ||
-                      !oauthForm.redirect_uri.trim()
-                    }
-                    onClick={async () => {
-                      await gmail.saveOauthConfig({
-                        client_id: oauthForm.client_id.trim(),
-                        client_secret: oauthForm.client_secret.trim(),
-                        redirect_uri: oauthForm.redirect_uri.trim(),
-                      });
-                      setOauthForm({ client_id: "", client_secret: "", redirect_uri: "" });
-                    }}
-                  >
-                    {gmail.busy ? "Saving…" : "Save Google app"}
-                  </button>
+            {/* Connection status first: what a person actually wants to know. */}
+            {gmail.loading ? (
+              <Loading variant="inline" size={16} text="Checking your mailboxes…" />
+            ) : !gmail.configured ? (
+              <div className="settings-status-row">
+                <span className="settings-status-dot push-denied" aria-hidden="true" />
+                <div>
+                  <strong>Gmail isn’t available on this server yet</strong>
+                  <small>
+                    Connecting Gmail needs a one-time setup by whoever runs this MyPro server.
+                    Once that’s done, you’ll just tap “Connect Gmail” and sign in with Google.
+                  </small>
                 </div>
-                {(gmail.note || gmail.error) && (
-                  <p className="settings-hint">{gmail.error ?? gmail.note}</p>
-                )}
-              </>
+              </div>
             ) : (
               <>
-                {/* Where the credentials live, and (if in-app) a way to remove them. */}
-                <div className="settings-status-row">
-                  <span className="settings-status-dot live-live" aria-hidden="true" />
-                  <div>
-                    <strong>
-                      Google app connected
-                      {gmail.source === "settings" ? " · stored encrypted in Settings" : " · from server config"}
-                    </strong>
-                    <small>
-                      {gmail.source === "settings"
-                        ? "The client secret is encrypted and never shown. Remove it to change it."
-                        : "Credentials come from the Render environment."}
-                    </small>
-                  </div>
-                  {gmail.source === "settings" && (
-                    <button
-                      className="settings-inline-action"
-                      onClick={() => void gmail.deleteOauthConfig()}
-                      disabled={gmail.busy}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-
                 {gmail.accounts.map((account) => {
                   const canSend = gmailScopesGrantSend(account.scopes);
+                  const broken = account.sync_state === "error";
                   return (
                     <div className="settings-status-row" key={account.id}>
                       <span
@@ -4871,12 +4863,12 @@ function SettingsView({
                         <strong>{account.email}</strong>
                         <small>
                           <span className={`mail-access-tag ${canSend ? "send" : "read"}`}>
-                            {canSend ? "Read & send" : "Read only"}
+                            {canSend ? "Can send" : "Read only"}
                           </span>
-                          {account.sync_error
-                            ? ` · ${account.sync_error}`
+                          {broken
+                            ? ` · Needs attention: ${account.sync_error ?? "reconnect this mailbox"}`
                             : account.history_id
-                              ? " · Synced — new mail arrives on the next sync."
+                              ? " · Connected and syncing."
                               : " · Connected. Sync to pull in your recent mail."}
                         </small>
                       </div>
@@ -4893,35 +4885,10 @@ function SettingsView({
 
                 {!gmail.accounts.length && (
                   <p className="settings-hint">
-                    Connect a mailbox and your companion can triage it with you.
+                    Connect Gmail so your companion can triage your inbox and send the
+                    emails you schedule. You’ll sign in with Google — nothing to configure.
                   </p>
                 )}
-
-                {/* Access level for the next mailbox. Per-account: one inbox
-                    can be read-only while another may be replied from. */}
-                <div
-                  className="mail-access-picker segmented"
-                  role="group"
-                  aria-label="Access for the mailbox you connect"
-                >
-                  {(["read", "send"] as GmailAccessLevel[]).map((level) => (
-                    <button
-                      key={level}
-                      type="button"
-                      className={mailMode === level ? "selected" : ""}
-                      aria-pressed={mailMode === level}
-                      onClick={() => setMailMode(level)}
-                      disabled={gmail.busy}
-                    >
-                      {level === "read" ? "Read only" : "Read & send"}
-                    </button>
-                  ))}
-                </div>
-                <p className="settings-hint">
-                  {mailMode === "send"
-                    ? "MyPro can read your mail and, with your approval each time, send replies from it."
-                    : "MyPro can read and triage this mailbox. It can never send from a read-only mailbox."}
-                </p>
 
                 <div className="settings-panel-actions">
                   <button
@@ -4929,7 +4896,11 @@ function SettingsView({
                     onClick={() => void gmail.connect(mailMode)}
                     disabled={gmail.busy}
                   >
-                    {gmail.accounts.length ? "Connect another" : "Connect Gmail"}
+                    {gmail.busy
+                      ? "Opening Google…"
+                      : gmail.accounts.length
+                        ? "Connect another"
+                        : "Connect Gmail"}
                   </button>
                   {gmail.accounts.length > 0 && (
                     <button
@@ -4937,19 +4908,130 @@ function SettingsView({
                       onClick={() => void gmail.sync()}
                       disabled={gmail.busy}
                     >
-                      {gmail.busy ? "Syncing…" : "Sync now"}
+                      Sync now
                     </button>
                   )}
                 </div>
 
-                {(gmail.note || gmail.error) && (
-                  <p className="settings-hint">{gmail.error ?? gmail.note}</p>
-                )}
-
-                <p className="settings-hint">
-                  Sender, subject and Gmail&rsquo;s preview only — never the message body.
-                </p>
+                {/* Access level for the next mailbox. Per-account: one inbox
+                    can be read-only while another may send scheduled email. */}
+                <label className="schedule-confirm-row">
+                  <input
+                    type="checkbox"
+                    checked={mailMode === "read"}
+                    onChange={(e) => setMailMode(e.target.checked ? "read" : "send")}
+                    disabled={gmail.busy}
+                  />
+                  <span>
+                    <strong>Read only</strong>
+                    <small>
+                      {mailMode === "read"
+                        ? "MyPro can read and triage this mailbox but never send from it — scheduled emails won’t work."
+                        : "Leave off to let MyPro send the emails you schedule or approve."}
+                    </small>
+                  </span>
+                </label>
               </>
+            )}
+
+            {(gmail.note || gmail.error) && (
+              <p className={`settings-hint ${gmail.error ? "settings-hint-error" : ""}`} role="status">
+                {gmail.error ?? gmail.note}
+              </p>
+            )}
+
+            {/* One-time server setup. Collapsed: a normal user never needs it. */}
+            {!gmail.loading && (!gmail.configured || gmail.source === "settings") && (
+              <details className="settings-advanced">
+                <summary>Developer setup</summary>
+                {gmail.source === "settings" ? (
+                  <div className="settings-status-row">
+                    <div>
+                      <strong>Google app stored encrypted on the server</strong>
+                      <small>The client secret is never shown. Remove it to replace it.</small>
+                    </div>
+                    <button
+                      className="settings-inline-action"
+                      onClick={() => void gmail.deleteOauthConfig()}
+                      disabled={gmail.busy}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <p className="settings-hint">
+                      Preferred: set <code>GOOGLE_CLIENT_ID</code> and{" "}
+                      <code>GOOGLE_CLIENT_SECRET</code> on the API service. Or paste a Google
+                      Cloud “Web application” OAuth client here — the secret is encrypted on
+                      the server and never shown again.
+                    </p>
+                    {gmail.redirectUri ? (
+                      <div className="field-label">
+                        AUTHORISED REDIRECT URI (ADD THIS IN GOOGLE CLOUD)
+                        <div className="link-input copy-field">
+                          <input value={gmail.redirectUri} readOnly aria-readonly="true" />
+                          <button
+                            type="button"
+                            className="settings-inline-action"
+                            onClick={() => void navigator.clipboard?.writeText(gmail.redirectUri ?? "")}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="settings-hint settings-hint-error">
+                        The server can’t tell its own public address. Set{" "}
+                        <code>PUBLIC_API_URL</code> on the API, then reload.
+                      </p>
+                    )}
+                    <label className="field-label">
+                      CLIENT ID
+                      <input
+                        value={oauthForm.client_id}
+                        onChange={(e) => setOauthForm((f) => ({ ...f, client_id: e.target.value }))}
+                        placeholder="xxxxxxxx.apps.googleusercontent.com"
+                        autoComplete="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <label className="field-label">
+                      CLIENT SECRET
+                      <input
+                        type="password"
+                        value={oauthForm.client_secret}
+                        onChange={(e) =>
+                          setOauthForm((f) => ({ ...f, client_secret: e.target.value }))
+                        }
+                        placeholder="GOCSPX-…"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <div className="settings-panel-actions">
+                      <button
+                        className="primary-button"
+                        disabled={
+                          gmail.busy ||
+                          !gmail.redirectUri ||
+                          !oauthForm.client_id.trim() ||
+                          !oauthForm.client_secret.trim()
+                        }
+                        onClick={async () => {
+                          await gmail.saveOauthConfig({
+                            client_id: oauthForm.client_id.trim(),
+                            client_secret: oauthForm.client_secret.trim(),
+                          });
+                          setOauthForm({ client_id: "", client_secret: "" });
+                        }}
+                      >
+                        {gmail.busy ? "Saving…" : "Save Google app"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </details>
             )}
           </div>
         )}
@@ -5246,8 +5328,10 @@ function AppShell({
   const notifications = useNotifications(!!userEmail);
   const [bellOpen, setBellOpen] = useState(false);
   // `view` drives navigation highlights immediately; `displayedView` is the page on screen.
-  const [view, setView] = useState<View>(viewFromHash);
-  const [displayedView, setDisplayedView] = useState<View>(viewFromHash);
+  // A return from Google's consent screen opens Settings (→ Mail) directly.
+  const initialView = (): View => (isGmailReturn() ? "settings" : viewFromHash());
+  const [view, setView] = useState<View>(initialView);
+  const [displayedView, setDisplayedView] = useState<View>(initialView);
   // The deep-link focus (e.g. which calendar event a notification tap opened),
   // parsed from the hash on mount and refreshed on every hashchange.
   const [deepLinkFocus, setDeepLinkFocus] = useState<DeepLinkFocus>(() => focusFromHash(0));
@@ -5646,7 +5730,8 @@ function AppShell({
       return <KnowledgeView items={libraryItems} onJumpToSource={jumpToSource} />;
     if (displayedView === "health") return <HealthView />;
     if (displayedView === "commitments") return <CommitmentsView />;
-    if (displayedView === "schedules") return <SchedulesView />;
+    if (displayedView === "schedules")
+      return <SchedulesView onOpenSettings={() => navigate("settings")} />;
     if (displayedView === "settings")
       return (
         <SettingsView
@@ -5956,7 +6041,7 @@ function AuthSplash({ colorMode }: { colorMode: boolean }) {
 }
 
 export default function App() {
-  const { session, loading, configured } = useSession();
+  const { session, loading, configured, expired } = useSession();
   const [colorMode, setColorMode] = useState(readColorPref);
   const toggleColorMode = () =>
     setColorMode((active) => {
@@ -6001,7 +6086,10 @@ export default function App() {
 
   const handleSignOut = useCallback(() => {
     setPreviewEntered(false);
-    void signOut();
+    // Release this device's push channel first (needs the live token), then
+    // clear the session. The native shell is told via the session bridge and
+    // cancels its own armed reminders and push token.
+    void releasePushOnSignOut().finally(() => void signOut());
   }, []);
 
   if (loading) return <AuthSplash colorMode={colorMode} />;
@@ -6019,6 +6107,7 @@ export default function App() {
       onEnter={() => setPreviewEntered(true)}
       colorMode={colorMode}
       onToggleColor={toggleColorMode}
+      notice={expired ? "Your session expired. Sign in again to continue." : undefined}
     />
   );
 }
