@@ -9145,3 +9145,28 @@ button {
   border-color: rgba(255, 120, 120, 0.55);
   color: #ffb3b3;
 }
+
+/* Settings → Mail: the one-time Gmail setup, shown inline when not configured. */
+.gmail-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-steps {
+  list-style: decimal;
+}
+.settings-missing {
+  list-style: disc;
+}
+.gmail-setup .field-label input {
+  width: 100%;
+  min-width: 0;
+}
+.settings-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-advanced[open] > summary svg {
+  transform: rotate(180deg);
+}

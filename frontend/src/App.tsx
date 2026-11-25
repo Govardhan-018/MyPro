@@ -5247,28 +5247,104 @@ function SettingsView({
                 </div>
               </>
             ) : !gmail.configured ? (
-              <div className="settings-status-row">
-                <span className="settings-status-dot push-denied" aria-hidden="true" />
-                <div>
-                  <strong>Gmail isn’t set up on this server yet</strong>
-                  <small>
-                    It needs a one-time setup by whoever deploys MyPro. After that you’ll just tap
-                    “Connect Gmail” and sign in with Google.
-                  </small>
-                  {gmail.missing.length > 0 && (
-                    <ul className="settings-missing">
-                      {gmail.missing.map((name) => (
-                        <li key={name}>
-                          <code>{name}</code>
-                          {name === "GOOGLE_CLIENT_ID" || name === "GOOGLE_CLIENT_SECRET"
-                            ? " — not set on the API service (Render → Environment)"
-                            : name === "PUBLIC_API_URL"
-                              ? " — the API can’t tell its public address; set it to the API’s URL"
-                              : " — run it in the Supabase SQL editor to store the Google app in-app instead"}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+              /* Not set up: the one-time setup form, right here — not hidden
+                 behind a collapsed "Developer setup" line nobody noticed. */
+              <div className="gmail-setup">
+                <div className="settings-status-row">
+                  <span className="settings-status-dot push-denied" aria-hidden="true" />
+                  <div>
+                    <strong>Set up Gmail (one time)</strong>
+                    <small>
+                      Paste your Google OAuth client below. The secret is encrypted on the server
+                      and never shown again. After this you’ll just tap “Connect Gmail” and sign in
+                      with Google.
+                    </small>
+                  </div>
+                </div>
+                {gmail.missing.some((name) => name.startsWith("migration")) && (
+                  <p className="settings-hint settings-hint-error">
+                    Saving it here needs the database update <code>0021_google_oauth_config.sql</code>{" "}
+                    — run it in the Supabase SQL editor first, or set <code>GOOGLE_CLIENT_ID</code> and{" "}
+                    <code>GOOGLE_CLIENT_SECRET</code> on Render instead.
+                  </p>
+                )}
+                    <ol className="settings-steps">
+                  <li>
+                    In Google Cloud Console, enable the <strong>Gmail API</strong> and set up the
+                    OAuth consent screen (add yourself as a test user, or publish the app).
+                  </li>
+                  <li>
+                    Create an OAuth client of type <strong>Web application</strong> and add the
+                    redirect URI below as an <em>Authorised redirect URI</em>.
+                  </li>
+                  <li>
+                    Copy its <strong>Client ID</strong> and <strong>Client secret</strong> into the fields
+                    below and tap <strong>Save Google app</strong>. (Or set <code>GOOGLE_CLIENT_ID</code> /{" "}
+                    <code>GOOGLE_CLIENT_SECRET</code> on Render instead.)
+                  </li>
+                </ol>
+                {gmail.redirectUri ? (
+                  <div className="field-label">
+                    AUTHORISED REDIRECT URI (ADD THIS IN GOOGLE CLOUD)
+                    <div className="link-input copy-field">
+                      <input value={gmail.redirectUri} readOnly aria-readonly="true" />
+                      <button
+                        type="button"
+                        className="settings-inline-action"
+                        onClick={() => void navigator.clipboard?.writeText(gmail.redirectUri ?? "")}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="settings-hint settings-hint-error">
+                    The server can’t tell its own public address. Set{" "}
+                    <code>PUBLIC_API_URL</code> on the API, then reload.
+                  </p>
+                )}
+                <label className="field-label">
+                  CLIENT ID
+                  <input
+                    value={oauthForm.client_id}
+                    onChange={(e) => setOauthForm((f) => ({ ...f, client_id: e.target.value }))}
+                    placeholder="xxxxxxxx.apps.googleusercontent.com"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="field-label">
+                  CLIENT SECRET
+                  <input
+                    type="password"
+                    value={oauthForm.client_secret}
+                    onChange={(e) =>
+                      setOauthForm((f) => ({ ...f, client_secret: e.target.value }))
+                    }
+                    placeholder="GOCSPX-…"
+                    autoComplete="off"
+                  />
+                </label>
+                <div className="settings-panel-actions">
+                  <button
+                    className="primary-button"
+                    disabled={
+                      gmail.busy ||
+                      !gmail.redirectUri ||
+                      !oauthForm.client_id.trim() ||
+                      !oauthForm.client_secret.trim()
+                    }
+                    onClick={async () => {
+                      await gmail.saveOauthConfig({
+                        client_id: oauthForm.client_id.trim(),
+                        client_secret: oauthForm.client_secret.trim(),
+                      });
+                      setOauthForm({ client_id: "", client_secret: "" });
+                    }}
+                  >
+                    {gmail.busy ? "Saving…" : "Save Google app"}
+                  </button>
                 </div>
               </div>
             ) : (
@@ -5363,106 +5439,25 @@ function SettingsView({
               </p>
             )}
 
-            {/* One-time server setup. Collapsed: a normal user never needs it. */}
-            {!gmail.loading && !gmail.statusError && (!gmail.configured || gmail.source === "settings") && (
+            {/* Saved in-app: a way to remove/replace it, tucked away. */}
+            {!gmail.loading && !gmail.statusError && gmail.configured && gmail.source === "settings" && (
               <details className="settings-advanced">
-                <summary>Developer setup</summary>
-                {gmail.source === "settings" ? (
-                  <div className="settings-status-row">
-                    <div>
-                      <strong>Google app stored encrypted on the server</strong>
-                      <small>The client secret is never shown. Remove it to replace it.</small>
-                    </div>
-                    <button
-                      className="settings-inline-action"
-                      onClick={() => void gmail.deleteOauthConfig()}
-                      disabled={gmail.busy}
-                    >
-                      Remove
-                    </button>
+                <summary>
+                  Google app settings <ChevronDown size={14} aria-hidden="true" />
+                </summary>
+                <div className="settings-status-row">
+                  <div>
+                    <strong>Google app stored encrypted on the server</strong>
+                    <small>The client secret is never shown. Remove it to enter a different one.</small>
                   </div>
-                ) : (
-                  <>
-                    <ol className="settings-steps">
-                      <li>
-                        In Google Cloud Console, enable the <strong>Gmail API</strong> and set up the
-                        OAuth consent screen (add yourself as a test user, or publish the app).
-                      </li>
-                      <li>
-                        Create an OAuth client of type <strong>Web application</strong> and add the
-                        redirect URI below as an <em>Authorised redirect URI</em>.
-                      </li>
-                      <li>
-                        Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> on the
-                        API service (preferred) — or paste them here; the secret is encrypted on the
-                        server and never shown again.
-                      </li>
-                    </ol>
-                    {gmail.redirectUri ? (
-                      <div className="field-label">
-                        AUTHORISED REDIRECT URI (ADD THIS IN GOOGLE CLOUD)
-                        <div className="link-input copy-field">
-                          <input value={gmail.redirectUri} readOnly aria-readonly="true" />
-                          <button
-                            type="button"
-                            className="settings-inline-action"
-                            onClick={() => void navigator.clipboard?.writeText(gmail.redirectUri ?? "")}
-                          >
-                            Copy
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="settings-hint settings-hint-error">
-                        The server can’t tell its own public address. Set{" "}
-                        <code>PUBLIC_API_URL</code> on the API, then reload.
-                      </p>
-                    )}
-                    <label className="field-label">
-                      CLIENT ID
-                      <input
-                        value={oauthForm.client_id}
-                        onChange={(e) => setOauthForm((f) => ({ ...f, client_id: e.target.value }))}
-                        placeholder="xxxxxxxx.apps.googleusercontent.com"
-                        autoComplete="off"
-                        autoCapitalize="off"
-                        spellCheck={false}
-                      />
-                    </label>
-                    <label className="field-label">
-                      CLIENT SECRET
-                      <input
-                        type="password"
-                        value={oauthForm.client_secret}
-                        onChange={(e) =>
-                          setOauthForm((f) => ({ ...f, client_secret: e.target.value }))
-                        }
-                        placeholder="GOCSPX-…"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <div className="settings-panel-actions">
-                      <button
-                        className="primary-button"
-                        disabled={
-                          gmail.busy ||
-                          !gmail.redirectUri ||
-                          !oauthForm.client_id.trim() ||
-                          !oauthForm.client_secret.trim()
-                        }
-                        onClick={async () => {
-                          await gmail.saveOauthConfig({
-                            client_id: oauthForm.client_id.trim(),
-                            client_secret: oauthForm.client_secret.trim(),
-                          });
-                          setOauthForm({ client_id: "", client_secret: "" });
-                        }}
-                      >
-                        {gmail.busy ? "Saving…" : "Save Google app"}
-                      </button>
-                    </div>
-                  </>
-                )}
+                  <button
+                    className="settings-inline-action"
+                    onClick={() => void gmail.deleteOauthConfig()}
+                    disabled={gmail.busy}
+                  >
+                    Remove
+                  </button>
+                </div>
               </details>
             )}
           </div>
