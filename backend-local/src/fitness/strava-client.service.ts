@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { env } from '../config/env';
+import { env, renderApiBase } from '../config/env';
 
 /**
  * Training history, from the laptop's side — Phase 20.5.
@@ -45,7 +45,7 @@ export class StravaClientService {
     sinceDays: number;
     limit: number;
   }): Promise<ActivitiesOutcome> {
-    const base = env().RENDER_API_URL;
+    const base = renderApiBase();
     if (!base) {
       return {
         ok: false,
@@ -55,7 +55,7 @@ export class StravaClientService {
     }
 
     try {
-      const res = await fetch(`${base.replace(/\/$/, '')}/internal/strava/activities`, {
+      const res = await fetch(`${base}/internal/strava/activities`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

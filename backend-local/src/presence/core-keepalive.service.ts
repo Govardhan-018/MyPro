@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { env } from '../config/env';
+import { env, renderApiBase } from '../config/env';
 
 /**
  * The agent keeps the core awake.
@@ -34,11 +34,11 @@ export class CoreKeepAliveService {
   /** Ten minutes: comfortably inside Render's ~15-minute idle window. */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async ping(): Promise<void> {
-    const base = env().RENDER_API_URL;
+    const base = renderApiBase();
     if (!base || !env().SCHEDULER_ENABLED) return;
 
     try {
-      const res = await fetch(`${base.replace(/\/$/, '')}/internal/keepalive`, {
+      const res = await fetch(`${base}/internal/keepalive`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

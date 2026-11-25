@@ -34,6 +34,11 @@ export interface SkillContext {
    */
   fitness?: StravaClientService;
   /**
+   * Mail freshness: asks render to sync the user's Gmail before an email
+   * skill reads `email_messages`. Absent when the node cannot reach render.
+   */
+  mail?: { refresh(userId: string): Promise<{ ok: boolean; note?: string }> };
+  /**
    * This turn's effort budget. Research skills read `searchResults` and
    * `fetchPages` from it so breadth follows the user's mode rather than
    * whatever the model asked for.

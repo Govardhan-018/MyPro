@@ -191,7 +191,8 @@ services:
           type: web
           name: mypro-core
           property: host
-          # Append /api/v1 in the dashboard: https://<host>/api/v1
+          # A bare host is fine: the agent adds https:// and /api/v1 itself
+          # (backend-local `renderApiBase`).
 
       # THE CLOCK LIVES HERE. mypro-core keeps SCHEDULER_ENABLED=false.
       # Two schedulers race for the same rows and double-send everything.

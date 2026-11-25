@@ -775,6 +775,34 @@ const deleteSchedule = defineSkill({
 /* gmail                                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Before reading mail: is a mailbox connected at all, and bring it up to date.
+ * Without this the skills read an empty table and the assistant could only
+ * say "I'm unable to retrieve your email" — with no hint why.
+ */
+async function prepareMail(ctx: SkillContext): Promise<{ none?: { messages: []; note: string }; note?: string }> {
+  const accounts = await ctx.db.from('gmail_accounts').select('id').limit(1);
+  if (!accounts.error && !(accounts.data ?? []).length) {
+    return {
+      none: {
+        messages: [],
+        note: 'No Gmail account is connected. Tell the user to connect one in Settings → Mail.',
+      },
+    };
+  }
+  const synced = ctx.mail ? await ctx.mail.refresh(ctx.user.id) : { ok: false };
+  return { note: synced.ok ? undefined : (synced as { note?: string }).note };
+}
+
+/** Rows as-is when there are some; otherwise an explicit, explainable empty. */
+function mailResult(rows: unknown[], note?: string) {
+  if (rows.length) return note ? { messages: rows, note } : rows;
+  return {
+    messages: [],
+    note: note ?? 'The mailbox is connected and synced, but no messages matched.',
+  };
+}
+
 const listEmails = defineSkill({
   name: 'list_emails',
   description:
@@ -783,13 +811,16 @@ const listEmails = defineSkill({
   sideEffect: 'read',
   schema: z.object({ limit: z.number().int().min(1).max(50).optional() }),
   async run(args, ctx) {
-    return check(
+    const prep = await prepareMail(ctx);
+    if (prep.none) return prep.none;
+    const rows = check(
       await ctx.db
         .from('email_messages')
         .select('id, from_addr, subject, snippet, internal_date, is_read, email_insights(summary, category, action_needed)')
         .order('internal_date', { ascending: false })
         .limit(args.limit ?? 20),
-    );
+    ) as unknown[];
+    return mailResult(rows, prep.note);
   },
 });
 
@@ -802,14 +833,17 @@ const searchEmails = defineSkill({
     limit: z.number().int().min(1).max(50).optional(),
   }),
   async run(args, ctx) {
-    return check(
+    const prep = await prepareMail(ctx);
+    if (prep.none) return prep.none;
+    const rows = check(
       await ctx.db
         .from('email_messages')
         .select('id, from_addr, subject, snippet, internal_date')
         .or(orIlike(args.query, ['subject', 'from_addr', 'snippet']))
         .order('internal_date', { ascending: false })
         .limit(args.limit ?? 20),
-    );
+    ) as unknown[];
+    return mailResult(rows, prep.note);
   },
 });
 

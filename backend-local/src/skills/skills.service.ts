@@ -8,6 +8,7 @@ import type { EffortBudget } from '../agent/effort';
 import type { AuthUser } from '../common/auth.guard';
 import { SKILLS } from './definitions';
 import type { InvocationReceipt, Skill, SkillContext } from './types';
+import { RenderMailService } from '../gmail/render-mail.service';
 
 export interface ToolDefinition {
   name: string;
@@ -60,6 +61,7 @@ export class SkillsService {
     private readonly audit: AuditService,
     private readonly research: ResearchService,
     private readonly fitness: StravaClientService,
+    private readonly mail: RenderMailService,
   ) {}
 
   /**
@@ -162,6 +164,7 @@ export class SkillsService {
         timezone: context.timezone,
         research: this.research,
         fitness: this.fitness,
+        mail: this.mail,
         budget: context.budget,
       };
       const result = await skill.run(parsed.data, ctx);

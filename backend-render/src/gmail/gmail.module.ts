@@ -222,6 +222,11 @@ export class GmailService {
       detail: { email, reconnect: Boolean(existing.data) },
     });
 
+    // Pull in the recent mail now, in the background, so the assistant has
+    // something to read the moment you ask — it used to stay empty until
+    // someone found "Sync now" in Settings.
+    void this.sync.syncUser(userId).catch(() => undefined);
+
     return { email };
   }
 
@@ -443,6 +448,18 @@ export class GmailInternalController {
   @Post('send')
   send(@Body() body: unknown) {
     return this.gmail.sendOnBehalf(sendInput.parse(body));
+  }
+
+  /**
+   * The laptop asks for fresh mail before the assistant reads the inbox
+   * (`list_emails` / `search_emails`). Incremental after the first backfill,
+   * so a quiet mailbox costs one small Gmail history call.
+   */
+  @Post('sync')
+  async sync(@Body() body: unknown) {
+    const { user_id } = z.object({ user_id: z.string().uuid() }).parse(body);
+    // syncNow only reads the id (the sync itself uses the service key).
+    return this.gmail.syncNow({ id: user_id } as AuthUser);
   }
 }
 

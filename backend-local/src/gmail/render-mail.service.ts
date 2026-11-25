@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { env } from '../config/env';
+import { env, renderApiBase } from '../config/env';
 
 export interface SendRequest {
   userId: string;
@@ -41,7 +41,7 @@ export class RenderMailService {
   }
 
   async send(request: SendRequest): Promise<SendOutcome> {
-    const base = env().RENDER_API_URL;
+    const base = renderApiBase();
     if (!base) {
       return {
         ok: false,
@@ -55,7 +55,7 @@ export class RenderMailService {
     const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
 
     try {
-      const res = await fetch(`${base.replace(/\/$/, '')}/internal/gmail/send`, {
+      const res = await fetch(`${base}/internal/gmail/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -108,6 +108,43 @@ export class RenderMailService {
         // A connection that failed outright sent nothing; a timeout might have.
         retryable: !timedOut,
       };
+    }
+  }
+
+  /** When each user's mailbox was last refreshed through render. */
+  private readonly lastSync = new Map<string, number>();
+
+  /**
+   * Ask render to pull new mail into `email_messages` before the assistant
+   * reads it. The assistant only ever reads that local copy, which used to be
+   * filled solely by "Sync now" in Settings — so "what's my last email?"
+   * answered from an empty table. Throttled per user (incremental syncs are
+   * cheap, but not free), bounded in time, and never throws: on failure the
+   * assistant still reads whatever is already stored.
+   */
+  async refresh(userId: string, maxAgeMs = 2 * 60_000): Promise<{ ok: boolean; note?: string }> {
+    const base = renderApiBase();
+    if (!base) return { ok: false, note: 'Mail sync is not wired up on this machine (RENDER_API_URL).' };
+    const last = this.lastSync.get(userId) ?? 0;
+    if (Date.now() - last < maxAgeMs) return { ok: true };
+    try {
+      const res = await fetch(`${base}/internal/gmail/sync`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-token': env().INTERNAL_SERVICE_TOKEN,
+        },
+        body: JSON.stringify({ user_id: userId }),
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (!res.ok) return { ok: false, note: `Mail could not be refreshed (${res.status}).` };
+      this.lastSync.set(userId, Date.now());
+      const body = (await res.json().catch(() => null)) as { results?: { error?: string }[] } | null;
+      const failed = body?.results?.find((r) => r.error);
+      return failed ? { ok: false, note: failed.error } : { ok: true };
+    } catch (err) {
+      this.logger.warn(`mail refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, note: 'Mail could not be refreshed just now; showing what was last synced.' };
     }
   }
 }

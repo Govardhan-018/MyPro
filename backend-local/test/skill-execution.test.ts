@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SKILLS, orIlike } from '../src/skills/definitions';
 import type { Skill, SkillContext } from '../src/skills/types';
 
@@ -32,7 +32,10 @@ interface Recorded {
   maybeSingle: boolean;
 }
 
-function makeDb(maybeSingleData: (table: string) => unknown = () => null) {
+function makeDb(
+  maybeSingleData: (table: string) => unknown = () => null,
+  listData: (table: string) => unknown[] = () => [],
+) {
   const calls: Recorded[] = [];
 
   function from(table: string) {
@@ -47,7 +50,7 @@ function makeDb(maybeSingleData: (table: string) => unknown = () => null) {
       let data: unknown;
       if (call.maybeSingle) data = maybeSingleData(table);
       else if (call.single) data = { id: UUID };
-      else data = [];
+      else data = listData(table);
       return { data, error: null };
     };
 
@@ -360,7 +363,7 @@ describe('free-text search builds a safe or() filter', () => {
   });
 
   it('search_emails covers subject, from and snippet', async () => {
-    const { client, calls } = makeDb();
+    const { client, calls } = makeDb(undefined, (t) => (t === 'gmail_accounts' ? [{ id: 'g1' }] : []));
     await skill('search_emails').run({ query: nasty }, ctxWith(client));
     expect(only(calls, 'email_messages').or).toBe(orIlike(nasty, ['subject', 'from_addr', 'snippet']));
   });
@@ -378,5 +381,38 @@ describe('orIlike', () => {
   it('keeps a comma and parens literal inside the quotes', () => {
     const out = orIlike('x, y (z)', ['t']);
     expect(out).toBe('t.ilike."%x, y (z)%"');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* email skills: say why there is nothing, refresh before reading       */
+/* ------------------------------------------------------------------ */
+
+describe('email skills', () => {
+  it('with no mailbox connected, say so instead of an unexplained empty list', async () => {
+    const { client } = makeDb();
+    const out = (await skill('list_emails').run({}, ctxWith(client))) as { messages: unknown[]; note: string };
+    expect(out.messages).toEqual([]);
+    expect(out.note).toMatch(/No Gmail account is connected/);
+  });
+
+  it('refreshes the mailbox through render before reading it', async () => {
+    const { client, calls } = makeDb(undefined, (t) =>
+      t === 'gmail_accounts' ? [{ id: 'g1' }] : t === 'email_messages' ? [{ id: 'm1', subject: 'Hi' }] : [],
+    );
+    const refresh = vi.fn(async () => ({ ok: true }));
+    const out = await skill('list_emails').run({}, { ...ctxWith(client), mail: { refresh } });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(out).toEqual([{ id: 'm1', subject: 'Hi' }]);
+    expect(calls.some((c) => c.table === 'email_messages')).toBe(true);
+  });
+
+  it('when the refresh fails, still answers from what is stored and says why', async () => {
+    const { client } = makeDb(undefined, (t) => (t === 'gmail_accounts' ? [{ id: 'g1' }] : []));
+    const refresh = async () => ({ ok: false, note: 'This mailbox needs reconnecting.' });
+    const out = (await skill('list_emails').run({}, { ...ctxWith(client), mail: { refresh } })) as {
+      note: string;
+    };
+    expect(out.note).toBe('This mailbox needs reconnecting.');
   });
 });

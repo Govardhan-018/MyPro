@@ -46,7 +46,14 @@ const schema = z.object({
    * (Phase 7.6), because the Gmail tokens and the key that decrypts them live
    * only there. Without it, `send_email` declines clearly rather than failing.
    */
-  RENDER_API_URL: optionalUrl(),
+  RENDER_API_URL: blankAsUndefined(
+    z.preprocess(
+      // Render's blueprint fills this from the core's bare host
+      // ("mypro-core.onrender.com"); accept that as well as a full URL.
+      (v) => (typeof v === 'string' && v.trim() && !/^https?:\/\//i.test(v.trim()) ? `https://${v.trim()}` : v),
+      z.string().url().optional(),
+    ),
+  ),
 
   /**
    * This machine's public HTTPS origin, heartbeated into node_status so
@@ -194,4 +201,24 @@ export function env(): Env {
   }
   cached = parsed.data;
   return cached;
+}
+
+/**
+ * The core's API root for node-to-node calls, whatever form RENDER_API_URL was
+ * given in: with or without https://, with or without a trailing slash, with
+ * or without the /api/v1 prefix every Render route lives under. Without the
+ * prefix every call 404'd — scheduled emails failed with "Render refused the
+ * send (404)". Null when unset. Pure; unit-tested.
+ */
+export function renderApiBase(): string | null {
+  return normalizeRenderBase(env().RENDER_API_URL);
+}
+
+/** The pure half of {@link renderApiBase}. */
+export function normalizeRenderBase(raw: string | undefined | null): string | null {
+  const value = (raw ?? '').trim();
+  if (!value) return null;
+  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  const trimmed = withScheme.replace(/\/+$/, '');
+  return /\/api\/v1$/i.test(trimmed) ? trimmed : `${trimmed}/api/v1`;
 }
