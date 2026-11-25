@@ -2,6 +2,7 @@ import { Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { SupabaseService } from './supabase.service';
 import { InternalAuthGuard } from './internal-auth.guard';
 import { env } from '../config/env';
+import { selfApiUrl } from '../nodes/node-status.service';
 
 /**
  * Keep-alive — the thing that stops Render's free instance falling asleep.
@@ -41,7 +42,16 @@ export class KeepAliveController {
         node: 'render',
         base_url: env().APP_URL ?? null,
         last_heartbeat_at: now,
-        detail: { source: 'keepalive', node_env: env().NODE_ENV },
+        // The API's own root, so the agent finds the real host (not a
+        // hand-set RENDER_API_URL that may name the wrong service).
+        detail: {
+          source: 'keepalive',
+          node_env: env().NODE_ENV,
+          api_url: selfApiUrl({
+            PUBLIC_API_URL: (process.env.PUBLIC_API_URL ?? '').trim() || undefined,
+            RENDER_EXTERNAL_URL: (process.env.RENDER_EXTERNAL_URL ?? '').trim() || undefined,
+          }),
+        },
       },
       { onConflict: 'node' },
     );

@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { env, renderApiBase } from '../config/env';
+import { env } from '../config/env';
+import { SupabaseService } from '../common/supabase.service';
+import { resolveRenderApiBase } from '../common/render-api';
 
 /**
  * The agent keeps the core awake.
@@ -29,12 +31,14 @@ import { env, renderApiBase } from '../config/env';
 @Injectable()
 export class CoreKeepAliveService {
   private readonly logger = new Logger(CoreKeepAliveService.name);
+
+  constructor(private readonly supabase: SupabaseService) {}
   private consecutiveFailures = 0;
 
   /** Ten minutes: comfortably inside Render's ~15-minute idle window. */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async ping(): Promise<void> {
-    const base = renderApiBase();
+    const base = await resolveRenderApiBase(this.supabase.admin);
     if (!base || !env().SCHEDULER_ENABLED) return;
 
     try {

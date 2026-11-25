@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { env, renderApiBase } from '../config/env';
+import { env } from '../config/env';
+import { SupabaseService } from '../common/supabase.service';
+import { forgetRenderApiBase, resolveRenderApiBase } from '../common/render-api';
 
 export interface SendRequest {
   userId: string;
@@ -36,12 +38,15 @@ const SEND_TIMEOUT_MS = 20_000;
 export class RenderMailService {
   private readonly logger = new Logger(RenderMailService.name);
 
+  constructor(private readonly supabase: SupabaseService) {}
+
+  /** Sending is possible when the core's address is known (announced or configured). */
   configured(): boolean {
-    return Boolean(env().RENDER_API_URL);
+    return true;
   }
 
   async send(request: SendRequest): Promise<SendOutcome> {
-    const base = renderApiBase();
+    const base = await resolveRenderApiBase(this.supabase.admin);
     if (!base) {
       return {
         ok: false,
@@ -88,8 +93,13 @@ export class RenderMailService {
             ? String((parsed as { message: unknown }).message)
             : waking
               ? 'The mail service is waking up.'
-              : `Render refused the send (${res.status})`;
-        return { ok: false, reason: message, retryable: waking };
+              : `The mail service at ${new URL(base).host} answered ${res.status}${
+                  res.status === 404 ? ' — that host has no MyPro API (check the core service URL)' : ''
+                }`;
+        if (res.status === 404) forgetRenderApiBase();
+        // A 404 from the edge means the request never reached MyPro: nothing
+        // was sent, so it is safe to try again once the address is re-read.
+        return { ok: false, reason: message, retryable: waking || res.status === 404 };
       }
 
       const body = parsed as { id?: string; from?: string } | null;
@@ -123,7 +133,7 @@ export class RenderMailService {
    * assistant still reads whatever is already stored.
    */
   async refresh(userId: string, maxAgeMs = 2 * 60_000): Promise<{ ok: boolean; note?: string }> {
-    const base = renderApiBase();
+    const base = await resolveRenderApiBase(this.supabase.admin);
     if (!base) return { ok: false, note: 'Mail sync is not wired up on this machine (RENDER_API_URL).' };
     const last = this.lastSync.get(userId) ?? 0;
     if (Date.now() - last < maxAgeMs) return { ok: true };
@@ -137,7 +147,10 @@ export class RenderMailService {
         body: JSON.stringify({ user_id: userId }),
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) return { ok: false, note: `Mail could not be refreshed (${res.status}).` };
+      if (!res.ok) {
+        if (res.status === 404) forgetRenderApiBase();
+        return { ok: false, note: `Mail could not be refreshed (${res.status} from ${new URL(base).host}).` };
+      }
       this.lastSync.set(userId, Date.now());
       const body = (await res.json().catch(() => null)) as { results?: { error?: string }[] } | null;
       const failed = body?.results?.find((r) => r.error);

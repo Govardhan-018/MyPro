@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { env, renderApiBase } from '../config/env';
+import { env } from '../config/env';
+import { SupabaseService } from '../common/supabase.service';
+import { resolveRenderApiBase } from '../common/render-api';
 
 /**
  * Training history, from the laptop's side — Phase 20.5.
@@ -36,8 +38,10 @@ const REQUEST_TIMEOUT_MS = 20_000;
 export class StravaClientService {
   private readonly logger = new Logger(StravaClientService.name);
 
+  constructor(private readonly supabase: SupabaseService) {}
+
   configured(): boolean {
-    return Boolean(env().RENDER_API_URL);
+    return true; // the core address is discovered (node_status) or configured
   }
 
   async activities(params: {
@@ -45,7 +49,7 @@ export class StravaClientService {
     sinceDays: number;
     limit: number;
   }): Promise<ActivitiesOutcome> {
-    const base = renderApiBase();
+    const base = await resolveRenderApiBase(this.supabase.admin);
     if (!base) {
       return {
         ok: false,

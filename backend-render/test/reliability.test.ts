@@ -115,3 +115,20 @@ describe('Gmail connect returns to where it started', async () => {
     expect(injected).not.toContain('<script>');
   });
 });
+
+describe('the core announces its own API address', async () => {
+  const { selfApiUrl } = await import('../src/nodes/node-status.service');
+  it('from Render’s RENDER_EXTERNAL_URL, with the /api/v1 prefix', () => {
+    expect(selfApiUrl({ RENDER_EXTERNAL_URL: 'https://mypro-km2k.onrender.com' })).toBe(
+      'https://mypro-km2k.onrender.com/api/v1',
+    );
+  });
+  it('PUBLIC_API_URL wins, tolerating a trailing prefix or slash', () => {
+    expect(selfApiUrl({ PUBLIC_API_URL: 'https://api.example.com/api/v1/', RENDER_EXTERNAL_URL: 'https://x.onrender.com' })).toBe(
+      'https://api.example.com/api/v1',
+    );
+  });
+  it('unknown when neither is set', () => {
+    expect(selfApiUrl({})).toBeNull();
+  });
+});
