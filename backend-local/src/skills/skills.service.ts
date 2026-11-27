@@ -9,6 +9,7 @@ import type { AuthUser } from '../common/auth.guard';
 import { SKILLS } from './definitions';
 import type { InvocationReceipt, Skill, SkillContext } from './types';
 import { RenderMailService } from '../gmail/render-mail.service';
+import { consentCovers } from './consent';
 
 export interface ToolDefinition {
   name: string;
@@ -88,7 +89,7 @@ export class SkillsService {
     user: AuthUser,
     name: string,
     rawArgs: unknown,
-    context: { conversationId?: string; timezone: string; budget?: EffortBudget },
+    context: { conversationId?: string; timezone: string; budget?: EffortBudget; userMessage?: string },
   ): Promise<ExecutionOutcome> {
     const started = Date.now();
     const skill = this.byName.get(name);
@@ -133,6 +134,89 @@ export class SkillsService {
     // Outward actions never run on the model's say-so.
     if (skill.sideEffect === 'outward') {
       const summary = this.summarise(skill, args, null);
+
+      // …but the user can approve in the same breath: "email x@y.com …, send
+      // it directly". Read from the user's own message only, and only when it
+      // names this exact recipient (skills/consent.ts).
+      if (skill.name === 'send_email' && consentCovers(context.userMessage, String(args.to ?? ''))) {
+        const sent = await this.mail.send({
+          userId: user.id,
+          to: String(args.to),
+          subject: String(args.subject ?? ''),
+          body: String(args.body ?? ''),
+        });
+        if (sent.ok) {
+          const receipt = await this.record(user, skill, args, {
+            status: 'success',
+            result: { sent: true, id: sent.id, from: sent.from, approval: 'in your message' },
+            context,
+            durationMs: Date.now() - started,
+            summary: `Sent to ${String(args.to)} (approved in your message)`,
+          });
+          await this.supabase.admin.from('pending_actions').insert({
+            user_id: user.id,
+            invocation_id: receipt.id,
+            skill: skill.name,
+            args,
+            summary,
+            state: 'approved',
+            resolved_at: new Date().toISOString(),
+            result: `Sent from ${sent.from || 'your mailbox'} (Gmail id ${sent.id}) — approved in your message.`,
+          });
+          await this.audit.record({
+            userId: user.id,
+            actor: 'assistant',
+            action: 'email.send',
+            targetType: 'skill_invocation',
+            targetId: receipt.id,
+            detail: { to: args.to, approval: 'message' },
+          });
+          return {
+            content: `Sent — the email to ${String(args.to)} went out from ${sent.from || 'their mailbox'} (the user approved sending in their message).`,
+            isError: false,
+            receipt,
+          };
+        }
+        if (sent.ambiguous) {
+          const receipt = await this.record(user, skill, args, {
+            status: 'failed',
+            error: sent.reason,
+            context,
+            durationMs: Date.now() - started,
+            summary: `Unclear whether the email to ${String(args.to)} was sent`,
+          });
+          return {
+            content: `It is unclear whether it was sent: ${sent.reason} Tell the user to check their Sent folder before trying again.`,
+            isError: true,
+            receipt,
+          };
+        }
+        // Certainly not sent: fall through to the approval card, with the
+        // reason, so the user can fix it (reconnect, edit) and press Send.
+        const receipt = await this.record(user, skill, args, {
+          status: 'needs_approval',
+          error: sent.reason,
+          context,
+          durationMs: Date.now() - started,
+          summary,
+        });
+        await this.supabase.admin.from('pending_actions').insert({
+          user_id: user.id,
+          invocation_id: receipt.id,
+          skill: skill.name,
+          args,
+          summary,
+          result: `Not sent: ${sent.reason}`,
+        });
+        return {
+          content:
+            `NOT sent: ${sent.reason}. It is waiting in the approvals list so the user can fix it and send. ` +
+            `Tell them plainly.`,
+          isError: true,
+          receipt,
+        };
+      }
+
       const receipt = await this.record(user, skill, args, {
         status: 'needs_approval',
         context,
@@ -166,6 +250,7 @@ export class SkillsService {
         fitness: this.fitness,
         mail: this.mail,
         budget: context.budget,
+        userMessage: context.userMessage,
       };
       const result = await skill.run(parsed.data, ctx);
       const receipt = await this.record(user, skill, args, {

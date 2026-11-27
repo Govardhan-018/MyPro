@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineSkill, type Skill, type SkillContext } from './types';
 import { computeNextRun } from '../schedules/recurrence';
+import { consentCovers } from './consent';
 
 /**
  * Every capability the companion has. These mirror the features of the web
@@ -699,14 +700,23 @@ const createSchedule = defineSkill({
   schema: z.object({
     name: z.string().min(1).max(120),
     action_type: z
-      .enum(['notify', 'report', 'chat_message'])
-      .describe('report = the companion writes a brief; notify/chat_message = fixed text'),
+      .enum(['notify', 'report', 'chat_message', 'email'])
+      .describe(
+        'report = the companion writes a brief; notify/chat_message = fixed text; ' +
+          'email = at that time the AI writes and sends an email (give `to` and `instructions`)',
+      ),
     recurrence: z.enum(['once', 'daily', 'weekly', 'monthly']),
     time_of_day: z.string().regex(/^\d{2}:\d{2}$/).optional().describe('HH:MM, local'),
     run_at: iso.optional().describe('only for recurrence=once'),
     days: z.array(z.number().int().min(0).max(6)).max(7).optional(),
     day_of_month: z.number().int().min(1).max(31).optional(),
     text: z.string().max(500).optional().describe('message body for notify/chat_message'),
+    to: z.string().email().optional().describe('email only: the recipient address'),
+    instructions: z
+      .string()
+      .max(2000)
+      .optional()
+      .describe('email only: what the email should say; it is written at send time'),
   }),
   async run(args, ctx) {
     // The first occurrence, computed now. This used to be "now" for every
@@ -729,6 +739,9 @@ const createSchedule = defineSkill({
       ctx.now,
     );
     if (!next) throw new Error('That schedule has no future time to run at.');
+    if (args.action_type === 'email' && (!args.to || !args.instructions)) {
+      throw new Error('An email schedule needs a recipient address (`to`) and `instructions`.');
+    }
     const created = check(
       await ctx.db
         .from('assistant_schedules')
@@ -736,7 +749,17 @@ const createSchedule = defineSkill({
           user_id: ctx.user.id,
           name: args.name,
           action_type: args.action_type,
-          action_payload: args.text ? { text: args.text, title: args.name, body: args.text } : {},
+          action_payload:
+            args.action_type === 'email'
+              ? { to: args.to, prompt: args.instructions }
+              : args.text
+                ? { text: args.text, title: args.name, body: args.text }
+                : {},
+          // An email asks first unless the user's own message approved sending
+          // to this exact address (skills/consent.ts) — never the model's call.
+          ...(args.action_type === 'email'
+            ? { requires_confirmation: !consentCovers(ctx.userMessage, args.to), channel: 'email' }
+            : {}),
           recurrence: args.recurrence,
           time_of_day: timeOfDay ? `${timeOfDay}:00` : null,
           run_at: args.run_at ?? null,
@@ -755,6 +778,18 @@ const createSchedule = defineSkill({
           .insert([...new Set(args.days)].map((d) => ({ schedule_id: created.id, day_of_week: d })))
           .select('schedule_id'),
       );
+    }
+    if (args.action_type === 'email') {
+      const direct = consentCovers(ctx.userMessage, args.to);
+      return {
+        ...created,
+        email: {
+          to: args.to,
+          sends: direct
+            ? 'directly at that time (the user approved sending in their message)'
+            : 'the drafted email will wait for the user to approve it at that time',
+        },
+      };
     }
     return created;
   },
@@ -850,10 +885,12 @@ const searchEmails = defineSkill({
 const sendEmail = defineSkill({
   name: 'send_email',
   description:
-    'Send an email on the user\'s behalf. This always needs their explicit ' +
-    'approval first — it is never sent automatically. Sending really works ' +
-    'once a Gmail account is connected in Settings; with none connected, ' +
-    'approving it reports that there is no mailbox to send from.',
+    'Send an email on the user\'s behalf: write the subject and body yourself. ' +
+    'By default it waits for the user to approve it (they see the full email and can edit it). ' +
+    'If the user\'s own message explicitly says to send without asking (e.g. "send it directly", ' +
+    '"no need to ask me") and names the recipient\'s address, it is sent immediately — the system ' +
+    'checks that, not you, so just call this. Report exactly what the result says: sent, or ' +
+    'waiting for approval.',
   sideEffect: 'outward',
   schema: z.object({
     to: z.string().email(),

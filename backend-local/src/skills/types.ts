@@ -39,6 +39,12 @@ export interface SkillContext {
    */
   mail?: { refresh(userId: string): Promise<{ ok: boolean; note?: string }> };
   /**
+   * The user's own message this turn. Skills that may act without a further
+   * approval (scheduling an email that sends itself) read consent from this —
+   * never from anything the model wrote or read.
+   */
+  userMessage?: string;
+  /**
    * This turn's effort budget. Research skills read `searchResults` and
    * `fetchPages` from it so breadth follows the user's mode rather than
    * whatever the model asked for.

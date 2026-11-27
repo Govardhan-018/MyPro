@@ -5,7 +5,7 @@ reader, knowledge base, health records, schedules, mail — and an AI companion
 that can act across all of them. One repository, three deployables, one
 Postgres, one Android app that is a native shell around the web app.
 
-> **Status (2026-11):** feature-complete for daily use. 526 automated tests
+> **Status (2026-11):** feature-complete for daily use. 549 automated tests
 > pass across the four TypeScript packages; the web builds; the Android APK
 > builds on every push to `main`. What is verified only in automation (not on
 > a physical device or against live third-party services) is listed honestly
@@ -261,6 +261,14 @@ latest run; run history with results. Execution semantics in
   double tap sends once); a send that certainly failed returns to the queue
   with the reason and a "Try again"; a timeout (might have sent) is never
   resent; expired requests cannot be approved.
+- **Approval in your own message:** "email x@y.com …, send it directly" (or
+  "no need to ask me", "you have my approval") sends at once without the card —
+  also when scheduling an email through the assistant, and for scheduled AI
+  tasks whose instructions say so. Decided by deterministic code on the
+  user's own words (`skills/consent.ts`), never by the model: the message must
+  explicitly approve, must not say "don't send", and must name the exact
+  recipient address, so text inside an email or web page can never grant it.
+  A failed direct send falls back to the approval card with the reason.
 - **Test sending:** Settings → Mail → *Send test email* sends a real email now
   through the same path (no approval step) and shows the Gmail message id or
   the exact error.
@@ -538,8 +546,8 @@ by a push** — run each new SQL file in the Supabase SQL editor.
 | `shared` | 4 | 38 | session expiry and refresh races, 401 recovery, PDF block grouping, notification mapping |
 | `frontend` | 5 | 51 | scheduler form ↔ API mapping, Markdown parser (incl. unsafe links), knowledge grouping, outbox (coalescing, ordering, interrupted sync, drop/retry), calendar event states and time zones |
 | `backend-render` | 9 | 75 | Email send end to end (real send path, decoded MIME, encoded subjects, Google errors), Gmail scopes and credential resolution, redirect derivation, OAuth state signing, refresh classification, schedule validation, calendar reminders/completion, recurrence, conflict resolution, idempotent inserts, self-address announcement |
-| `backend-local` | 30 | 362 | email approval (claim, edits, retry, ambiguous timeouts, expiry), agent→core mail hop, capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
-| **Total** | **48** | **526** | |
+| `backend-local` | 32 | 385 | send consent from the user's own message, direct sends and email scheduling, email approval (claim, edits, retry, ambiguous timeouts, expiry), agent→core mail hop, capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
+| **Total** | **50** | **549** | |
 
 Run: `pnpm --dir shared test`, `pnpm --dir frontend test`, `npm test` in each
 backend. Browser verification (Playwright, phone widths against a mock API)

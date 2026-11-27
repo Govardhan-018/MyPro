@@ -225,7 +225,7 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     version: '1.0.0',
     category: 'schedules',
     keywords: ['every morning', 'every day', 'daily', 'weekly', 'each monday', 'remind me every',
-      'brief me', 'recurring'],
+      'brief me', 'recurring', 'schedule an email', 'email later', 'send later', 'schedule a mail'],
     dependencies: ['get_now'],
     enabled: true,
   }),

@@ -19,6 +19,8 @@ export interface ExecutionRequest {
   /** Capability name → tier. Decides what may run in parallel. */
   permissions: ReadonlyMap<string, SideEffect>;
   budget: EffortBudget;
+  /** The user's own message this turn (pre-approval is read from it, never from the model). */
+  userMessage?: string;
 }
 
 export interface ExecutionResult {
@@ -231,6 +233,7 @@ ${note}`;
       timezone: request.timezone,
       // Research breadth follows the user's effort mode, not the model's whim.
       budget: request.budget,
+      userMessage: request.userMessage,
     });
     return {
       id: call.id,

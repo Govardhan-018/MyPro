@@ -131,6 +131,9 @@ export class AgentCoreService {
       tools,
       permissions,
       budget,
+      // The user's own words this turn — the only thing that may pre-approve
+      // an outward action (skills/consent.ts). Never model output.
+      userMessage: params.request,
     });
     modelCalls += run.steps;
 
