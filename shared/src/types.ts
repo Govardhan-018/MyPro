@@ -308,6 +308,8 @@ export interface PendingActionRow {
   state: string;
   created_at: string;
   expires_at: string;
+  /** Why the last attempt did not go through (shown so it can be fixed and retried). */
+  result?: string | null;
 }
 
 export interface SkillRow {

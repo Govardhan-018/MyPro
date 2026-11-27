@@ -1,4 +1,5 @@
 import {
+  Body,
   BadRequestException, Controller, Get, Module, Param, Post, UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -14,10 +15,19 @@ import { SKILLS } from './definitions';
 
 /** The arguments a parked `send_email` carries. Re-validated before sending. */
 const sendEmailArgs = z.object({
-  to: z.string().email(),
-  subject: z.string().min(1).max(300),
-  body: z.string().min(1).max(20_000),
+  to: z.string().trim().email(),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().trim().min(1).max(20_000),
 });
+
+/** What the approval card may change before sending. */
+const approveEdits = z
+  .object({
+    to: z.string().trim().email().optional(),
+    subject: z.string().trim().min(1).max(300).optional(),
+    body: z.string().trim().min(1).max(20_000).optional(),
+  })
+  .strict();
 
 interface PendingRow {
   id: string;
@@ -69,8 +79,10 @@ export class SkillsController {
     const { data } = await this.supabase
       .forUser(user.token)
       .from('pending_actions')
-      .select('id, skill, args, summary, state, created_at, expires_at')
+      .select('id, skill, args, summary, state, created_at, expires_at, result')
       .eq('state', 'pending')
+      // An expired request cannot be approved; do not offer it.
+      .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false });
     return data ?? [];
   }
@@ -81,7 +93,9 @@ export class SkillsController {
       .forUser(user.token)
       .from('pending_actions')
       .update({ state: 'rejected', resolved_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      // Never discard one that is already being sent.
+      .eq('state', 'pending');
     return { ok: true };
   }
 
@@ -99,27 +113,50 @@ export class SkillsController {
    * the user would approve again.
    */
   @Post('pending/:id/approve')
-  async approve(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+  async approve(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: unknown) {
     const db = this.supabase.forUser(user.token);
+    // Optional edits made in the approval card (send_email only).
+    const edits = approveEdits.safeParse(body ?? {});
+    if (!edits.success) {
+      throw new BadRequestException('Those edits are not valid: check the address, subject and text.');
+    }
 
     const { data, error } = await db
       .from('pending_actions')
-      .select('id, skill, args, state')
+      .select('id, skill, args, state, expires_at')
       .eq('id', id)
       .maybeSingle();
-
     if (error) throw new BadRequestException(error.message);
     if (!data) throw new BadRequestException('That action no longer exists.');
+    const pending = data as PendingRow & { expires_at?: string | null };
 
-    const pending = data as PendingRow;
     if (pending.state !== 'pending') {
       return { ok: false, executed: false, reason: `Already ${pending.state}.` };
     }
+    if (pending.expires_at && Date.parse(pending.expires_at) < Date.now()) {
+      await db.from('pending_actions').update({ state: 'expired' }).eq('id', id).eq('state', 'pending');
+      return { ok: false, executed: false, reason: 'This request expired before it was approved.' };
+    }
 
-    await db
+    // The edited email is what gets approved and sent — and what the receipt shows.
+    const args =
+      pending.skill === 'send_email' && Object.keys(edits.data).length
+        ? { ...(pending.args ?? {}), ...edits.data }
+        : (pending.args ?? {});
+
+    // Claim it: only a request still 'pending' can move to 'approved'. Two
+    // taps, two devices or a retry racing the first attempt get "already
+    // approved" instead of a second email.
+    const claim = await db
       .from('pending_actions')
-      .update({ state: 'approved', resolved_at: new Date().toISOString() })
-      .eq('id', id);
+      .update({ state: 'approved', resolved_at: new Date().toISOString(), args })
+      .eq('id', id)
+      .eq('state', 'pending')
+      .select('id');
+    if (claim.error) throw new BadRequestException(claim.error.message);
+    if (!(claim.data ?? []).length) {
+      return { ok: false, executed: false, reason: 'Already being handled.' };
+    }
 
     if (pending.skill !== 'send_email') {
       // Every other outward skill records the decision and waits for its
@@ -131,10 +168,10 @@ export class SkillsController {
       };
     }
 
-    const parsed = sendEmailArgs.safeParse(pending.args ?? {});
+    const parsed = sendEmailArgs.safeParse(args);
     if (!parsed.success) {
       const reason = 'That email is missing a valid recipient, subject or body.';
-      await this.noteOutcome(db, id, reason);
+      await this.reopen(db, id, reason);
       return { ok: false, executed: false, reason };
     }
 
@@ -146,7 +183,6 @@ export class SkillsController {
     });
 
     if (!result.ok) {
-      await this.noteOutcome(db, id, result.reason);
       await this.audit.record({
         userId: user.id,
         actor: 'user',
@@ -155,11 +191,26 @@ export class SkillsController {
         targetId: id,
         detail: { to: parsed.data.to, reason: result.reason },
       });
-      return { ok: false, executed: false, reason: result.reason };
+      if (result.ambiguous) {
+        // It may have gone out: never offer a blind resend.
+        await this.noteOutcome(db, id, result.reason);
+        return { ok: false, executed: false, reason: result.reason };
+      }
+      // Certainly not sent: put it back in the queue so it can be fixed and retried.
+      await this.reopen(db, id, `Not sent: ${result.reason}`);
+      return { ok: false, executed: false, retry: true, reason: result.reason };
     }
 
-    await this.noteOutcome(db, id, `Sent from ${result.from || 'your mailbox'}.`);
-    return { ok: true, executed: true, reason: `Sent to ${parsed.data.to}.` };
+    await this.noteOutcome(db, id, `Sent from ${result.from || 'your mailbox'} (Gmail id ${result.id}).`);
+    return { ok: true, executed: true, reason: `Sent to ${parsed.data.to}.`, id: result.id };
+  }
+
+  /** A send that certainly failed goes back to pending, with the reason. */
+  private async reopen(db: ReturnType<SupabaseService['forUser']>, id: string, reason: string) {
+    await db
+      .from('pending_actions')
+      .update({ state: 'pending', resolved_at: null, result: reason })
+      .eq('id', id);
   }
 
   /** The outcome belongs on the row, so the receipt trail is honest. */

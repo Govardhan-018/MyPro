@@ -47,6 +47,10 @@ export interface GmailState {
   connect: (mode: GmailAccessLevel) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
   sync: () => Promise<void>;
+  /** Send a real test email now (no approval) and report exactly what happened. */
+  testSend: (to?: string) => Promise<void>;
+  /** The last test send's outcome. */
+  testResult: { ok: boolean; message: string } | null;
   /** Save the in-app Google OAuth app credentials (encrypted server-side). */
   saveOauthConfig: (input: { client_id: string; client_secret: string }) => Promise<void>;
   /** Delete the in-app credentials. */
@@ -66,6 +70,7 @@ export function useGmail(enabled: boolean): GmailState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!active) {
@@ -191,6 +196,25 @@ export function useGmail(enabled: boolean): GmailState {
     }
   }, [load]);
 
+  const testSend = useCallback(async (to?: string) => {
+    setBusy(true);
+    setTestResult(null);
+    try {
+      const sent = await api.gmail.testSend(to);
+      setTestResult({
+        ok: true,
+        message: `Sent from ${sent.from} to ${to || sent.from} (Gmail message id ${sent.id}). Check that inbox.`,
+      });
+    } catch (caught) {
+      setTestResult({
+        ok: false,
+        message: caught instanceof Error ? caught.message : 'The test email was not sent.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const saveOauthConfig = useCallback(
     async (input: { client_id: string; client_secret: string }) => {
       setBusy(true);
@@ -243,6 +267,8 @@ export function useGmail(enabled: boolean): GmailState {
     connect,
     disconnect,
     sync,
+    testSend,
+    testResult,
     saveOauthConfig,
     deleteOauthConfig,
     reload: () => void load(),

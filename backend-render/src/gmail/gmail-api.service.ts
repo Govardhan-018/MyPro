@@ -223,20 +223,9 @@ export class GmailApiService {
     token: string,
     message: { to: string; subject: string; body: string; from?: string },
   ): Promise<{ id: string }> {
-    const headers = [
-      `To: ${sanitizeHeader(message.to)}`,
-      ...(message.from ? [`From: ${sanitizeHeader(message.from)}`] : []),
-      `Subject: ${sanitizeHeader(message.subject)}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset="UTF-8"',
-    ];
-    const raw = Buffer.from(`${headers.join('\r\n')}\r\n\r\n${message.body}`, 'utf8').toString(
-      'base64url',
-    );
-
     const sent = await this.call<{ id: string }>(token, '/messages/send', {
       method: 'POST',
-      body: JSON.stringify({ raw }),
+      body: JSON.stringify({ raw: buildRawMessage(message) }),
     });
     return { id: sent.id };
   }
@@ -251,11 +240,21 @@ export class GmailApiService {
       },
     });
 
-    if (res.status === 401 || res.status === 403) {
-      throw new GmailReauthRequired(`Gmail refused the request (${res.status})`);
+    if (!res.ok) {
+      // Google explains itself in the body; keep that, it is the whole fix.
+      const detail = await googleError(res);
+      if (res.status === 401) {
+        throw new GmailReauthRequired(`Gmail rejected the sign-in (${detail}). Reconnect this mailbox.`);
+      }
+      if (res.status === 403 && /insufficient|scope|permission/i.test(detail)) {
+        throw new BadRequestException(
+          `This mailbox was connected without permission to send (${detail}). Reconnect it with "Read & send".`,
+        );
+      }
+      if (res.status === 403) throw new GmailReauthRequired(`Gmail refused the request (${detail}).`);
+      if (res.status === 404 && path.startsWith('/history')) throw new GmailHistoryExpired();
+      throw new BadRequestException(`Gmail could not ${path.includes('send') ? 'send it' : 'do that'}: ${detail}`);
     }
-    if (res.status === 404 && path.startsWith('/history')) throw new GmailHistoryExpired();
-    if (!res.ok) throw new BadRequestException(`Gmail request failed (${res.status})`);
 
     return (await res.json()) as T;
   }
@@ -267,6 +266,68 @@ class GmailHistoryExpired extends Error {
     super('Gmail history cursor has expired');
     this.name = 'GmailHistoryExpired';
   }
+}
+
+/** Google's own error text, e.g. "Invalid To header" — never a token. */
+async function googleError(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: { message?: string; status?: string } };
+    const message = body.error?.message?.trim();
+    if (message) return `${res.status}: ${message.slice(0, 300)}`;
+  } catch {
+    /* not JSON */
+  }
+  return String(res.status);
+}
+
+/**
+ * RFC 2047 encoded-word for a header that is not plain ASCII — otherwise an
+ * em dash, a curly apostrophe, an emoji or any non-Latin script in an
+ * AI-written subject arrives as mojibake. Split into chunks so no encoded
+ * word exceeds 75 characters, never splitting a UTF-8 character.
+ */
+export function encodeHeaderValue(value: string): string {
+  const clean = sanitizeHeader(value);
+  if (/^[\x20-\x7e]*$/.test(clean)) return clean;
+  const words: string[] = [];
+  let chunk = '';
+  for (const ch of clean) {
+    // 45 bytes of UTF-8 → 60 chars of base64, + "=?UTF-8?B?" and "?=" = 72.
+    if (Buffer.byteLength(chunk + ch, 'utf8') > 45) {
+      words.push(chunk);
+      chunk = '';
+    }
+    chunk += ch;
+  }
+  if (chunk) words.push(chunk);
+  return words.map((w) => `=?UTF-8?B?${Buffer.from(w, 'utf8').toString('base64')}?=`).join('\r\n ');
+}
+
+/**
+ * The message Gmail's `messages.send` takes: RFC 2822 with CRLF line endings,
+ * an encoded subject, and the body base64-encoded in 76-character lines (so
+ * any text — long lines, emoji, any script — survives transport), all of it
+ * base64url-encoded. Pure; unit-tested by decoding it back.
+ */
+export function buildRawMessage(message: {
+  to: string;
+  subject: string;
+  body: string;
+  from?: string;
+  date?: Date;
+}): string {
+  const body = message.body.replace(/\r\n|\r|\n/g, '\r\n');
+  const encodedBody = (Buffer.from(body, 'utf8').toString('base64').match(/.{1,76}/g) ?? []).join('\r\n');
+  const headers = [
+    `To: ${sanitizeHeader(message.to)}`,
+    ...(message.from ? [`From: ${sanitizeHeader(message.from)}`] : []),
+    `Subject: ${encodeHeaderValue(message.subject)}`,
+    `Date: ${(message.date ?? new Date()).toUTCString().replace('GMT', '+0000')}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+  ];
+  return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${encodedBody}\r\n`, 'utf8').toString('base64url');
 }
 
 /**

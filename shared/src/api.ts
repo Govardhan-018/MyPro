@@ -403,6 +403,9 @@ export function createApi(
       connect: (mode: GmailAccessLevel = 'send', returnTo: 'web' | 'app' = 'web') =>
         post<{ url: string }>('/gmail/connect', { mode, return_to: returnTo }),
       removeAccount: (id: string) => del(`/gmail/accounts/${id}`),
+      /** Send a real test email now (to yourself by default) — no approval step. */
+      testSend: (to?: string) =>
+        post<{ ok: true; id: string; from: string }>('/gmail/test-send', to ? { to } : {}),
       /**
        * Sync now. Request-driven on purpose — render is allowed to sleep, so
        * there is no cron to be killed by it (the lesson of Phase 11).
@@ -486,9 +489,15 @@ export function createApi(
       list: () => agentGet<SkillRow[]>('/skills'),
       invocations: () => agentGet<ReceiptRow[]>('/skills/invocations'),
       pending: () => agentGet<PendingActionRow[]>('/skills/pending'),
-      approve: (id: string) =>
-        agentPost<{ ok: boolean; executed: boolean; reason?: string }>(
+      /**
+       * Approve (and, for an email, send). `edits` replaces the drafted
+       * recipient/subject/text first. `retry: true` in the answer means it
+       * certainly was not sent and is back in the queue.
+       */
+      approve: (id: string, edits?: { to?: string; subject?: string; body?: string }) =>
+        agentPost<{ ok: boolean; executed: boolean; reason?: string; retry?: boolean; id?: string }>(
           `/skills/pending/${id}/approve`,
+          edits ?? {},
         ),
       reject: (id: string) => agentPost<{ ok: boolean }>(`/skills/pending/${id}/reject`),
     },

@@ -230,6 +230,37 @@ export class GmailService {
     return { email };
   }
 
+  /**
+   * Send a real test email right now — the user's own "does sending work?"
+   * button, so it deliberately skips the approval step (the tap *is* the
+   * approval). Goes through exactly the path a scheduled or approved email
+   * takes (`sendOnBehalf`), so a pass here means sending works end to end.
+   * Defaults to the mailbox's own address.
+   */
+  async testSend(user: AuthUser, to?: string) {
+    const { data } = await this.supabase.admin
+      .from('gmail_accounts')
+      .select('id, email, scopes')
+      .eq('user_id', user.id)
+      .order('created_at');
+    const accounts = (data ?? []) as { id: string; email: string; scopes: string | null }[];
+    if (!accounts.length) {
+      throw new BadRequestException('No Gmail account is connected — connect one first.');
+    }
+    const account = accounts.find((a) => scopesGrantSend(a.scopes)) ?? accounts[0];
+    const now = new Date();
+    return this.sendOnBehalf({
+      user_id: user.id,
+      account_id: account.id,
+      to: to ?? account.email,
+      subject: 'MyPro test email — sending works ✓',
+      body:
+        `This is a test from MyPro, sent from ${account.email} at ${now.toUTCString()}.\n\n` +
+        'If you can read this, scheduled and approved emails will arrive the same way.\n' +
+        'Non-English text check: नमस्ते · ನಮಸ್ಕಾರ · café — “quotes” ✓',
+    });
+  }
+
   /** Where a (valid) state says the browser should end up. */
   returnTarget(state: string): 'web' | 'app' {
     return this.oauth.verifyState(state)?.returnTo ?? 'web';
@@ -323,7 +354,7 @@ export class GmailService {
     } catch (err) {
       if (err instanceof GmailReauthRequired) {
         throw new BadRequestException(
-          'That mailbox needs reconnecting before MyPro can send from it.',
+          `${account.email} needs reconnecting before MyPro can send from it — ${err.message}`,
         );
       }
       throw err;
@@ -415,6 +446,14 @@ export class GmailController {
   @UseGuards(AuthGuard)
   removeAccount(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.gmail.removeAccount(user, id);
+  }
+
+  /** Send a real test email now (bypasses approval: the tap is the approval). */
+  @Post('test-send')
+  @UseGuards(AuthGuard)
+  testSend(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const { to } = z.object({ to: z.string().email().optional() }).parse(body ?? {});
+    return this.gmail.testSend(user, to);
   }
 
   @Post('sync')

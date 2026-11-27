@@ -5,7 +5,7 @@ reader, knowledge base, health records, schedules, mail — and an AI companion
 that can act across all of them. One repository, three deployables, one
 Postgres, one Android app that is a native shell around the web app.
 
-> **Status (2026-11):** feature-complete for daily use. 503 automated tests
+> **Status (2026-11):** feature-complete for daily use. 526 automated tests
 > pass across the four TypeScript packages; the web builds; the Android APK
 > builds on every push to `main`. What is verified only in automation (not on
 > a physical device or against live third-party services) is listed honestly
@@ -253,7 +253,17 @@ latest run; run history with results. Execution semantics in
 - **Insights:** the agent summarises/categorises messages tool-free (injection
   hardened) into `email_insights`.
 - **Send:** only from the core (it alone holds the token key); gated on the
-  stored scope.
+  stored scope. RFC 2822 with RFC 2047-encoded subjects and a base64 body, so
+  any language, emoji or long line arrives intact; Google's own error text is
+  reported.
+- **Approval:** an outward email appears as a card with the full message —
+  edit To/Subject/Text, then Send or Discard. Approval is an atomic claim (a
+  double tap sends once); a send that certainly failed returns to the queue
+  with the reason and a "Try again"; a timeout (might have sent) is never
+  resent; expired requests cannot be approved.
+- **Test sending:** Settings → Mail → *Send test email* sends a real email now
+  through the same path (no approval step) and shows the Gmail message id or
+  the exact error.
 - `/gmail/status` reports exactly what a deployment is missing.
 
 ### 4.9 Other domains
@@ -527,9 +537,9 @@ by a push** — run each new SQL file in the Supabase SQL editor.
 |---|---|---|---|
 | `shared` | 4 | 38 | session expiry and refresh races, 401 recovery, PDF block grouping, notification mapping |
 | `frontend` | 5 | 51 | scheduler form ↔ API mapping, Markdown parser (incl. unsafe links), knowledge grouping, outbox (coalescing, ordering, interrupted sync, drop/retry), calendar event states and time zones |
-| `backend-render` | 8 | 65 | Gmail scopes and credential resolution, redirect derivation, OAuth state signing, refresh classification, schedule validation, calendar reminders/completion, recurrence, conflict resolution, idempotent inserts, self-address announcement |
-| `backend-local` | 28 | 349 | capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
-| **Total** | **45** | **503** | |
+| `backend-render` | 9 | 75 | Email send end to end (real send path, decoded MIME, encoded subjects, Google errors), Gmail scopes and credential resolution, redirect derivation, OAuth state signing, refresh classification, schedule validation, calendar reminders/completion, recurrence, conflict resolution, idempotent inserts, self-address announcement |
+| `backend-local` | 30 | 362 | email approval (claim, edits, retry, ambiguous timeouts, expiry), agent→core mail hop, capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
+| **Total** | **48** | **526** | |
 
 Run: `pnpm --dir shared test`, `pnpm --dir frontend test`, `npm test` in each
 backend. Browser verification (Playwright, phone widths against a mock API)

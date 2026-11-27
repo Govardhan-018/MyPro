@@ -18,7 +18,13 @@ export type SendOutcome =
    * request never reached the mail service. A timeout is never retryable:
    * Gmail may have sent it, and sending twice is worse than reporting once.
    */
-  | { ok: false; reason: string; retryable?: boolean };
+  | {
+      ok: false;
+      reason: string;
+      retryable?: boolean;
+      /** The request may have reached Gmail (a timeout): do not resend blindly. */
+      ambiguous?: boolean;
+    };
 
 const SEND_TIMEOUT_MS = 20_000;
 
@@ -117,6 +123,7 @@ export class RenderMailService {
           : 'Could not reach the mail service just now — try again in a moment.',
         // A connection that failed outright sent nothing; a timeout might have.
         retryable: !timedOut,
+        ambiguous: timedOut,
       };
     }
   }

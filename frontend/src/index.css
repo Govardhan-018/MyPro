@@ -9170,3 +9170,219 @@ button {
 .settings-advanced[open] > summary svg {
   transform: rotate(180deg);
 }
+
+/* ---- Approval cards: the actual email, editable, then Send / Discard ---- */
+.approval-queue {
+  flex-direction: column;
+  align-items: stretch;
+  max-height: min(55vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(20, 20, 20, 0.92);
+  min-width: 0;
+}
+.approval-card.done {
+  border-color: rgba(155, 229, 155, 0.5);
+}
+.approval-card.failed {
+  border-color: rgba(255, 120, 120, 0.5);
+}
+.approval-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.approval-card-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: rgba(255, 255, 255, 0.75);
+}
+.approval-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.approval-link:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.approval-email {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.approval-email > div {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.approval-email-body {
+  grid-template-columns: 62px minmax(0, 1fr) !important;
+}
+.approval-email-body .approval-link {
+  grid-column: 2;
+  justify-self: start;
+  padding-left: 0;
+}
+.approval-email dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.approval-email dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #fff;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-email dd.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.approval-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.approval-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.approval-edit label > span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.approval-edit input,
+.approval-edit textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.approval-edit-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.approval-summary {
+  margin: 0;
+  font-size: 14px;
+  color: #fff;
+}
+.approval-message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.7);
+  overflow-wrap: anywhere;
+}
+.approval-message.ok {
+  color: #b9f0b9;
+}
+.approval-message.error {
+  color: #ffb3b3;
+}
+.approval-card .approval-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 8px;
+}
+.approval-card .approval-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+.approval-card .approval-approve:disabled,
+.approval-card .approval-reject:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Settings → Mail: test sending */
+.mail-test {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+.mail-test strong {
+  font-size: 13.5px;
+}
+.mail-test small {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.mail-test-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.mail-test-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 16px;
+}
+.mail-test-row button {
+  flex: none;
+}
+@media (max-width: 420px) {
+  .mail-test-row {
+    flex-direction: column;
+  }
+}
+@media (max-width: 760px) {
+  .approval-queue {
+    margin: 0 12px 8px;
+  }
+}

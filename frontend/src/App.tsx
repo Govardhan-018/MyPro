@@ -82,6 +82,7 @@ import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
 import { characterInitial } from "./components/assistant/CharacterPanel";
 import { Markdown } from "./components/assistant/Markdown";
+import { ApprovalCard, type ApprovalOutcome } from "./components/assistant/ApprovalCard";
 import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
 import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
 import { WatchingPanel } from "./components/assistant/WatchingPanel";
@@ -2359,11 +2360,30 @@ function AssistantView({ userEmail }: { userEmail?: string | null }) {
     }
   };
 
-  const resolvePending = async (id: string, action: "approve" | "reject") => {
+  /** Approve (and, for an email, send) — optionally with the card's edits. */
+  const approvePending = async (
+    id: string,
+    edits?: { to?: string; subject?: string; body?: string },
+  ): Promise<ApprovalOutcome> => {
+    try {
+      const outcome = await api.skills.approve(id, edits);
+      // Sent: drop it after the card has shown "Sent". Failed for certain:
+      // the server put it back in the queue with the reason — reload it.
+      window.setTimeout(
+        () => api.skills.pending().then(setPending).catch(() => {}),
+        outcome.ok ? 2500 : 0,
+      );
+      return outcome;
+    } catch (caught) {
+      api.skills.pending().then(setPending).catch(() => {});
+      throw caught;
+    }
+  };
+
+  const rejectPending = async (id: string) => {
     setPending((queue) => queue.filter((item) => item.id !== id));
     try {
-      if (action === "approve") await api.skills.approve(id);
-      else await api.skills.reject(id);
+      await api.skills.reject(id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the request.");
       api.skills.pending().then(setPending).catch(() => {});
@@ -2497,28 +2517,9 @@ function AssistantView({ userEmail }: { userEmail?: string | null }) {
           )}
         </div>
         {pending.length > 0 && (
-          <div className="approval-queue">
+          <div className="approval-queue" aria-label="Waiting for your approval">
             {pending.map((item) => (
-              <div key={item.id} className="approval-item">
-                <div className="approval-text">
-                  <strong>{item.summary || item.skill}</strong>
-                  <small>Needs your approval</small>
-                </div>
-                <div className="approval-actions">
-                  <button
-                    className="approval-reject"
-                    onClick={() => resolvePending(item.id, "reject")}
-                  >
-                    Dismiss
-                  </button>
-                  <button
-                    className="approval-approve"
-                    onClick={() => resolvePending(item.id, "approve")}
-                  >
-                    Approve
-                  </button>
-                </div>
-              </div>
+              <ApprovalCard key={item.id} item={item} onApprove={approvePending} onReject={rejectPending} />
             ))}
           </div>
         )}
@@ -4930,6 +4931,7 @@ function SettingsView({
   // The in-app Google OAuth app credentials form. Write-only: never pre-filled
   // from the server, since the secret is never returned.
   const [oauthForm, setOauthForm] = useState({ client_id: "", client_secret: "" });
+  const [testTo, setTestTo] = useState("");
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState("");
   const [savedNote, setSavedNote] = useState(false);
@@ -5411,6 +5413,45 @@ function SettingsView({
                     </button>
                   )}
                 </div>
+
+                {/* A real send, right now, through the same path every email takes. */}
+                {gmail.accounts.some((a) => gmailScopesGrantSend(a.scopes)) && (
+                  <div className="mail-test">
+                    <strong>Test sending</strong>
+                    <small>
+                      Sends a real email now — no approval step — so you can confirm sending works.
+                      Leave the address empty to send it to yourself.
+                    </small>
+                    <div className="mail-test-row">
+                      <input
+                        type="email"
+                        inputMode="email"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        placeholder={gmail.accounts.find((a) => gmailScopesGrantSend(a.scopes))?.email ?? "you@gmail.com"}
+                        value={testTo}
+                        onChange={(e) => setTestTo(e.target.value)}
+                        aria-label="Send the test email to"
+                      />
+                      <button
+                        className="secondary-button"
+                        disabled={gmail.busy || (testTo.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testTo.trim()))}
+                        onClick={() => void gmail.testSend(testTo.trim() || undefined)}
+                      >
+                        {gmail.busy ? "Sending…" : "Send test email"}
+                      </button>
+                    </div>
+                    {gmail.testResult && (
+                      <p
+                        className={`settings-hint ${gmail.testResult.ok ? "" : "settings-hint-error"}`}
+                        role="status"
+                      >
+                        {gmail.testResult.ok ? "✓ " : ""}
+                        {gmail.testResult.message}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Access level for the next mailbox. Per-account: one inbox
                     can be read-only while another may send scheduled email. */}
