@@ -12,7 +12,9 @@ import { env } from '../config/env';
 export class InternalAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
-    const provided = req.headers['x-internal-token'];
+    const raw = req.headers['x-internal-token'];
+    // Tolerate whitespace around a pasted secret (a trailing newline).
+    const provided = typeof raw === 'string' ? raw.trim() : raw;
     const expected = env().INTERNAL_SERVICE_TOKEN;
 
     if (typeof provided !== 'string' || provided.length !== expected.length) {

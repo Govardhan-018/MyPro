@@ -37,7 +37,7 @@ const schema = z.object({
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
   /** Shared secret for render→laptop calls. Must match backend-render. */
-  INTERNAL_SERVICE_TOKEN: z.string().min(32),
+  INTERNAL_SERVICE_TOKEN: z.string().trim().min(32),
 
   /**
    * backend-render's API root, e.g. https://mypro-xxxx.onrender.com/api/v1

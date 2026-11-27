@@ -40,7 +40,7 @@ const schema = z.object({
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
   /** Shared secret for render→laptop calls. Must match backend-local. */
-  INTERNAL_SERVICE_TOKEN: z.string().min(32),
+  INTERNAL_SERVICE_TOKEN: z.string().trim().min(32),
 
   /**
    * Optional fallback only. Normally the laptop's URL is discovered from

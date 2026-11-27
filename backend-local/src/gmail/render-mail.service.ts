@@ -95,7 +95,10 @@ export class RenderMailService {
         // request never reached the app, so nothing was sent.
         const waking = res.status === 502 || res.status === 503 || res.status === 504;
         const message =
-          parsed && typeof parsed === 'object' && 'message' in parsed
+          res.status === 401
+            ? 'The agent and the core have different INTERNAL_SERVICE_TOKEN values — copy it from ' +
+              'mypro-core → Environment into mypro-agent → Environment exactly, then redeploy the agent.'
+            : parsed && typeof parsed === 'object' && 'message' in parsed
             ? String((parsed as { message: unknown }).message)
             : waking
               ? 'The mail service is waking up.'
