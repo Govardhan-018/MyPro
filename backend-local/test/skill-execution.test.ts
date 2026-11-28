@@ -183,49 +183,6 @@ describe('add_library_item defaults', () => {
   });
 });
 
-describe('create_commitment arms the first check-in', () => {
-  it('derives next_checkin_at roughly halfway to a future deadline', async () => {
-    const { client, calls } = makeDb();
-    const due = new Date(NOW.getTime() + 10 * 864e5).toISOString();
-    await skill('create_commitment').run({ title: 'Ship v2', due_at: due }, ctxWith(client));
-    const row = only(calls, 'commitments').payload;
-    expect(row.kind).toBe('promise'); // defaulted
-    const checkin = Date.parse(row.next_checkin_at);
-    expect(checkin).toBeGreaterThan(NOW.getTime());
-    expect(checkin).toBeLessThan(Date.parse(due));
-    // ~halfway: within a day of the midpoint
-    const mid = NOW.getTime() + (Date.parse(due) - NOW.getTime()) / 2;
-    expect(Math.abs(checkin - mid)).toBeLessThan(864e5);
-  });
-
-  it('arms no check-in when there is no deadline to measure against', async () => {
-    const { client, calls } = makeDb();
-    await skill('create_commitment').run({ title: 'Read more' }, ctxWith(client));
-    expect(only(calls, 'commitments').payload.next_checkin_at).toBeUndefined();
-  });
-
-  it('does not arm a check-in for a deadline already in the past', async () => {
-    const { client, calls } = makeDb();
-    const past = new Date(NOW.getTime() - 864e5).toISOString();
-    await skill('create_commitment').run({ title: 'Oops', due_at: past }, ctxWith(client));
-    expect(only(calls, 'commitments').payload.next_checkin_at).toBeUndefined();
-  });
-});
-
-describe('update_commitment stamps resolution', () => {
-  it('stamps resolved_at when moving to a terminal state', async () => {
-    const { client, calls } = makeDb();
-    await skill('update_commitment').run({ id: UUID, state: 'done' }, ctxWith(client));
-    expect(only(calls, 'commitments').payload.resolved_at).toBe(NOW.toISOString());
-  });
-
-  it('clears resolved_at when re-opening', async () => {
-    const { client, calls } = makeDb();
-    await skill('update_commitment').run({ id: UUID, state: 'open' }, ctxWith(client));
-    expect(only(calls, 'commitments').payload.resolved_at).toBeNull();
-  });
-});
-
 describe('save_note', () => {
   it('files a loose note under a single auto-created notebook', async () => {
     // maybeSingle returns null → the "Notes with MyPro" notebook does not yet exist

@@ -213,119 +213,6 @@ const updateTask = defineSkill({
 });
 
 /* ------------------------------------------------------------------ */
-/* commitments — open loops the companion follows up on (Phase 16.1)    */
-/* ------------------------------------------------------------------ */
-
-const listCommitments = defineSkill({
-  name: 'list_commitments',
-  description:
-    'The open loops the user is on the hook for — things they said they would ' +
-    'do, each with a deadline and a state (open, at_risk, done, slipped, ' +
-    'abandoned). Use for "what am I committed to", "what\'s at risk", or before ' +
-    'following up on a promise. Defaults to the live ones (open + at_risk).',
-  sideEffect: 'read',
-  schema: z.object({
-    state: z
-      .enum(['open', 'at_risk', 'done', 'slipped', 'abandoned'])
-      .optional()
-      .describe('omit for the live ones (open + at_risk)'),
-  }),
-  async run(args, ctx) {
-    let q = ctx.db
-      .from('commitments')
-      .select('id, title, detail, kind, due_at, confidence, state, next_checkin_at')
-      .order('due_at', { ascending: true, nullsFirst: false })
-      .limit(100);
-    q = args.state ? q.eq('state', args.state) : q.in('state', ['open', 'at_risk']);
-    return check(await q);
-  },
-});
-
-const createCommitment = defineSkill({
-  name: 'create_commitment',
-  description:
-    'Record an open loop when the user commits to something — "I need to finish ' +
-    'the report by Friday", "I promised Anu I\'d call her". A commitment is ' +
-    'something with a stake or a promise behind it; use create_task instead for ' +
-    'an ordinary to-do. Capture the deadline when there is one, and set ' +
-    'next_checkin_at to when you should proactively follow up (e.g. partway to ' +
-    'the deadline, not the morning it is due).',
-  sideEffect: 'write',
-  schema: z.object({
-    title: z.string().min(1).max(300),
-    detail: z.string().max(10_000).optional(),
-    kind: z
-      .enum(['promise', 'goal', 'decision', 'intention'])
-      .optional()
-      .describe('defaults to promise'),
-    due_at: iso.optional(),
-    confidence: z.number().int().min(0).max(3).optional().describe('how sure the deadline is, 0-3'),
-    next_checkin_at: iso.optional().describe('when to proactively follow up'),
-  }),
-  async run(args, ctx) {
-    // Arm the first proactive check-in ~halfway to the deadline (min 30 min
-    // out) when the model didn't set one, so the scheduler has something to
-    // fire. Mirrors backend-render's deriveCheckin — change one, change both.
-    const row: Record<string, unknown> = {
-      ...args,
-      kind: args.kind ?? 'promise',
-      user_id: ctx.user.id,
-    };
-    if (!args.next_checkin_at && args.due_at) {
-      const due = new Date(args.due_at).getTime();
-      const now = ctx.now.getTime();
-      if (!Number.isNaN(due) && due > now) {
-        row.next_checkin_at = new Date(
-          Math.max(now + (due - now) * 0.5, now + 30 * 60_000),
-        ).toISOString();
-      }
-    }
-    return check(
-      await ctx.db
-        .from('commitments')
-        .insert(row)
-        .select('id, title, kind, due_at, state, next_checkin_at')
-        .single(),
-    );
-  },
-});
-
-const updateCommitment = defineSkill({
-  name: 'update_commitment',
-  description:
-    'Update an open loop: mark it done, flag it at_risk, slip or abandon it, ' +
-    'change its deadline, or move its next check-in. Needs the id — call ' +
-    'list_commitments first. Setting state to done/slipped/abandoned resolves it.',
-  sideEffect: 'write',
-  schema: z.object({
-    id: z.string().uuid(),
-    title: z.string().min(1).max(300).optional(),
-    detail: z.string().max(10_000).optional(),
-    due_at: iso.optional(),
-    confidence: z.number().int().min(0).max(3).optional(),
-    state: z.enum(['open', 'at_risk', 'done', 'slipped', 'abandoned']).optional(),
-    next_checkin_at: iso.optional(),
-  }),
-  async run({ id, ...patch }, ctx) {
-    const row: Record<string, unknown> = { ...patch };
-    // Reaching a terminal state resolves the loop; re-opening clears the stamp.
-    if (patch.state && ['done', 'slipped', 'abandoned'].includes(patch.state)) {
-      row.resolved_at = ctx.now.toISOString();
-    } else if (patch.state) {
-      row.resolved_at = null;
-    }
-    return check(
-      await ctx.db
-        .from('commitments')
-        .update(row)
-        .eq('id', id)
-        .select('id, title, state, due_at, next_checkin_at')
-        .single(),
-    );
-  },
-});
-
-/* ------------------------------------------------------------------ */
 /* memory — durable facts the companion carries between chats (Phase 16) */
 /* ------------------------------------------------------------------ */
 
@@ -1331,9 +1218,6 @@ export const SKILLS: Skill<any>[] = [
   listTasks,
   createTask,
   updateTask,
-  listCommitments,
-  createCommitment,
-  updateCommitment,
   remember,
   forget,
   openThread,

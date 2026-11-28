@@ -45,9 +45,6 @@ const CASES: Array<[string, string]> = [
   ['add a task to buy milk', 'create_task'],
   ['what is on my to-do list', 'list_tasks'],
   ['mark the report as done', 'update_task'],
-  // commitments
-  ['what have I promised people', 'list_commitments'],
-  ["I promised Anu I'd finish the deck by friday", 'create_commitment'],
   // memory
   ['remember that I prefer mornings for deep work', 'remember'],
   ['forget what I told you about my diet', 'forget'],

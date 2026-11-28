@@ -84,7 +84,7 @@ never a second implementation.
 | 10 | PDF pipeline | web/app · render | ✅ done (OCR on the web) |
 | 11 | The clock | web/app · local | ✅ done |
 | 12 | Ground under the agent | local | ✅ 12.1–12.4 done (12.2 live-model scoring still manual) |
-| 13 | The phone as main surface | web/app | 🟡 shell cutover built; 13.2 offline reading built (library + books + reading sync); device-proof + delete (ANDROID_UPGRADE §3) left |
+| 13 | The phone as main surface | web/app | 🟡 shell cutover built; 13.2 offline reading built (library + books + reading sync); 13.11 mobile UI overhaul built; device-proof + delete (ANDROID_UPGRADE §3) left |
 | 14 | Everything you read, searchable | all | ⬜ |
 | 15 | One operational picture | render · local | 🟡 15.1 done with Phase 7 |
 | 16 | A companion that initiates | local | ✅ built (16.1–16.4); live behaviour unproven |
@@ -346,7 +346,7 @@ tests live in `test/` (outside `src/`, so they stay out of the Nest build and
   is directly testable. `test/skill-execution.test.ts` injects a fake query
   builder and asserts the **row actually written**: owner stamping, column
   defaults (`add_library_item` → `want`, `remember` → confidence 0.8), derived
-  values (`create_commitment`'s halfway check-in), conflict targets
+  values (the since-removed `create_commitment`'s halfway check-in), conflict targets
   (`user_id,key`; `user_id,category,entity`), the auto-created notebook a loose
   note lands in, and the de-duplicated weekday rows a weekly schedule writes.
   The older `*-skills.test.ts` files keep covering the schemas and the tiers.
@@ -568,6 +568,27 @@ the native screens.
   (`react-native-webview` resolves). **Not yet proven on a real phone — and
   until it is, the native screens are not deleted (ANDROID_UPGRADE §3, step 6)
   and 13.2 stays open.**
+- ✅ **13.11** Mobile UI overhaul (Nov 2026, built for the Android phone
+  width first). **Login** keeps only the mark, "Welcome to MyPro" and a
+  sharper form (focus rings, larger targets). **Today** swaps the insight card
+  for a **motivational quote** (`data/quotes.ts`, built to hold ~200; random
+  per load, never the same one twice in a row via `sessionStorage`; ten dark
+  mesh backgrounds) and reads Today's Flow from the merged agenda.
+  **Calendar** is one **Month** view (`components/calendar/CalendarView.tsx`)
+  — dots on busy days, the selected day's schedule beneath with lead time and
+  Mark done / Delete — and **one store**: Quick Add makes a *Reminder* or an
+  *Event* in `calendar_events` (`kind`, migration **`0025`**) with an
+  optional *Remind before*; one-off Schedules reminders appear and can be
+  edited or deleted there too (`lib/useAgenda.ts`). Render computes alert
+  moments incl. 09:00 all-day reminders in the device's zone
+  (`calendarReminderMoments`, `/schedules/upcoming?tz`). **Library**: search
+  bar can be hidden (Settings → Profile & preferences, per device,
+  `lib/preferences.ts`), typographic **book covers** for books without art
+  (`BookCover.tsx`, hashed per book), **My Collections removed** from the page
+  (the API stays), and the stat boxes became **concentric progress rings**
+  (`ui/ConcentricRings.tsx`). **Commitments removed** from every layer — web,
+  render, the agent's three skills, the Pulse signal and the register (which
+  now reads tasks) — and **`0024`** drops the table.
 
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your
@@ -590,7 +611,7 @@ data.**
 - ✅ **15.1** Gmail — all of Phase 7, done
 - **15.2** Health delete + the assistant consent-grant UI, so the database's
   consent gate has a face
-- **15.3** Calendar, tasks, email and commitments answered together rather
+- **15.3** Calendar, tasks and email answered together rather
   than screen by screen
 
 ### ✅ Phase 16 — A companion that initiates *(built; live behaviour unproven)*
@@ -599,7 +620,8 @@ did.** This is `COMPANION_VISION.md`. All four parts are now implemented and
 unit-tested; what has not happened is a real run on the live stack (needs
 migrations `0009`–`0011` applied and the agent rebuilt — see §6).
 
-- ✅ **16.1 Commitments and threads.** `commitments` (`0009`) — a state machine
+- ✅ **16.1 Commitments and threads.** *Commitments was **removed** in Nov
+  2026 (13.11 below; `0024` drops the table) — threads remain.* `commitments` (`0009`) — a state machine
   `open|at_risk|done|slipped|abandoned` with `kind`, `due_at`/`confidence`,
   `next_checkin_at`. Render owns the always-on CRUD (`/commitments`); the agent
   has `list`/`create`/`update_commitment`; the web has a **Commitments**
@@ -617,7 +639,7 @@ migrations `0009`–`0011` applied and the agent rebuilt — see §6).
   one sentence per stretch of conversation). All assembled in
   `AssistantService.memoryContext`.
 - ✅ **16.3 The Pulse.** `PulseService` (`pulse/`, 30-min cron) gathers candidate
-  signals — commitment check-ins, overdue/soon tasks, action-needed email,
+  signals — overdue/soon tasks, action-needed email,
   silence, plus the rhythm signals below — scores each **urgency × value ×
   novelty** (`pulse/scoring.ts`), and sends only those that clear a minimum
   score, a per-signal **cooldown**, and a **daily budget of 3**. Every
@@ -657,9 +679,9 @@ a sentence because a sentence was the only output available.
 neighbours; this is what makes it one tool.
 
 - **17.1** One place to ask anything, answered across reading, week,
-  commitments and mail in a single response
+  tasks and mail in a single response
 - **17.2** Cross-corner reasoning — what you read informs what it suggests for
-  the week; an open commitment pulls the relevant email *and* the relevant
+  the week; an open task pulls the relevant email *and* the relevant
   highlight; health context changes the register, not the content
 - **17.3** One search over documents, annotations, transcripts, messages and
   events
@@ -852,7 +874,7 @@ migration `0013` applied. Contract: `docs/RESEARCH_PROVIDERS.md`.
   applied research still works, but nothing is cached and no usage is counted,
   which on free tiers is the difference between 200 requests a day being
   plenty and not. Phase 16 needs three:
-  `0009_commitments.sql` (commitments), `0010_narrative_memory.sql` (the weekly
+  `0009_commitments.sql` (since dropped by `0024`), `0010_narrative_memory.sql` (the weekly
   narrative), and `0011_companion.sql` (episodic memory, the Pulse's
   `interventions` ledger, and attention threads). The `remember`/`forget` facts
   use `assistant_memory` from 0001, so those work even before the rest land.

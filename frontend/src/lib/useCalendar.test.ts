@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { dateKeyOf, describeEventTime, eventActionState, eventPhaseOf, type CalEvent } from './useCalendar';
+import {
+  dateKeyOf,
+  describeEventTime,
+  effectiveLead,
+  eventActionState,
+  eventBody,
+  eventPhaseOf,
+  leadLabel,
+  remindAt,
+  rowToEvent,
+  type CalEvent,
+} from './useCalendar';
 
 /**
  * Phase 12.4 — the day an event belongs to. This is the bug the function was
@@ -71,5 +82,87 @@ describe('started / completed events (the read-only modal)', () => {
   it('completed stays completed (read-only), and the time reads in local time', () => {
     expect(eventActionState({ ...ev, completedAt: '2026-11-24T17:00:00Z' }).completed).toBe(true);
     expect(describeEventTime(ev)).toMatch(/11:55.*11:58/);
+  });
+});
+
+describe('one store for reminders and events (0025)', () => {
+  it('maps kind, note and the chosen lead from a row', () => {
+    const r = rowToEvent({
+      id: 'r1',
+      title: 'Pay rent',
+      starts_at: '2026-12-01T14:00:00Z',
+      kind: 'reminder',
+      description: 'landlord account',
+      event_reminders: [{ minutes_before: 15 }],
+    });
+    expect(r).toMatchObject({ kind: 'reminder', note: 'landlord account', leadMinutes: 15, source: 'calendar' });
+    expect(r.tone).toBe('cyan');
+    // A row from before 0025 is an event with no lead of its own.
+    expect(rowToEvent({ id: 'e1', title: 'x', starts_at: '2026-12-01T14:00:00Z' })).toMatchObject({
+      kind: 'event',
+      leadMinutes: null,
+    });
+  });
+
+  it('effectiveLead keeps render’s baseline when nothing was chosen', () => {
+    expect(effectiveLead({ kind: 'event', allDay: false, leadMinutes: null })).toBe(60);
+    expect(effectiveLead({ kind: 'reminder', allDay: false, leadMinutes: null })).toBe(0);
+    expect(effectiveLead({ kind: 'event', allDay: false, leadMinutes: 15 })).toBe(15);
+    // A sub-day lead on an all-day item collapses to the morning-of.
+    expect(effectiveLead({ kind: 'event', allDay: true, leadMinutes: 30 })).toBe(0);
+    expect(effectiveLead({ kind: 'event', allDay: true, leadMinutes: 1440 })).toBe(1440);
+  });
+
+  it('remindAt = start − lead; all-day at 09:00 local on its date', () => {
+    expect(
+      remindAt({ startsAt: '2026-12-01T14:00:00.000Z', allDay: false, leadMinutes: 30, kind: 'reminder' })?.toISOString(),
+    ).toBe('2026-12-01T13:30:00.000Z');
+    const allDay = remindAt({ startsAt: '2026-12-01T00:00:00.000Z', allDay: true, leadMinutes: 1440, kind: 'event' });
+    // 09:00 New York on 30 Nov (the day before) = 14:00Z.
+    expect(allDay?.toISOString()).toBe('2026-11-30T14:00:00.000Z');
+  });
+
+  it('labels leads for the list', () => {
+    expect(leadLabel(0)).toBe('At time');
+    expect(leadLabel(15)).toBe('15 min before');
+    expect(leadLabel(60)).toBe('1 hr before');
+    expect(leadLabel(1440)).toBe('1 day before');
+    expect(leadLabel(0, true)).toBe('Morning of');
+  });
+
+  it('eventBody: a reminder carries a note and one lead, never an end or a location', () => {
+    const body = eventBody({
+      kind: 'reminder',
+      title: '  Call Anu  ',
+      date: '2026-12-01',
+      startTime: '18:30',
+      endTime: '19:00',
+      allDay: false,
+      location: 'ignored',
+      note: ' about the trip ',
+      leadMinutes: 15,
+    });
+    expect(body).toEqual({
+      title: 'Call Anu',
+      starts_at: new Date('2026-12-01T18:30:00').toISOString(),
+      all_day: false,
+      description: 'about the trip',
+      kind: 'reminder',
+      reminders: [{ minutes_before: 15, channel: 'push' }],
+    });
+  });
+
+  it('eventBody: an all-day item is stored as UTC midnight and only whole-day leads survive', () => {
+    const body = eventBody({ kind: 'event', title: 'Trip', date: '2026-12-05', allDay: true, leadMinutes: 90 });
+    expect(body.starts_at).toBe('2026-12-05T00:00:00.000Z');
+    expect(body.reminders).toEqual([{ minutes_before: 0, channel: 'push' }]);
+  });
+
+  it('eventBody: refuses a missing time, a missing title, and an end before the start', () => {
+    expect(() => eventBody({ title: 'x', date: '2026-12-01', allDay: false })).toThrow(/time/);
+    expect(() => eventBody({ title: ' ', date: '2026-12-01', startTime: '10:00', allDay: false })).toThrow(/title/);
+    expect(() =>
+      eventBody({ kind: 'event', title: 'x', date: '2026-12-01', startTime: '10:00', endTime: '09:00', allDay: false }),
+    ).toThrow(/end time/);
   });
 });

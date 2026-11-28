@@ -198,7 +198,7 @@ table. Build the APK in GitHub Actions as today.
 
 ### Phase D — companion intelligence (Roadmap Phase 9)
 
-Commitments and derived check-ins. This is the phase that changes how the
+Commitments and derived check-ins (since removed, Nov 2026). This is the phase that changes how the
 thing *feels*, and it costs nothing extra: it is rows in Postgres plus the
 tick that already exists.
 

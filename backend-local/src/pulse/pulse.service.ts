@@ -31,8 +31,8 @@ import { env } from '../config/env';
  * `interventions`, so "what did you decide not to tell me today?" has a real
  * answer. Silence is a valid, recorded output.
  *
- * This subsumes the earlier one-off commitment check-in and inactivity nudge:
- * they are now just two signal types among several.
+ * This subsumes the earlier inactivity nudge: it is now just one signal type
+ * among several.
  */
 
 interface Persona {
@@ -45,7 +45,6 @@ interface Persona {
 
 interface RawCandidate extends Candidate {
   cooldownMs: number;
-  commitmentId?: string;
   /** Set for interest candidates, so delivery can honour `notify`. */
   interestId?: string;
   findingId?: string;
@@ -61,7 +60,6 @@ const PULSE_FACTS = 8;
 const PULSE_NARRATIVE_CHARS = 600;
 const DAILY_BUDGET = 3;
 const COOLDOWN: Record<SignalType, number> = {
-  commitment: 6 * 3600_000,
   task: 12 * 3600_000,
   email: 6 * 3600_000,
   silence: 24 * 3600_000,
@@ -162,33 +160,6 @@ export class PulseService {
     const db = this.supabase.admin;
     const out: RawCandidate[] = [];
     const nowIso = new Date(now).toISOString();
-
-    const commitments = (
-      await db
-        .from('commitments')
-        .select('id, title, detail, due_at, state')
-        .eq('user_id', p.user_id)
-        .in('state', ['open', 'at_risk'])
-        .not('next_checkin_at', 'is', null)
-        .lte('next_checkin_at', nowIso)
-        .order('next_checkin_at')
-        .limit(5)
-    ).data as
-      | { id: string; title: string; detail: string | null; due_at: string | null; state: string }[]
-      | null;
-    for (const c of commitments ?? []) {
-      const overdue = c.due_at != null && new Date(c.due_at).getTime() < now;
-      const soon = c.due_at != null && new Date(c.due_at).getTime() - now < 24 * 3600_000;
-      out.push({
-        signalType: 'commitment',
-        urgency: overdue ? 0.9 : soon ? 0.8 : 0.5,
-        value: 0.85,
-        novelty: 1,
-        cooldownMs: COOLDOWN.commitment,
-        commitmentId: c.id,
-        payload: { id: c.id, title: c.title, detail: c.detail, due_at: c.due_at, overdue },
-      });
-    }
 
     const tasks = (
       await db
@@ -510,7 +481,6 @@ export class PulseService {
 
   private async compose(p: Persona, c: RawCandidate): Promise<string> {
     const briefs: Record<SignalType, string> = {
-      commitment: 'a commitment they made that is due for a check-in',
       task: 'an open task that is due or overdue',
       email: 'an email that looks like it needs a reply',
       silence: 'they have been quiet for a while — a warm, light hello',
@@ -555,10 +525,6 @@ export class PulseService {
   private plain(c: RawCandidate): string {
     const title = (c.payload?.title as string) ?? '';
     switch (c.signalType) {
-      case 'commitment':
-        return c.payload?.overdue
-          ? `About "${title}" — it's past due. Want to reschedule it or close it out?`
-          : `Checking in on "${title}". How's it going — want me to block time for it?`;
       case 'task':
         return `Heads up: "${title}" is ${c.payload?.overdue ? 'overdue' : 'due soon'}.`;
       case 'email':
@@ -618,16 +584,6 @@ export class PulseService {
 
   private async afterSend(c: RawCandidate, now: number): Promise<void> {
     await this.markFinding(c, 'delivered');
-    if (c.signalType !== 'commitment' || !c.commitmentId) return;
-    const dueAt = c.payload?.due_at as string | null | undefined;
-    const patch: Record<string, unknown> = {};
-    if (c.payload?.overdue) patch.state = 'at_risk';
-    const next =
-      dueAt && new Date(dueAt).getTime() > now
-        ? Math.max(now + (new Date(dueAt).getTime() - now) / 2, now + 6 * 3600_000)
-        : now + 24 * 3600_000;
-    patch.next_checkin_at = new Date(next).toISOString();
-    await this.supabase.admin.from('commitments').update(patch).eq('id', c.commitmentId);
   }
 
   private async record(

@@ -24,7 +24,7 @@ import { many, none, one } from '../common/crud';
  * team"), but the list has to be readable and editable whether or not the
  * laptop is awake — being able to turn a notification off at the moment it
  * annoys you is what makes it safe to turn on in the first place. Same
- * reasoning as commitments and tasks.
+ * reasoning as tasks.
  */
 
 const CATEGORY = z.enum(['team', 'player', 'company', 'technology', 'person', 'topic', 'other']);

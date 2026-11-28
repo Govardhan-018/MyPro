@@ -14,7 +14,6 @@ import type { LottieHandle } from "lottie-react";
 import {
   AlarmClock,
   Archive,
-  ArrowLeft,
   Bell,
   ArrowRight,
   BookOpen,
@@ -37,8 +36,6 @@ import {
   Eye,
   EyeOff,
   FileText,
-  Folder,
-  GripVertical,
   Headphones,
   HeartPulse,
   Home,
@@ -78,7 +75,6 @@ import { ArticleReaderModal } from "./components/library/ArticleReaderModal";
 import { BookOptionsModal } from "./components/library/BookOptionsModal";
 import { StorageSyncView } from "./components/settings/StorageSyncView";
 import { SchedulesView } from "./components/schedules/SchedulesView";
-import { CommitmentsView } from "./components/commitments/CommitmentsView";
 import { NotificationToasts } from "./components/NotificationToasts";
 import { characterInitial } from "./components/assistant/CharacterPanel";
 import { Markdown } from "./components/assistant/Markdown";
@@ -87,8 +83,13 @@ import { AgentPlanCard } from "./components/assistant/AgentPlanCard";
 import { CapabilityReadout } from "./components/assistant/CapabilityReadout";
 import { WatchingPanel } from "./components/assistant/WatchingPanel";
 import { ResultBlocks } from "./components/assistant/ResultBlocks";
+import { QuoteCard } from "./components/QuoteCard";
+import { BookCover } from "./components/library/BookCover";
+import { ConcentricRings } from "./components/ui/ConcentricRings";
+import { usePreference } from "./lib/preferences";
+import { CalendarView } from "./components/calendar/CalendarView";
+import { useAgenda, dayOrder } from "./lib/useAgenda";
 import { MobileNavSheet } from "./components/MobileNavSheet";
-import { useCollections } from "./lib/useCollections";
 import { isApiConfigured } from "./lib/env";
 import { storePdfLocally } from "./utils/pdfStorage";
 import { extractVideoId, fetchYouTubeMeta } from "./lib/youtube";
@@ -144,28 +145,7 @@ import {
   type IllnessMedication,
   type IllnessRecord,
 } from "./lib/useHealth";
-import {
-  useCalendar,
-  groupByDate,
-  isoDate,
-  startOfWeek,
-  weekdayLabel,
-  positionOf,
-  eventMeta,
-  timeLabel,
-  durationLabel,
-  nowOffset,
-  dateKeyOf,
-  timeInputValue,
-  eventActionState,
-  eventPhaseOf,
-  describeEventTime,
-  HOUR_LABELS,
-  GRID_HEIGHT,
-  DEFAULT_SCROLL_TOP,
-  type CalEvent,
-  type NewEventInput,
-} from "./lib/useCalendar";
+import { groupByDate, isoDate, timeLabel, durationLabel, effectiveLead, leadLabel } from "./lib/useCalendar";
 
 type View =
   | "today"
@@ -173,7 +153,6 @@ type View =
   | "library"
   | "knowledge"
   | "health"
-  | "commitments"
   | "schedules"
   | "assistant"
   | "settings";
@@ -184,7 +163,6 @@ const VIEWS: View[] = [
   "library",
   "knowledge",
   "health",
-  "commitments",
   "schedules",
   "assistant",
 ];
@@ -295,7 +273,6 @@ const navItems: { id: View; label: string; icon: typeof Home }[] = [
   { id: "library", label: "My Library", icon: Library },
   { id: "knowledge", label: "My Knowledge", icon: Brain },
   { id: "health", label: "Health Records", icon: HeartPulse },
-  { id: "commitments", label: "Commitments", icon: ClipboardList },
   { id: "schedules", label: "Schedules", icon: AlarmClock },
   { id: "assistant", label: "AI Assistant", icon: Sparkles },
 ];
@@ -470,26 +447,7 @@ function Welcome({
           <div className={`login-animation ${ambient ? "ambient" : ""}`} aria-hidden="true">
             <RollingCubes intro onReady={revealContent} />
           </div>
-          <div className="eyebrow">ONE INTELLIGENT SPACE</div>
           <h1>Welcome to MyPro</h1>
-          <p>One intelligent space for your time, knowledge, and health.</p>
-          <div className="login-pillars">
-            {[
-              [CalendarDays, "Calendar", "Organize your time."],
-              [Library, "Library", "Keep your knowledge."],
-              [HeartPulse, "Health", "Remember your history."],
-            ].map(([Icon, title, subtitle], index) => (
-              <div key={String(title)}>
-                <span className={`pillar-icon pillar-icon-${index + 1}`}>
-                  <Icon size={16} />
-                </span>
-                <p>
-                  <strong>{String(title)}</strong>
-                  <small>{String(subtitle)}</small>
-                </p>
-              </div>
-            ))}
-          </div>
         </div>
 
         <aside className="login-panel">
@@ -615,8 +573,9 @@ function TodayView({
   onOpenMedia: (item: LibraryItem) => void;
 }) {
   const now = new Date();
-  const { events: calEvents } = useCalendar(now);
-  const todaysEvents = (groupByDate(calEvents).get(isoDate(now)) ?? []).filter((e) => !e.allDay);
+  // The same list the Calendar reads: events, reminders, Schedules reminders.
+  const { items: agendaItems } = useAgenda(now);
+  const todaysEvents = dayOrder(groupByDate(agendaItems).get(isoDate(now)) ?? []);
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning." : hour < 18 ? "Good afternoon." : "Good evening.";
   const inProgress =
@@ -653,43 +612,49 @@ function TodayView({
               </p>
             ) : (
               todaysEvents.map((event) => (
-                <div className="agenda-row" key={event.id}>
+                <button
+                  type="button"
+                  className={`agenda-row${event.completedAt ? " is-done" : ""}`}
+                  key={event.id}
+                  onClick={() => navigate("calendar")}
+                >
                   <div className="agenda-time">
-                    <strong>{timeLabel(event.startsAt)}</strong>
-                    <span>{durationLabel(event)}</span>
+                    <strong>{event.allDay ? "All day" : timeLabel(event.startsAt)}</strong>
+                    <span>
+                      {event.kind === "reminder"
+                        ? leadLabel(effectiveLead(event), event.allDay)
+                        : event.allDay
+                          ? ""
+                          : durationLabel(event)}
+                    </span>
                   </div>
                   <div className={`agenda-event event-${event.tone}`}>
                     <div>
-                      <strong>{event.title}</strong>
-                      <span>{event.location || "Event"}</span>
+                      <strong>
+                        {event.completedAt ? <Check size={13} className="event-done-tick" /> : null}
+                        {event.title}
+                      </strong>
+                      <span>
+                        {event.kind === "reminder"
+                          ? event.note || (event.source === "schedule" ? "Reminder · Schedules" : "Reminder")
+                          : event.location || "Event"}
+                      </span>
                     </div>
-                    <Ellipsis size={18} />
+                    <ChevronRight size={16} />
                   </div>
-                </div>
+                </button>
               ))
             )}
           </div>
           {todaysEvents.length > 0 && (
             <div className="free-time">
               <Clock3 size={15} /> {todaysEvents.length}{" "}
-              {todaysEvents.length === 1 ? "event" : "events"} scheduled today
+              {todaysEvents.length === 1 ? "item" : "items"} on today
             </div>
           )}
         </div>
 
-        <div className="glass-card focus-card">
-          <div className="orb orb-small">
-            <div className="orb-core">
-              <Sparkles size={18} />
-            </div>
-          </div>
-          <span className="section-kicker">MYPRO INSIGHT</span>
-          <h2>Plan your day with me.</h2>
-          <p>Schedule, reading and reminders.</p>
-          <button onClick={() => navigate("assistant")}>
-            Plan it with me <ArrowRight size={15} />
-          </button>
-        </div>
+        <QuoteCard />
       </section>
 
       <section className="dashboard-lower">
@@ -716,6 +681,13 @@ function TodayView({
                     alt=""
                     style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }}
                   />
+                ) : inProgress.type === "Books" ? (
+                  <BookCover
+                    title={inProgress.title}
+                    author={inProgress.creator}
+                    seed={inProgress.id ?? inProgress.title}
+                    size="small"
+                  />
                 ) : (
                   <strong>{inProgress.title.slice(0, 14)}</strong>
                 )}
@@ -740,960 +712,6 @@ function TodayView({
           )}
         </div>
       </section>
-    </div>
-  );
-}
-
-function CalendarView({ focus }: { focus?: DeepLinkFocus }) {
-  const [mode, setMode] = useState<"Day" | "Week" | "Month">("Week");
-  const [refDate, setRefDate] = useState(() => new Date());
-  // The hook reloads whenever you page into another month.
-  const { events, loading, error, createEvent, updateEvent, deleteEvent, completeEvent, uncompleteEvent } =
-    useCalendar(refDate);
-  const [showModal, setShowModal] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [form, setForm] = useState<NewEventInput>({
-    title: "",
-    date: isoDate(new Date()),
-    startTime: "",
-    endTime: "",
-    allDay: false,
-    location: "",
-  });
-
-  const today = new Date();
-  const todayIso = isoDate(today);
-  const eventsByDate = useMemo(() => groupByDate(events), [events]);
-
-  const weekStart = startOfWeek(refDate);
-  // Saturday and Sunday used to be missing entirely, so weekend events were
-  // invisible in this view even though the data was loaded.
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date(weekStart);
-    date.setDate(date.getDate() + i);
-    return { date, iso: isoDate(date), num: date.getDate() };
-  });
-
-  const shift = (dir: 1 | -1) =>
-    setRefDate((d) => {
-      const next = new Date(d);
-      if (mode === "Month") next.setMonth(next.getMonth() + dir);
-      else if (mode === "Week") next.setDate(next.getDate() + 7 * dir);
-      else next.setDate(next.getDate() + dir);
-      return next;
-    });
-
-  const title =
-    mode === "Day"
-      ? refDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
-      : mode === "Week"
-        ? `${weekDays[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekDays[6].date.toLocaleDateString(undefined, { day: "numeric" })}`
-        : refDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-
-  const setField = <K extends keyof NewEventInput>(key: K, value: NewEventInput[K]) =>
-    setForm((f) => ({ ...f, [key]: value }));
-  const openQuickAdd = () => {
-    setEditingId(null);
-    setForm({ title: "", date: isoDate(refDate), startTime: "", endTime: "", allDay: false, location: "" });
-    setFormError(null);
-    setShowModal(true);
-  };
-  /** Clicking an event opens the same sheet, filled in, with a delete. */
-  const openEdit = (ev: CalEvent) => {
-    setEditingId(ev.id);
-    setForm({
-      title: ev.title,
-      date: dateKeyOf(ev),
-      startTime: ev.allDay ? "" : timeInputValue(ev.startsAt),
-      endTime: ev.allDay ? "" : timeInputValue(ev.endsAt),
-      allDay: ev.allDay,
-      location: ev.location ?? "",
-    });
-    setFormError(null);
-    setShowModal(true);
-  };
-  const closeModal = () => {
-    if (saving || deleting) return;
-    setShowModal(false);
-    setEditingId(null);
-  };
-  const save = async () => {
-    setSaving(true);
-    setFormError(null);
-    try {
-      if (editingId) await updateEvent(editingId, form);
-      else await createEvent(form);
-      setShowModal(false);
-      setEditingId(null);
-    } catch (caught) {
-      setFormError(caught instanceof Error ? caught.message : "Could not save the event.");
-    } finally {
-      setSaving(false);
-    }
-  };
-  const removeEvent = async () => {
-    if (!editingId) return;
-    setDeleting(true);
-    setFormError(null);
-    try {
-      await deleteEvent(editingId);
-      setShowModal(false);
-      setEditingId(null);
-    } catch (caught) {
-      setFormError(caught instanceof Error ? caught.message : "Could not delete the event.");
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  // --- Deep link: open the event a notification was tapped on -----------------
-  // A calendar reminder's tap arrives as a focus ({ event, at }). Jump to that
-  // event's day (so useCalendar loads the month around it), then open its sheet
-  // once the data has settled — the "go to the proper place" behaviour.
-  const focusHandledToken = useRef(-1);
-  const [pendingFocusEvent, setPendingFocusEvent] = useState<string | null>(null);
-  useEffect(() => {
-    if (!focus?.event || focus.token === focusHandledToken.current) return;
-    focusHandledToken.current = focus.token;
-    const when = focus.at ? new Date(focus.at) : null;
-    if (when && !Number.isNaN(when.getTime())) {
-      setRefDate(when);
-      setMode("Day");
-    }
-    setPendingFocusEvent(focus.event);
-  }, [focus]);
-  useEffect(() => {
-    if (!pendingFocusEvent || loading) return;
-    const match = events.find((e) => e.id === pendingFocusEvent);
-    if (match) openEdit(match);
-    // Found or not, stop after the first settled load so a deleted event does
-    // not keep the sheet trying to open forever.
-    setPendingFocusEvent(null);
-  }, [events, loading, pendingFocusEvent]);
-
-  // --- Completion ("Done") and the time-based lock on editing ----------------
-  // The event being edited, and what may be done to it right now. An event is
-  // editable only before it starts; it may be marked done once it has started,
-  // for a 12-hour window. The backend enforces both — this just shapes the UI.
-  const [completing, setCompleting] = useState(false);
-  // The modal's notion of "now" ticks while it is open, so an event that starts
-  // while you are looking at it switches to its started state on its own.
-  const [modalNow, setModalNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!showModal) return;
-    setModalNow(Date.now());
-    const timer = window.setInterval(() => setModalNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, [showModal]);
-  const editingEvent = editingId ? events.find((e) => e.id === editingId) ?? null : null;
-  const actionState = editingEvent ? eventActionState(editingEvent, modalNow) : null;
-  /**
-   * Read-only whenever the server would refuse an edit: the event has started
-   * or is done. It used to render the full form with greyed-out inputs next to
-   * "can no longer be edited", which read as a broken editor.
-   */
-  const lockedForEdit =
-    Boolean(editingId) && actionState !== null && (!actionState.editable || actionState.completed);
-  const eventPhase = editingEvent ? eventPhaseOf(editingEvent, modalNow) : null;
-
-  const markDone = async () => {
-    if (!editingId) return;
-    setCompleting(true);
-    setFormError(null);
-    try {
-      await completeEvent(editingId);
-      setShowModal(false);
-      setEditingId(null);
-    } catch (caught) {
-      setFormError(caught instanceof Error ? caught.message : "Could not mark this done.");
-    } finally {
-      setCompleting(false);
-    }
-  };
-
-  const unmarkDone = async () => {
-    if (!editingId) return;
-    setCompleting(true);
-    setFormError(null);
-    try {
-      await uncompleteEvent(editingId);
-      setShowModal(false);
-      setEditingId(null);
-    } catch (caught) {
-      setFormError(caught instanceof Error ? caught.message : "Could not update this event.");
-    } finally {
-      setCompleting(false);
-    }
-  };
-
-  // --- Event form validation (no past dates/times; end after start) ---------
-  // ISO yyyy-mm-dd and HH:MM strings compare correctly with `<`, so no Date math
-  // is needed. Past restrictions apply to new events only — an existing event
-  // may legitimately sit in the past and still be edited.
-  const pad2 = (n: number) => String(n).padStart(2, "0");
-  const nowTimeStr = `${pad2(today.getHours())}:${pad2(today.getMinutes())}`;
-  const isTodaySelected = form.date === todayIso;
-  const isPastDate = !editingId && !!form.date && form.date < todayIso;
-  const startInPast =
-    !editingId && !form.allDay && isTodaySelected && !!form.startTime && form.startTime < nowTimeStr;
-  const endNotAfterStart =
-    !form.allDay && !!form.startTime && !!form.endTime && form.endTime <= form.startTime;
-  const timesIncomplete = !form.allDay && (!form.startTime || !form.endTime);
-  const validationMessage = isPastDate
-    ? "Pick today or a future date."
-    : startInPast
-      ? "That start time has already passed today."
-      : endNotAfterStart
-        ? "End time must be after the start time."
-        : null;
-  const formInvalid =
-    !form.title.trim() || isPastDate || startInPast || endNotAfterStart || timesIncomplete;
-  // Native-picker guards (belt-and-braces with the disabled Save button).
-  const dateMin = editingId ? undefined : todayIso;
-  const startMin = isTodaySelected && !editingId ? nowTimeStr : undefined;
-
-  const monthFirst = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
-  const monthOffset = (monthFirst.getDay() + 6) % 7;
-  const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
-  const tzHours = -new Date().getTimezoneOffset() / 60;
-  const tzLabel = `GMT${tzHours >= 0 ? "+" : ""}${tzHours}`;
-
-  return (
-    <div className="page-content calendar-view">
-      <header className="page-heading calendar-heading">
-        <div>
-          <div className="eyebrow muted-eyebrow">CALENDAR</div>
-          <h1>{title}</h1>
-        </div>
-        <div className="calendar-actions">
-          <div className="segmented">
-            {(["Day", "Week", "Month"] as const).map((item) => (
-              <button
-                className={mode === item ? "selected" : ""}
-                onClick={() => setMode(item)}
-                key={item}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-          <button className="secondary-button" onClick={() => setRefDate(new Date())}>
-            Today
-          </button>
-          <IconButton label={`Previous ${mode.toLowerCase()}`} onClick={() => shift(-1)}>
-            <ArrowLeft size={18} />
-          </IconButton>
-          <IconButton label={`Next ${mode.toLowerCase()}`} onClick={() => shift(1)}>
-            <ArrowRight size={18} />
-          </IconButton>
-          <button className="primary-button" onClick={openQuickAdd}>
-            <Plus size={17} /> New
-          </button>
-        </div>
-      </header>
-      {error && (
-        <div className="data-banner data-banner-error" role="alert">
-          {error}
-        </div>
-      )}
-      {loading && !error && (
-        <div className="data-banner" aria-live="polite">
-          <Loading variant="inline" size={18} text="Loading your calendar…" />
-        </div>
-      )}
-      <div className={`calendar-layout calendar-layout-${mode.toLowerCase()}`}>
-        {mode !== "Month" && (
-          <aside className="calendar-context glass-card">
-            <div className="mini-month-title">
-              <strong>
-                {refDate.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
-              </strong>
-              <div>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="mini-weekdays">
-              {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
-                <span key={i}>{d}</span>
-              ))}
-            </div>
-            <div className="mini-month">
-              {Array.from({ length: 42 }, (_, i) => {
-                const dayNum = i - monthOffset + 1;
-                const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
-                const cellIso = inMonth
-                  ? isoDate(new Date(refDate.getFullYear(), refDate.getMonth(), dayNum))
-                  : "";
-                return (
-                  <span
-                    key={i}
-                    className={!inMonth ? "faded" : cellIso === todayIso ? "active" : ""}
-                  >
-                    {inMonth ? dayNum : ""}
-                  </span>
-                );
-              })}
-            </div>
-          </aside>
-        )}
-        {mode === "Week" && (
-          <MobileWeekAgenda
-            weekDays={weekDays}
-            eventsByDate={eventsByDate}
-            todayIso={todayIso}
-            onOpenEvent={openEdit}
-          />
-        )}
-        {mode === "Week" && (
-          <div className="week-calendar glass-card">
-            <div className="week-header">
-              <div className="timezone">{tzLabel}</div>
-              {weekDays.map((d) => (
-                <div className={d.iso === todayIso ? "today-column" : ""} key={d.iso}>
-                  <span>{weekdayLabel(d.date)}</span>
-                  <strong>{d.num}</strong>
-                </div>
-              ))}
-            </div>
-            {weekDays.some((d) => (eventsByDate.get(d.iso) ?? []).some((ev) => ev.allDay)) && (
-              <div className="week-all-day">
-                <span className="week-all-day-label">ALL DAY</span>
-                {weekDays.map((d) => (
-                  <div key={d.iso}>
-                    {(eventsByDate.get(d.iso) ?? [])
-                      .filter((ev) => ev.allDay)
-                      .map((ev) => (
-                        <button
-                          type="button"
-                          className={`week-all-day-chip calendar-${ev.tone}${ev.completedAt ? " is-done" : ""}`}
-                          key={ev.id}
-                          onClick={() => openEdit(ev)}
-                          title={ev.title}
-                        >
-                          {ev.completedAt ? <Check size={11} className="event-done-tick" /> : null}
-                          {ev.title}
-                        </button>
-                      ))}
-                  </div>
-                ))}
-              </div>
-            )}
-            <DayGrid className="week-grid">
-              <div className="time-rail">
-                {HOUR_LABELS.map((time) => (
-                  <span key={time}>{time}</span>
-                ))}
-              </div>
-              {weekDays.map((d) => (
-                <div className="day-column" key={d.iso}>
-                  {(eventsByDate.get(d.iso) ?? [])
-                    .filter((ev) => !ev.allDay)
-                    .map((ev) => {
-                      const { top, height } = positionOf(ev);
-                      return (
-                        <CalendarEvent
-                          key={ev.id}
-                          top={top}
-                          height={height}
-                          title={ev.title}
-                          meta={eventMeta(ev)}
-                          color={ev.tone}
-                          completed={Boolean(ev.completedAt)}
-                          onClick={() => openEdit(ev)}
-                        />
-                      );
-                    })}
-                  {d.iso === todayIso && nowOffset() >= 0 && nowOffset() <= GRID_HEIGHT && (
-                    <div className="current-time" style={{ top: nowOffset() }}>
-                      <i />
-                      <span>{today.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </DayGrid>
-          </div>
-        )}
-        {mode === "Day" && (
-          <DayCalendar
-            date={refDate}
-            events={eventsByDate.get(isoDate(refDate)) ?? []}
-            isToday={isoDate(refDate) === todayIso}
-            onOpenEvent={openEdit}
-          />
-        )}
-        {mode === "Month" && (
-          <MonthCalendar
-            refDate={refDate}
-            eventsByDate={eventsByDate}
-            todayIso={todayIso}
-            onOpenEvent={openEdit}
-          />
-        )}
-      </div>
-      {showModal && (
-        <div className="modal-backdrop" onMouseDown={closeModal}>
-          <div className="event-modal" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-heading">
-              <div>
-                <span className="section-kicker">
-                  {!editingId
-                    ? "QUICK ADD"
-                    : actionState?.completed
-                      ? "COMPLETED"
-                      : eventPhase === "live"
-                        ? "HAPPENING NOW"
-                        : eventPhase === "ended"
-                          ? "ENDED"
-                          : "EDIT EVENT"}
-                </span>
-                <h2>
-                  {!editingId ? "Create an event" : lockedForEdit ? editingEvent?.title || "Event" : "Change this event"}
-                </h2>
-              </div>
-              <IconButton label="Close" onClick={closeModal}>
-                <X size={18} />
-              </IconButton>
-            </div>
-            {lockedForEdit && editingEvent && actionState ? (
-              /* Read-only: what the event is and what can still be done. */
-              <div className="event-details">
-                <dl>
-                  <div>
-                    <dt>When</dt>
-                    <dd>{describeEventTime(editingEvent)}</dd>
-                  </div>
-                  {editingEvent.location && (
-                    <div>
-                      <dt>Where</dt>
-                      <dd>{editingEvent.location}</dd>
-                    </div>
-                  )}
-                  <div>
-                    <dt>Status</dt>
-                    <dd>
-                      <span
-                        className={`event-status-pill ${
-                          actionState.completed ? "done" : eventPhase === "live" ? "live" : "past"
-                        }`}
-                      >
-                        {actionState.completed ? <Check size={13} /> : null}
-                        {actionState.completed
-                          ? `Done${editingEvent.completedAt ? ` · ${new Date(editingEvent.completedAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}` : ""}`
-                          : eventPhase === "live"
-                            ? "In progress"
-                            : "Ended"}
-                      </span>
-                    </dd>
-                  </div>
-                </dl>
-                <p className="event-state-note">
-                  {actionState.completed
-                    ? "Marked done. Unmark it if that was a mistake."
-                    : actionState.canComplete
-                      ? "This event has started, so its details are locked. Mark it done when you’ve finished, or delete it."
-                      : actionState.completionMissed
-                        ? "The window to mark this done has passed. You can still delete it."
-                        : "This event has started, so its details are locked. You can delete it."}
-                </p>
-              </div>
-            ) : (
-              <>
-            <label className="field-label">
-              TITLE
-              <input
-                value={form.title}
-                onChange={(e) => setField("title", e.target.value)}
-                placeholder="Event title"
-                disabled={lockedForEdit}
-              />
-            </label>
-            <div className="field-grid">
-              <label className="field-label">
-                DATE
-                <input
-                  type="date"
-                  value={form.date}
-                  min={dateMin}
-                  onChange={(e) => setField("date", e.target.value)}
-                  disabled={lockedForEdit}
-                />
-              </label>
-              <label className="field-label">
-                LOCATION
-                <input
-                  value={form.location}
-                  onChange={(e) => setField("location", e.target.value)}
-                  placeholder="Optional"
-                  disabled={lockedForEdit}
-                />
-              </label>
-            </div>
-            <label
-              className="field-label"
-              style={{ flexDirection: "row", alignItems: "center", gap: "8px" }}
-            >
-              {/* The inline 16px box beat every stylesheet, so this one
-                  checkbox stayed a 16px target on a phone. */}
-              <input
-                type="checkbox"
-                className="field-checkbox"
-                checked={form.allDay}
-                onChange={(e) => setField("allDay", e.target.checked)}
-                disabled={lockedForEdit}
-              />
-              All day
-            </label>
-            {!form.allDay && (
-              <div className="field-grid">
-                <label className="field-label">
-                  START
-                  <input
-                    type="time"
-                    value={form.startTime}
-                    min={startMin}
-                    onChange={(e) => setField("startTime", e.target.value)}
-                    disabled={lockedForEdit}
-                  />
-                </label>
-                <label className="field-label">
-                  END
-                  <input
-                    type="time"
-                    value={form.endTime}
-                    min={form.startTime || undefined}
-                    onChange={(e) => setField("endTime", e.target.value)}
-                    disabled={lockedForEdit}
-                  />
-                </label>
-              </div>
-            )}
-              </>
-            )}
-            {validationMessage && !lockedForEdit && (
-              <p className="composer-error" role="alert">
-                {validationMessage}
-              </p>
-            )}
-            {formError && <p className="composer-error">{formError}</p>}
-            <div className={`modal-footer ${lockedForEdit ? "event-footer-readonly" : ""}`}>
-              {editingId && (
-                <button
-                  className="secondary-button event-delete-button"
-                  onClick={removeEvent}
-                  disabled={saving || deleting || completing}
-                  aria-busy={deleting}
-                >
-                  {deleting ? <Spinner /> : <Trash2 size={15} />}
-                  {deleting ? "Deleting…" : "Delete"}
-                </button>
-              )}
-              <button
-                className="secondary-button"
-                onClick={closeModal}
-                disabled={saving || deleting || completing}
-              >
-                {lockedForEdit ? "Close" : "Cancel"}
-              </button>
-              {/* Mark done / undo — only inside the 12-hour window, or to undo. */}
-              {editingId && actionState?.completed ? (
-                <button
-                  className="secondary-button event-done-button"
-                  onClick={unmarkDone}
-                  disabled={completing || deleting}
-                  aria-busy={completing}
-                >
-                  {completing ? <Spinner /> : null} Mark not done
-                </button>
-              ) : editingId && actionState?.canComplete ? (
-                <button
-                  className="primary-button event-done-button"
-                  onClick={markDone}
-                  disabled={completing || deleting}
-                  aria-busy={completing}
-                >
-                  {completing ? <Spinner /> : <Check size={15} />} Mark done
-                </button>
-              ) : null}
-              {/* Save only when the event may still be edited (always for a new one). */}
-              {!lockedForEdit && (
-                <button
-                  className="primary-button"
-                  onClick={save}
-                  disabled={saving || deleting || completing || formInvalid}
-                  aria-busy={saving}
-                >
-                  {saving ? (
-                    <>
-                      <Spinner /> Saving…
-                    </>
-                  ) : editingId ? (
-                    "Save changes"
-                  ) : (
-                    "Add to calendar"
-                  )}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* Phone-only week view: a day strip with a vertical agenda instead of a 5-column grid. */
-function MobileWeekAgenda({
-  weekDays,
-  eventsByDate,
-  todayIso,
-  onOpenEvent,
-}: {
-  weekDays: { date: Date; iso: string; num: number }[];
-  eventsByDate: Map<string, CalEvent[]>;
-  todayIso: string;
-  onOpenEvent: (ev: CalEvent) => void;
-}) {
-  // Open on today when today is in the week on screen, not always on Monday.
-  const [selected, setSelected] = useState(() => {
-    const index = weekDays.findIndex((day) => day.iso === todayIso);
-    return index === -1 ? 0 : index;
-  });
-  const selectedDay = weekDays[selected];
-  // All-day events belong in the agenda too — they used to be filtered out
-  // here and in the grid, so they were invisible everywhere but Month.
-  const items = eventsByDate.get(selectedDay?.iso ?? "") ?? [];
-  return (
-    <div className="mobile-week-agenda">
-      <div className="mobile-day-strip" role="tablist" aria-label="Days this week">
-        {weekDays.map((d, index) => {
-          const dayEvents = eventsByDate.get(d.iso) ?? [];
-          return (
-            <button
-              key={d.iso}
-              role="tab"
-              aria-selected={selected === index}
-              className={`${selected === index ? "selected" : ""} ${d.iso === todayIso ? "today" : ""}`}
-              onClick={() => setSelected(index)}
-            >
-              <span>{weekdayLabel(d.date)}</span>
-              <strong>{d.num}</strong>
-              <i>
-                {dayEvents.slice(0, 3).map((item) => (
-                  <b key={item.id} className={`tone-${item.tone}`} />
-                ))}
-              </i>
-            </button>
-          );
-        })}
-      </div>
-      <div className="mobile-agenda-summary">
-        <strong>
-          {selectedDay && selectedDay.iso === todayIso
-            ? "Today"
-            : selectedDay
-              ? selectedDay.date.toLocaleDateString(undefined, {
-                  weekday: "long",
-                  month: "short",
-                  day: "numeric",
-                })
-              : ""}
-        </strong>
-        <span>
-          {items.length} {items.length === 1 ? "event" : "events"}
-        </span>
-      </div>
-      <div className="mobile-agenda-list">
-        {items.length === 0 && <p className="mobile-month-empty">Nothing scheduled.</p>}
-        {items.map((item) => (
-          <article
-            className={`mobile-agenda-event tone-${item.tone}`}
-            key={item.id}
-            onClick={() => onOpenEvent(item)}
-          >
-            <time>
-              {item.allDay ? (
-                <strong>All day</strong>
-              ) : (
-                <>
-                  <strong>{timeLabel(item.startsAt).replace(/ ?[AP]M/, "")}</strong>
-                  <span>{timeLabel(item.startsAt).slice(-2)}</span>
-                </>
-              )}
-            </time>
-            <div>
-              <strong>{item.title}</strong>
-              <span>{durationLabel(item)}</span>
-            </div>
-            <ChevronRight size={16} />
-          </article>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The scrolling day surface. The grid is a full 24 hours tall so nothing is
- * clipped, and it opens parked on the working day rather than at midnight.
- */
-function DayGrid({ className, children }: { className: string; children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.scrollTop = Math.min(DEFAULT_SCROLL_TOP, Math.max(0, el.scrollHeight - el.clientHeight));
-  }, []);
-  return (
-    <div className={className} ref={ref}>
-      <div className="day-grid-inner" style={{ height: GRID_HEIGHT }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function CalendarEvent({
-  top,
-  height,
-  title,
-  meta,
-  color,
-  completed,
-  onClick,
-}: {
-  top: number;
-  height: number;
-  title: string;
-  meta: string;
-  color: string;
-  completed?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={`calendar-event calendar-${color}${completed ? " is-done" : ""}`}
-      style={{ top, height }}
-      onClick={onClick}
-      title={`${title} — ${meta}${completed ? " (done)" : ""}`}
-    >
-      <strong>
-        {completed ? <Check size={11} className="event-done-tick" /> : null}
-        {title}
-      </strong>
-      <span>{meta}</span>
-    </button>
-  );
-}
-
-function DayCalendar({
-  date,
-  events,
-  isToday,
-  onOpenEvent,
-}: {
-  date: Date;
-  events: CalEvent[];
-  isToday: boolean;
-  onOpenEvent: (ev: CalEvent) => void;
-}) {
-  const timed = events.filter((e) => !e.allDay);
-  const allDay = events.filter((e) => e.allDay);
-  const totalMin = timed.reduce((sum, ev) => {
-    const s = new Date(ev.startsAt).getTime();
-    const e = ev.endsAt ? new Date(ev.endsAt).getTime() : s + 3600000;
-    return sum + Math.max(0, (e - s) / 60000);
-  }, 0);
-  const hrs = Math.floor(totalMin / 60);
-  const mins = Math.round(totalMin % 60);
-  const scheduled =
-    totalMin > 0 ? `${hrs ? `${hrs}h ` : ""}${mins ? `${mins}m ` : ""}scheduled`.trim() : "Open day";
-
-  return (
-    <div className="day-calendar glass-card">
-      <div className="day-calendar-header">
-        <div>
-          <span className="section-kicker">
-            {date.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase()}
-          </span>
-          <h2>{date.toLocaleDateString(undefined, { day: "numeric", month: "long" })}</h2>
-        </div>
-        <div className="day-summary">
-          <strong>
-            {timed.length} {timed.length === 1 ? "event" : "events"}
-          </strong>
-          <span>{scheduled}</span>
-        </div>
-      </div>
-      {allDay.length > 0 && (
-        <div className="all-day-row">
-          <span>ALL DAY</span>
-          <div>
-            {allDay.map((e) => (
-              <button
-                type="button"
-                className={`week-all-day-chip calendar-${e.tone}${e.completedAt ? " is-done" : ""}`}
-                key={e.id}
-                onClick={() => onOpenEvent(e)}
-              >
-                {e.completedAt ? <Check size={11} className="event-done-tick" /> : null}
-                {e.title}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      <DayGrid className="day-timeline">
-        <div className="time-rail">
-          {HOUR_LABELS.map((time) => (
-            <span key={time}>{time}</span>
-          ))}
-        </div>
-        <div className="day-column day-column-expanded">
-          {timed.map((ev) => {
-            const { top, height } = positionOf(ev);
-            return (
-              <CalendarEvent
-                key={ev.id}
-                top={top}
-                height={height}
-                title={ev.title}
-                meta={`${eventMeta(ev)}${ev.location ? ` · ${ev.location}` : ""}`}
-                color={ev.tone}
-                completed={Boolean(ev.completedAt)}
-                onClick={() => onOpenEvent(ev)}
-              />
-            );
-          })}
-          {isToday && nowOffset() >= 0 && nowOffset() <= GRID_HEIGHT && (
-            <div className="current-time" style={{ top: nowOffset() }}>
-              <i />
-              <span>{new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-            </div>
-          )}
-        </div>
-      </DayGrid>
-    </div>
-  );
-}
-
-function MonthCalendar({
-  refDate,
-  eventsByDate,
-  todayIso,
-  onOpenEvent,
-}: {
-  refDate: Date;
-  eventsByDate: Map<string, CalEvent[]>;
-  todayIso: string;
-  onOpenEvent: (ev: CalEvent) => void;
-}) {
-  const year = refDate.getFullYear();
-  const month = refDate.getMonth();
-  const first = new Date(year, month, 1);
-  const offset = (first.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const [selectedIso, setSelectedIso] = useState(todayIso);
-  // Paging to another month left the selection on today's date, so the phone's
-  // month agenda kept showing "Today" and no cell appeared selected. Follow
-  // the month: this one's 1st, or today when today is in it.
-  const monthKey = `${year}-${month}`;
-  const lastMonthKey = useRef(monthKey);
-  if (lastMonthKey.current !== monthKey) {
-    lastMonthKey.current = monthKey;
-    const firstIso = isoDate(new Date(year, month, 1));
-    if (!selectedIso.startsWith(firstIso.slice(0, 7))) {
-      setSelectedIso(todayIso.startsWith(firstIso.slice(0, 7)) ? todayIso : firstIso);
-    }
-  }
-  const selectedEvents = eventsByDate.get(selectedIso) ?? [];
-
-  return (
-    <div className="month-calendar glass-card">
-      <div className="month-weekdays">
-        {["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].map((day) => (
-          <span key={day}>{day}</span>
-        ))}
-      </div>
-      <div className="month-grid">
-        {Array.from({ length: 42 }, (_, index) => {
-          const dayNum = index - offset + 1;
-          const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
-          const cellIso = inMonth ? isoDate(new Date(year, month, dayNum)) : "";
-          const dayEvents = cellIso ? eventsByDate.get(cellIso) ?? [] : [];
-          return (
-            <div
-              key={index}
-              className={`month-day ${!inMonth ? "outside-month" : ""} ${
-                cellIso && cellIso === todayIso ? "today" : ""
-              } ${cellIso && cellIso === selectedIso ? "selected" : ""}`}
-              onClick={() => {
-                if (cellIso) setSelectedIso(cellIso);
-              }}
-            >
-              <span className="month-day-number">{inMonth ? dayNum : ""}</span>
-              <div className="month-day-events">
-                {dayEvents.slice(0, 2).map((event) => (
-                  <div
-                    className={`month-event month-event-${event.tone}${event.completedAt ? " is-done" : ""}`}
-                    key={event.id}
-                    onClick={(clickEvent) => {
-                      clickEvent.stopPropagation();
-                      onOpenEvent(event);
-                    }}
-                  >
-                    <i />
-                    <span>{event.title}</span>
-                  </div>
-                ))}
-                {dayEvents.length > 2 && (
-                  <span className="month-day-more">+{dayEvents.length - 2} more</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mobile-month-agenda">
-        <div className="mobile-agenda-summary">
-          <strong>
-            {selectedIso === todayIso
-              ? "Today"
-              : new Date(`${selectedIso}T00:00:00`).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-          </strong>
-          <span>
-            {selectedEvents.length} {selectedEvents.length === 1 ? "event" : "events"}
-          </span>
-        </div>
-        <div className="mobile-agenda-list">
-          {selectedEvents.map((event) => (
-            <article
-              className={`mobile-agenda-event mobile-month-event tone-${event.tone}${event.completedAt ? " is-done" : ""}`}
-              key={event.id}
-              onClick={() => onOpenEvent(event)}
-            >
-              <div>
-                <strong>
-                  {event.completedAt ? <Check size={12} className="event-done-tick" /> : null}
-                  {event.title}
-                </strong>
-                <span>{eventMeta(event)}</span>
-              </div>
-              <ChevronRight size={16} />
-            </article>
-          ))}
-          {selectedEvents.length === 0 && (
-            <p className="mobile-month-empty">Nothing scheduled. Enjoy the open day.</p>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -2830,14 +1848,12 @@ function LibraryView({
     await request(2600);
     setToast("");
   };
-  const [editingCollection, setEditingCollection] = useState<string | null>(null);
-  const [draggedCollection, setDraggedCollection] = useState<number | null>(null);
-  const [collectionDraft, setCollectionDraft] = useState("");
-  // Real rows. `/collections` has existed since the library landed; this view
-  // used to hold five names in local state, so every rename and reorder was
-  // lost on reload.
-  const collectionsState = useCollections(true);
-  const collections = collectionsState.collections;
+  // Settings → Profile & preferences can hide the search bar on this device.
+  const [showSearch] = usePreference("librarySearch");
+  useEffect(() => {
+    // A hidden search must not keep filtering with a query you can't see.
+    if (!showSearch) setQuery("");
+  }, [showSearch]);
 
   const visibleItems = libraryItems.filter((item) => {
     const matchesCategory = category === "All" || item.type === category;
@@ -2849,13 +1865,6 @@ function LibraryView({
     const searchText = `${item.title} ${item.creator} ${item.type}`.toLowerCase();
     return matchesCategory && matchesFilter && searchText.includes(query.toLowerCase());
   });
-
-  const addCollection = async () => {
-    const id = await collectionsState.create("Untitled Collection");
-    if (!id) return;
-    setCollectionDraft("Untitled Collection");
-    setEditingCollection(id);
-  };
 
   // The toolbar advertised ⌘K; nothing listened for it until now.
   const searchRef = useRef<HTMLInputElement>(null);
@@ -2907,17 +1916,19 @@ function LibraryView({
       )}
       <SyncStatus showingSaved={showingSaved} />
 
-      <div className="library-toolbar">
-        <label className="library-search">
-          <Search size={17} />
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search your library"
-          />
-          <kbd>⌘ K</kbd>
-        </label>
+      <div className={`library-toolbar ${showSearch ? "" : "no-search"}`}>
+        {showSearch && (
+          <label className="library-search">
+            <Search size={17} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search your library"
+            />
+            <kbd>⌘ K</kbd>
+          </label>
+        )}
         <div className="library-categories" role="tablist" aria-label="Library categories">
           {categories.map((item) => (
             <button
@@ -2981,7 +1992,13 @@ function LibraryView({
                   onClick={() => onOpenMedia(item)}
                   aria-label={`Open ${item.title}`}
                 >
-                  {item.image ? <img src={item.image} alt="" /> : <StickyNote size={22} />}
+                  {item.image ? (
+                    <img src={item.image} alt="" />
+                  ) : item.type === "Books" ? (
+                    <BookCover title={item.title} author={item.creator} seed={item.id ?? item.title} />
+                  ) : (
+                    <StickyNote size={22} />
+                  )}
                 </button>
                 <div className="learning-copy">
                   <div className="learning-title-line">
@@ -3091,110 +2108,7 @@ function LibraryView({
         )}
       </div>
 
-      <div className="library-secondary-grid">
-        <section className="glass-card collections-card">
-          <div className="card-heading">
-            <div>
-              <span className="section-kicker">MY COLLECTIONS</span>
-              <h2>Organize what matters</h2>
-            </div>
-            <button className="text-button" onClick={() => void addCollection()}>
-              <Plus size={14} /> New collection
-            </button>
-          </div>
-          <div className="collections-list">
-            {collections.map((collection, index) => (
-              <div
-                className="collection-row"
-                draggable
-                onDragStart={() => setDraggedCollection(index)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => {
-                  if (draggedCollection === null || draggedCollection === index) return;
-                  const reordered = [...collections];
-                  const [moved] = reordered.splice(draggedCollection, 1);
-                  reordered.splice(index, 0, moved);
-                  // Persisted as `sort_order`, so the order survives a reload.
-                  void collectionsState.reorder(reordered);
-                  setDraggedCollection(null);
-                }}
-                onDragEnd={() => setDraggedCollection(null)}
-                key={collection.id}
-              >
-                <GripVertical className="collection-grip" size={13} />
-                <span className={`collection-icon collection-tone-${(index % 5) + 1}`}>
-                  <Folder size={16} />
-                </span>
-                {editingCollection === collection.id ? (
-                  <input
-                    autoFocus
-                    value={collectionDraft}
-                    onChange={(event) => setCollectionDraft(event.target.value)}
-                    onBlur={() => {
-                      void collectionsState.rename(collection.id, collectionDraft);
-                      setEditingCollection(null);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") event.currentTarget.blur();
-                      if (event.key === "Escape") setEditingCollection(null);
-                    }}
-                  />
-                ) : (
-                  <button className="collection-name">
-                    <strong>{collection.name}</strong>
-                    <span>
-                      {collection.count} saved item{collection.count === 1 ? "" : "s"}
-                    </span>
-                  </button>
-                )}
-                <button
-                  className="collection-edit"
-                  onClick={() => {
-                    setCollectionDraft(collection.name);
-                    setEditingCollection(collection.id);
-                  }}
-                  aria-label={`Rename ${collection.name}`}
-                >
-                  <Pencil size={13} />
-                </button>
-              </div>
-            ))}
-            {!collections.length && !collectionsState.loading && (
-              <p className="settings-hint">No collections yet.</p>
-            )}
-          </div>
-        </section>
-      </div>
-
-      <section className="library-stats">
-        {(() => {
-          const books = libraryItems.filter((item) => item.type === "Books");
-          const podcasts = libraryItems.filter((item) => item.type === "Podcasts");
-          const inProgress = libraryItems.filter((item) => item.status === "In Progress").length;
-          const completed = libraryItems.filter(
-            (item) => item.progress === 100 || item.status === "Completed",
-          ).length;
-          const pagesRead = books.reduce((total, item) => total + (item.currentPage || 0), 0);
-          const minutesListened = Math.round(
-            podcasts.reduce((total, item) => total + (item.currentTimeSeconds || 0), 0) / 60,
-          );
-          const stats: [typeof BookOpen, string, string][] = [
-            [BookOpen, String(inProgress), "In progress"],
-            [CheckCircle2, String(completed), "Completed"],
-            [FileText, pagesRead.toLocaleString(), "Pages read"],
-            [Headphones, `${minutesListened}m`, "Listened"],
-          ];
-          return stats.map(([Icon, value, label]) => (
-            <div className="glass-card library-stat" key={label}>
-              <span className="library-stat-icon">
-                <Icon size={16} />
-              </span>
-              <strong>{value}</strong>
-              <small>{label}</small>
-            </div>
-          ));
-        })()}
-      </section>
+      <LibraryRings items={libraryItems} />
 
       {showAdd && (
         <div className="modal-backdrop" onMouseDown={closeAdd}>
@@ -3901,6 +2815,72 @@ function KnowledgeView({
 }
 
 /** A book row's offline state: saved, downloading (with %), or failed. */
+/**
+ * The Library's four numbers as one gauge: concentric rings for what is in
+ * progress, what is finished, the pages read and the time listened, each as a
+ * share of what there is to read or hear.
+ */
+function LibraryRings({ items }: { items: LibraryItem[] }) {
+  const books = items.filter((item) => item.type === "Books");
+  const podcasts = items.filter((item) => item.type === "Podcasts");
+  const total = items.length;
+  const inProgress = items.filter(
+    (item) => item.status === "In Progress" || (item.progress > 0 && item.progress < 100),
+  ).length;
+  const completed = items.filter((item) => item.progress === 100 || item.status === "Completed").length;
+  const pagesRead = books.reduce((sum, item) => sum + (item.currentPage || 0), 0);
+  const pagesTotal = books.reduce((sum, item) => sum + Math.max(item.totalPages || 0, item.currentPage || 0), 0);
+  const secondsListened = podcasts.reduce((sum, item) => sum + (item.currentTimeSeconds || 0), 0);
+  const secondsTotal = podcasts.reduce(
+    (sum, item) => sum + Math.max(item.durationSeconds || 0, item.currentTimeSeconds || 0),
+    0,
+  );
+  const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0);
+  const minutes = Math.round(secondsListened / 60);
+  const listened = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+  const stats = [
+    { tone: 1, icon: BookOpen, value: String(inProgress), label: "In progress", detail: `of ${total} items`, ring: share(inProgress, total) },
+    { tone: 2, icon: CheckCircle2, value: String(completed), label: "Completed", detail: `of ${total} items`, ring: share(completed, total) },
+    { tone: 3, icon: FileText, value: pagesRead.toLocaleString(), label: "Pages read", detail: pagesTotal ? `of ${pagesTotal.toLocaleString()}` : "no page counts yet", ring: share(pagesRead, pagesTotal) },
+    { tone: 4, icon: Headphones, value: listened, label: "Listened", detail: secondsTotal ? `of ${Math.round(secondsTotal / 60)}m` : "nothing played yet", ring: share(secondsListened, secondsTotal) },
+  ];
+  const overall = Math.round(
+    (stats.reduce((sum, stat) => sum + stat.ring, 0) / stats.length) * 100,
+  );
+  return (
+    <section className="glass-card library-rings" aria-label="Library progress">
+      <div className="library-rings-copy">
+        <span className="section-kicker">YOUR PROGRESS</span>
+        <h2>{total ? `${completed} of ${total} finished` : "Nothing here yet"}</h2>
+        <p>
+          {total
+            ? `${pagesRead.toLocaleString()} pages read and ${listened} listened so far.`
+            : "Add a book or a podcast and your progress shows up here."}
+        </p>
+      </div>
+      <ConcentricRings
+        rings={stats.map((stat) => ({ value: stat.ring, tone: stat.tone, label: stat.label }))}
+        centerValue={`${overall}%`}
+        centerLabel="OVERALL"
+      />
+      <ul className="library-rings-legend">
+        {stats.map(({ tone, icon: Icon, value, label, detail }) => (
+          <li key={label} className={`rings-tone-${tone}`}>
+            <span className="library-rings-icon">
+              <Icon size={16} />
+            </span>
+            <span>
+              <strong>{value}</strong>
+              <small>{label}</small>
+              <small className="library-rings-detail">{detail}</small>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function OfflineRowBadge({ item }: { item: LibraryItem }) {
   const offline = useOfflineBooks();
   const state = offline.state(item);
@@ -4912,6 +3892,7 @@ function SettingsView({
   profile: ProfileState;
 }) {
   const [showStorage, setShowStorage] = useState(false);
+  const [librarySearch, setLibrarySearch] = usePreference("librarySearch");
   // Coming back from Google's consent screen lands here with Mail open, so the
   // result is shown where the user started.
   const [open, setOpen] = useState<
@@ -5035,6 +4016,17 @@ function SettingsView({
               <span>
                 <strong>Color Mode</strong>
                 <small>Accents warm up across the app. Saved to your profile.</small>
+              </span>
+            </label>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+                checked={librarySearch}
+                onChange={(event) => setLibrarySearch(event.target.checked)}
+              />
+              <span>
+                <strong>Show Search in Library</strong>
+                <small>The search bar at the top of your Library. Saved on this device.</small>
               </span>
             </label>
             <div className="settings-panel-actions">
@@ -5571,27 +4563,19 @@ const prefersReducedMotion = () =>
 
 // Containers whose children should reveal individually, in reading order.
 const SECTION_GROUPS =
-  ".day-grid, .dashboard-lower, .library-toolbar, .library-primary-grid, .library-secondary-grid, .health-overview, .calendar-layout";
+  ".day-grid, .dashboard-lower, .library-toolbar, .library-primary-grid, .health-overview, .cal-layout";
 // Small repeated elements that unfold after their parent section.
 const SMALL_ITEMS = [
   ".agenda-row",
   ".free-time",
-  ".focus-card > *",
+  ".quote-card > *",
   ".mail-content > *",
   ".book-row",
-  ".mini-month-title",
-  ".mini-month",
-  ".week-header > div",
-  ".calendar-event",
-  ".month-event",
-  ".mobile-day-strip button",
-  ".mobile-agenda-event",
-  ".all-day-row",
+  ".cal-item",
   ".library-categories button",
   ".library-filters button",
   ".learning-row",
   ".recent-note-row",
-  ".collection-row",
   ".history-row",
   ".health-stat > *",
   ".health-history-filters",
@@ -5654,7 +4638,7 @@ function revealPage(root: HTMLElement): Animation[] {
       .querySelectorAll(".eyebrow, h1")
       .forEach((element, index) => reveal(element, index * 50));
     heading
-      .querySelectorAll("p, :scope > .primary-button, .calendar-actions")
+      .querySelectorAll("p, :scope > .primary-button")
       .forEach((element, index) => reveal(element, 110 + index * 50));
   }
 
@@ -5748,22 +4732,8 @@ function runLoginEntrance(root: HTMLElement, phase: "top" | "content"): Animatio
   }
 
   // Timed from the moment the cubes begin to fall (first lands at ~1.1s).
-  // 700–1300ms: welcome copy, then the three product blocks.
-  descend(
-    query(".login-introduction > .eyebrow, .login-introduction > h1, .login-introduction > p"),
-    700,
-  );
-  query(".login-pillars").forEach((element) =>
-    animations.push(
-      element.animate([{ opacity: 0 }, { opacity: 1 }], {
-        duration: 600,
-        delay: 950,
-        easing: "ease-out",
-        fill: "backwards",
-      }),
-    ),
-  );
-  descend(query(".login-pillars > div"), 1000);
+  // 700ms: the welcome heading.
+  descend(query(".login-introduction > h1"), 700);
 
   // 900–1700ms: the card descends, then its contents in reading order.
   descend(query(".login-panel"), 900, { offset: -35, duration: 760, settle: true });
@@ -6223,7 +5193,6 @@ function AppShell({
     if (displayedView === "knowledge")
       return <KnowledgeView items={libraryItems} onJumpToSource={jumpToSource} />;
     if (displayedView === "health") return <HealthView />;
-    if (displayedView === "commitments") return <CommitmentsView />;
     if (displayedView === "schedules")
       return <SchedulesView onOpenSettings={() => navigate("settings")} />;
     if (displayedView === "settings")

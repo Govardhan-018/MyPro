@@ -26,10 +26,15 @@ export class SchedulesController {
    * edited today takes effect tomorrow.
    */
   @Get('upcoming')
-  upcoming(@CurrentUser() user: AuthUser, @Query('hours') hours?: string) {
+  upcoming(
+    @CurrentUser() user: AuthUser,
+    @Query('hours') hours?: string,
+    /** The device's IANA zone, so an all-day item's morning reminder is local. */
+    @Query('tz') tz?: string,
+  ) {
     const parsed = Number(hours);
     const window = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 168) : 48;
-    return this.schedules.upcoming(user, window);
+    return this.schedules.upcoming(user, window, tz?.slice(0, 64));
   }
 
   @Get(':id')

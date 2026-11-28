@@ -9,7 +9,6 @@
  */
 
 export type SignalType =
-  | 'commitment'
   | 'task'
   | 'email'
   | 'silence'

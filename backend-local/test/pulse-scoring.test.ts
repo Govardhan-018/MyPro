@@ -61,9 +61,9 @@ describe('rank', () => {
   it('orders strongest-first', () => {
     const cs: Candidate[] = [
       { signalType: 'task', urgency: 0.2, value: 0.2, novelty: 1 },
-      { signalType: 'commitment', urgency: 1, value: 1, novelty: 1 },
+      { signalType: 'interest', urgency: 1, value: 1, novelty: 1 },
       { signalType: 'email', urgency: 0.6, value: 0.6, novelty: 1 },
     ];
-    expect(rank(cs).map((c) => c.signalType)).toEqual(['commitment', 'email', 'task']);
+    expect(rank(cs).map((c) => c.signalType)).toEqual(['interest', 'email', 'task']);
   });
 });

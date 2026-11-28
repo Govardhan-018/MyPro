@@ -736,7 +736,7 @@ export class SchedulerService implements OnModuleInit {
 
   private async refreshNarrative(p: Persona): Promise<void> {
     const db = this.supabase.admin;
-    const [msgs, commitments, library] = await Promise.all([
+    const [msgs, tasks, library] = await Promise.all([
       db
         .from('assistant_messages')
         .select('role, content')
@@ -745,10 +745,10 @@ export class SchedulerService implements OnModuleInit {
         .order('created_at', { ascending: false })
         .limit(40),
       db
-        .from('commitments')
-        .select('title, state, due_at')
+        .from('tasks')
+        .select('title, status, due_at')
         .eq('user_id', p.user_id)
-        .in('state', ['open', 'at_risk'])
+        .eq('status', 'open')
         .limit(20),
       db
         .from('library_items')
@@ -763,7 +763,7 @@ export class SchedulerService implements OnModuleInit {
       .filter((m) => m.content)
       .map((m) => `${m.role}: ${m.content}`)
       .slice(-30);
-    const open = (commitments.data ?? []) as Record<string, unknown>[];
+    const open = (tasks.data ?? []) as Record<string, unknown>[];
     const reading = (library.data ?? []) as Record<string, unknown>[];
 
     // Don't invent a life out of nothing — skip until there's something to go on.
@@ -783,7 +783,7 @@ export class SchedulerService implements OnModuleInit {
             role: 'user',
             text:
               'Write the current sketch of this person from these facts:\n\n' +
-              JSON.stringify({ recent_conversation: conversation, open_commitments: open, reading }),
+              JSON.stringify({ recent_conversation: conversation, open_tasks: open, reading }),
           },
         ],
       });

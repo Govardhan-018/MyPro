@@ -81,7 +81,7 @@ what a skill does; `capability.meta.ts` adds only routing information:
 |---|---|
 | `name` | must equal the skill's name |
 | `version` | semver; bump on an argument or behaviour change a caller would notice |
-| `category` | `time`, `calendar`, `tasks`, `commitments`, `memory`, `library`, `knowledge`, `health`, `notifications`, `schedules`, `email`, `research`, `other` |
+| `category` | `time`, `calendar`, `tasks`, `memory`, `library`, `knowledge`, `health`, `notifications`, `schedules`, `email`, `research`, `other` |
 | `keywords` | the request vocabulary — words the sentence needing this would contain |
 | `dependencies` | what is usually needed first (`create_event` → `list_events`) |
 | `always` | offered on every request. Currently `get_now` only |

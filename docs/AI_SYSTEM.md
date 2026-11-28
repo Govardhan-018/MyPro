@@ -351,7 +351,7 @@ working window, assembled by `AssistantService.memoryContext()` into one
 | **Threads** | `attention_threads` | `open_thread` / `close_thread` skills | up to 5 `state='active'` |
 
 `memoryContext` fires five queries in parallel: 60 memory rows, 1 narrative, 3
-episodes, 5 active threads, and 50 commitments (for the register only).
+episodes, 5 active threads, and 50 open/done tasks (for the register only).
 
 ### Semantic decay (`memory/decay.ts`, pure)
 
@@ -374,7 +374,7 @@ effectiveConfidence = clamp01(confidence ?? 0.5) × 0.5 ^ (ageDays / 45)
 Hourly cron, but per user it regenerates only when the newest snapshot is
 older than `NARRATIVE_MAX_AGE_MS = 7 days` (or absent) — so ~one generation
 per user per week. Inputs: last 40 user/assistant messages (reversed, last
-30 kept), up to 20 open/at-risk commitments, 8 most recently accessed library
+30 kept), up to 20 open tasks, 8 most recently accessed library
 items. Prompt asks for 200–300 words, third person, present tense, plain
 prose, no advice, "only use the facts given; never invent detail". If all
 three inputs are empty it returns without generating — it will not invent a
@@ -479,12 +479,13 @@ type Register = 'focus' | 'casual' | 'serious' | 'celebratory' | 'concerned'
 | `justCompleted` | `celebratory` | acknowledge the win, lightly |
 | — | `casual` | relaxed and warm, no agenda |
 
-`AssistantService.registerFor()` derives the signals from up to 50 commitments
-in state `open|at_risk|done`:
+`AssistantService.registerFor()` derives the signals from up to 50 tasks in
+status `open|done` (it read commitments until that feature was removed, Nov
+2026 / `0024`):
 
-- `atRisk` — any `state='at_risk'`, or `open` with `due_at` in the past
-- `deadlineSoon` — any `open` with `due_at` within 24h
-- `justCompleted` — any `done` with `resolved_at` within 24h
+- `atRisk` — any `open` task with `due_at` in the past
+- `deadlineSoon` — any `open` task with `due_at` within 24h
+- `justCompleted` — any `done` task updated within 24h
 
 **`healthActive` is never set by any caller**, so `'serious'` is unreachable in
 the running system. The pure function supports it; nothing passes it.
@@ -493,10 +494,11 @@ the running system. The pure function supports it; nothing passes it.
 
 ## 10. The skill registry
 
-**37 skills** in `skills/definitions.ts`, exported as a static
+**34 skills** in `skills/definitions.ts`, exported as a static
 `SKILLS: Skill<any>[]`: the original 28, Phase 20's five research
-capabilities, training history, and the three that manage what it watches.
-Tiers: 17 `read`, 19 `write`, 1 `outward`.
+capabilities, training history, and the three that manage what it watches —
+less the three commitment skills, removed in Nov 2026.
+Tiers: 16 `read`, 17 `write`, 1 `outward`.
 
 Each skill is `{ name, description, sideEffect, requiresGrant?, schema, run }`.
 `description` is what the model selects on and is written for the model.
@@ -514,9 +516,6 @@ static `TOOL_SCHEMAS` map.
 | `list_tasks` | read | `tasks` | defaults `status='open'`, limit 100 |
 | `create_task` | write | `tasks` | |
 | `update_task` | write | `tasks` | `status='done'` is how completion happens |
-| `list_commitments` | read | `commitments` | defaults to `open + at_risk` |
-| `create_commitment` | write | `commitments` | auto-arms `next_checkin_at` at ~50% to deadline, min +30 min |
-| `update_commitment` | write | `commitments` | terminal state stamps `resolved_at`; re-opening clears it |
 | `remember` | write | `assistant_memory` | upsert on `(user_id,key)`; default confidence 0.8 |
 | `forget` | write | `assistant_memory` | delete by key |
 | `open_thread` | write | `attention_threads` | title-matched upsert against non-closed rows |
@@ -619,7 +618,6 @@ summary until a case is added.
 
 | Signal | Condition | urgency | value | cooldown |
 |---|---|---|---|---|
-| `commitment` | `state ∈ open,at_risk`, `next_checkin_at <= now`, limit 5 | overdue .9 / due<24h .8 / else .5 | .85 | 6h |
 | `task` | `status='open'`, `due_at <= now+24h`, limit 3 | overdue .7 / else .5 | .5 | 12h |
 | `email` | unread with `email_insights.action_needed`, from newest 10 | .55 | .6 | 6h |
 | `silence` | `user_activity.last_active_at` older than `persona.inactivity_hours` (default 10) | .3 | .5 | 24h |
@@ -680,9 +678,8 @@ with its urgency, value, novelty, score, outcome and `suppressed_reason`. That
 is the answer to "what did you decide not to tell me today?" and the tuning
 surface. Sent ones also write `audit_log` with `actor: 'system'`.
 
-`afterSend` for commitments: if overdue, set `state = 'at_risk'`; re-arm
-`next_checkin_at` to halfway to the deadline (floor +6h), or +24h if the
-deadline has passed.
+`afterSend` marks an interest finding delivered. (It also re-armed commitment
+check-ins until Commitments was removed in Nov 2026.)
 
 **Fixed in Phase 19:** `sentToday()` counted from `setUTCHours(0,0,0,0)`, so
 the daily budget reset at UTC midnight — in IST that is 05:30 local, meaning
@@ -854,8 +851,6 @@ Read this before assuming a capability exists.
   contradiction detection, and no confidence lift on correction beyond
   overwriting the key.
 - **No `decisions` table** (vision §2's decision log).
-- **No `commitment_evidence` table** — commitments cannot link to the
-  calendar, task or email that evidences them.
 - **No catch-up collapse on wake.** Vision §9's "while I was off: …, and the
   thing I was going to nag you about doesn't matter now" does not exist beyond
   the drain loop's staleness skip.
@@ -887,7 +882,6 @@ Phase 19). Part of a 199-test repo total (render 17, shared 14, frontend 4).
 | File | n | Covers |
 |---|---|---|
 | `pulse-scoring.test.ts` | 10 | `score`, novelty decay, the three gates in order, `rank` |
-| `commitment-skills.test.ts` | 8 | check-in arming, state → `resolved_at` transitions |
 | `memory-decay.test.ts` | 7 | `effectiveConfidence`, fading below the floor, `liveFacts` selection |
 | `recurrence.test.ts` | 6 | `computeNextRun`: once/daily/weekly/monthly (day-31 clamp)/cron, tz resolution |
 | `memory-skills.test.ts` | 5 | `remember` upsert, `forget` |

@@ -14,7 +14,6 @@ export type CapabilityCategory =
   | 'time'
   | 'calendar'
   | 'tasks'
-  | 'commitments'
   | 'memory'
   | 'library'
   | 'knowledge'

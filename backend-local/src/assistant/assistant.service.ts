@@ -378,7 +378,7 @@ export class AssistantService {
   async memoryContext(user: AuthUser, budget: EffortBudget = budgetFor('default')): Promise<CompanionMemory> {
     const db = this.supabase.forUser(user.token);
     const now = Date.now();
-    const [factsRes, narrativeRes, episodesRes, threadsRes, commitmentsRes] = await Promise.all([
+    const [factsRes, narrativeRes, episodesRes, threadsRes, tasksRes] = await Promise.all([
       db.from('assistant_memory').select('key, value, confidence, last_used_at').limit(60),
       db
         .from('narrative_snapshots')
@@ -398,9 +398,10 @@ export class AssistantService {
         .order('last_touched_at', { ascending: false })
         .limit(Math.max(1, budget.threads)),
       db
-        .from('commitments')
-        .select('state, due_at, resolved_at')
-        .in('state', ['open', 'at_risk', 'done'])
+        .from('tasks')
+        .select('status, due_at, updated_at')
+        .in('status', ['open', 'done'])
+        .order('updated_at', { ascending: false })
         .limit(50),
     ]);
 
@@ -425,20 +426,20 @@ export class AssistantService {
         : [],
       threads: (threadsRes.data ?? []) as { title: string; summary: string | null }[],
       register: this.registerFor(
-        (commitmentsRes.data ?? []) as {
-          state: string;
+        (tasksRes.data ?? []) as {
+          status: string;
           due_at: string | null;
-          resolved_at: string | null;
+          updated_at: string | null;
         }[],
         now,
       ),
     };
   }
 
-  /** Derive the register from the live commitments (health would pull harder,
+  /** Derive the register from the user's tasks (health would pull harder,
    *  but it stays invisible here without a grant). */
   private registerFor(
-    commitments: { state: string; due_at: string | null; resolved_at: string | null }[],
+    tasks: { status: string; due_at: string | null; updated_at: string | null }[],
     now: number,
   ): Register {
     const dueSoon = (c: { due_at: string | null }) =>
@@ -446,13 +447,13 @@ export class AssistantService {
     const overdue = (c: { due_at: string | null }) =>
       c.due_at != null && new Date(c.due_at).getTime() < now;
     return deriveRegister({
-      atRisk: commitments.some((c) => c.state === 'at_risk' || (c.state === 'open' && overdue(c))),
-      deadlineSoon: commitments.some((c) => c.state === 'open' && dueSoon(c)),
-      justCompleted: commitments.some(
-        (c) =>
-          c.state === 'done' &&
-          c.resolved_at != null &&
-          now - new Date(c.resolved_at).getTime() < 24 * 3600_000,
+      atRisk: tasks.some((t) => t.status === 'open' && overdue(t)),
+      deadlineSoon: tasks.some((t) => t.status === 'open' && dueSoon(t)),
+      justCompleted: tasks.some(
+        (t) =>
+          t.status === 'done' &&
+          t.updated_at != null &&
+          now - new Date(t.updated_at).getTime() < 24 * 3600_000,
       ),
     });
   }
