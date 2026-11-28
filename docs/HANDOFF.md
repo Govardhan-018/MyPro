@@ -15,6 +15,12 @@ Then the roles were extended app-wide — page titles, every control, data,
 stats and empty states (see the "Type roles" block at the end of
 `frontend/src/index.css`); the book-options footer no longer overflows on a
 phone.
+Finally the **book sheet** (`BookOptionsModal`) was rebuilt: cover + chips
+header, Track progress | Read PDF tabs, a progress card with pages left and a
+time-to-finish estimate, a − [page] + stepper with slider and quick chips,
+pinned actions. The "Sync with MyPro" PDF upload (which always failed —
+`performSupabaseUpload` throws) is now shown as *coming soon* instead of a
+button; a picked PDF is stored on the device as before.
 
 Built for the Android phone width first (verified at 412px against a mocked
 API). Suites: shared 38 · frontend 71 · backend-render 83 · backend-local 370;

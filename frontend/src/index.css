@@ -9279,7 +9279,6 @@ button.agenda-row {
   }
 }
 
-
 /* =====================================================================
    Type roles — one family per job, across the whole app.
 
@@ -9353,7 +9352,6 @@ button.agenda-row {
 .reader-book-title,
 .reader-chapter-title,
 .illness-record-title,
-.storage-option-title,
 .editor-title,
 .podcast-episode-title,
 .source-title,
@@ -9391,7 +9389,6 @@ button.agenda-row {
 .mobile-nav-kicker,
 .page-meta,
 .field-label,
-.input-label,
 .agenda-time,
 .free-time,
 .cal-weekdays span,
@@ -9420,7 +9417,6 @@ button.agenda-row {
 .podcast-note-stamp,
 .read-time-pill,
 .page-indicator-pill,
-.pages-ratio,
 .toc-page-num,
 .last-sync-time,
 .illness-timeline-date,
@@ -9446,8 +9442,7 @@ button.agenda-row {
 .setting-label,
 .settings-group-label,
 .mobile-nav-kicker,
-.field-label,
-.input-label {
+.field-label {
   letter-spacing: 0.1em;
 }
 .cal-day-num,
@@ -9466,7 +9461,6 @@ button.agenda-row {
 }
 .health-stat div > strong,
 .library-rings-legend strong,
-.progress-numbers strong,
 .storage-stat-card strong {
   font-family: var(--font-display);
   font-weight: 400;
