@@ -1,8 +1,13 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&display=swap");
 @import "tailwindcss";
 
 :root {
-  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Type roles — faces are bundled in lib/fonts.ts. */
+  --font-body: "Outfit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Space Grotesk", "Outfit", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Changa One", "Space Grotesk", system-ui, sans-serif;
+  --font-hero: "Black Ops One", "Space Grotesk", system-ui, sans-serif;
+  font-family: var(--font-body);
   color: #ffffff;
   background: #000000;
   font-synthesis: none;
@@ -1059,7 +1064,7 @@ button {
 .receipt-skill {
   color: rgba(255, 255, 255, 0.4);
   font-size: 10px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 .color-mode .receipt-ok .receipt-icon {
@@ -6775,7 +6780,7 @@ button {
   flex: 1;
   min-width: 0;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -7702,7 +7707,7 @@ button {
   margin: 16px 0;
 }
 .md code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.88em;
   padding: 1px 5px;
   border-radius: 5px;
@@ -9021,7 +9026,13 @@ button.agenda-row {
   text-shadow: 0 1px 12px rgba(0, 0, 0, 0.45);
 }
 .type-serif .book-cover-text strong {
-  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-family: var(--font-serif);
+}
+.type-caps .book-cover-text strong {
+  font-family: var(--font-heading);
+}
+.book-cover-text small {
+  font-family: var(--font-mono);
 }
 .type-caps .book-cover-text strong {
   font-size: 15px;
@@ -9266,4 +9277,102 @@ button.agenda-row {
   .library-rings-legend strong {
     font-size: 16px;
   }
+}
+
+
+/* =====================================================================
+   Type roles. One family per job, so the page reads as designed:
+     Outfit (body) · Space Grotesk (headings) · JetBrains Mono (numbers,
+     times, labels) · Changa One (display) · Black Ops One (hero numerals).
+   ===================================================================== */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.02em;
+  }
+}
+/* Headings set by class rather than tag. */
+.modal-heading h2,
+.settings-card > button span,
+.learning-title-line h3,
+.book-info h3,
+.cal-item-body > strong,
+.agenda-event strong,
+.settings-toggle-row strong,
+.cal-switch-row strong {
+  font-family: var(--font-heading);
+}
+
+/* Display: the few lines that should feel like a headline. */
+.dashboard-view .page-heading h1,
+.login-introduction h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.005em;
+}
+
+/* Labels, kickers, numbers, times and dates. */
+.eyebrow,
+.section-kicker,
+.quote-kicker,
+.soft-label,
+.content-type,
+.setting-label,
+.page-meta,
+.field-label,
+.agenda-time,
+.free-time,
+.cal-weekdays span,
+.cal-day-num,
+.cal-day-count,
+.cal-item-time,
+.cal-lead,
+.cal-legend,
+.cal-alert-hint,
+.library-result-count,
+.library-rings-legend strong,
+.library-rings-detail,
+.health-stat div > strong,
+.rings-center span,
+.book-info small,
+.learning-progress-line,
+kbd,
+time {
+  font-family: var(--font-mono);
+}
+.eyebrow,
+.section-kicker,
+.quote-kicker,
+.soft-label,
+.setting-label,
+.field-label {
+  letter-spacing: 0.1em;
+}
+.cal-day-num,
+.cal-item-time strong,
+.library-rings-legend strong {
+  font-feature-settings: "zero" 0;
+  letter-spacing: -0.02em;
+}
+
+/* Secondary lines under a time read better in the body face. */
+.agenda-time span {
+  font-family: var(--font-body);
+}
+
+/* Hero numerals. */
+.rings-center strong {
+  font-family: var(--font-hero);
+  font-weight: 400;
+  font-size: 30px;
+  letter-spacing: 0.02em;
+}
+
+/* The quote reads as a quote. */
+.quote-card blockquote p {
+  font-family: var(--font-heading);
+  font-weight: 500;
 }

@@ -589,6 +589,18 @@ the native screens.
   (`ui/ConcentricRings.tsx`). **Commitments removed** from every layer — web,
   render, the agent's three skills, the Pulse signal and the register (which
   now reads tasks) — and **`0024`** drops the table.
+- ✅ **13.12** Typography and the reader (Nov 2026). Fonts are **bundled**
+  (`lib/fonts.ts`, Latin only, ~460 KB precached) instead of a Google Fonts
+  `@import` that failed offline. Roles: Outfit body · Space Grotesk headings ·
+  JetBrains Mono numbers/times/labels · Changa One display · Black Ops One hero
+  numerals. **Reader:** a Typeface picker (Literata, Lora, Outfit, Atkinson
+  Hyperlegible, Space Grotesk, JetBrains Mono; saved with the other display
+  prefs), type up to 26px, and three settings that silently did nothing now
+  work — **line spacing** (a fixed paragraph `line-height` overrode it; ruled
+  lines now track it), **reading width** on a phone (every preset exceeded the
+  screen; it now sets the page margins), and **zoom in paginated mode** (a
+  `scale()` clipped the page on a phone; it now scales the type). The settings
+  sheet is shorter with a light scrim so changes are visible as you make them.
 
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your

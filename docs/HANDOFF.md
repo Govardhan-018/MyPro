@@ -6,6 +6,12 @@ What the last session changed. `docs/PHASES.md` is the durable plan and
 
 ## Latest session — mobile UI overhaul (branch `claude/tender-pasteur-hyrku4`)
 
+**Follow-up in the same session — typography and the reader** (PHASES 13.12):
+bundled fonts with distinct roles (`lib/fonts.ts`; no more Google Fonts
+request), a reader Typeface picker, and fixes for three reader settings that
+did nothing — line spacing, reading width on a phone, paginated zoom. No
+migration. Frontend suite now 73 tests.
+
 Built for the Android phone width first (verified at 412px against a mocked
 API). Suites: shared 38 · frontend 71 · backend-render 83 · backend-local 370;
 all typecheck; web builds. **Two migrations to apply by hand, in order:**

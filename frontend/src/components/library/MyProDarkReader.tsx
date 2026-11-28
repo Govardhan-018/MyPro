@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Loading } from "../ui";
+import { DEFAULT_READER_FONT, READER_FONTS, readerFontStack, type ReaderFontId } from "../../lib/fonts";
 import {
   AlignLeft,
   AlignJustify,
@@ -100,6 +101,22 @@ const LINE_PRESETS = [
 const LINE_MIN = 1.2;
 const LINE_MAX = 2.4;
 
+/** Type size range, px. 26 is for reading on a phone at arm's length. */
+const FONT_MIN = 14;
+const FONT_MAX = 26;
+
+/**
+ * Column width presets, stored as their desktop measure. On a desktop they set
+ * the column's max width; on a phone — where every one of them is wider than
+ * the screen, so they used to do nothing — they set the page margins instead.
+ */
+const WIDTH_PRESETS = [
+  { value: 640, label: "Narrow", id: "narrow", measure: 600 },
+  { value: 720, label: "Comfort", id: "comfort", measure: 720 },
+  { value: 800, label: "Wide", id: "wide", measure: 900 },
+] as const;
+const widthPreset = (value: number) => WIDTH_PRESETS.find((w) => w.value === value) ?? WIDTH_PRESETS[1];
+
 /* ---- Display preferences -------------------------------------------------
  * Theme, type size, spacing, column width, ruled paper and reading mode are
  * how *you* read, not properties of one book, and they were state with a
@@ -115,6 +132,8 @@ interface ReaderPrefs {
   readingWidth: number;
   ruledPage: boolean;
   readingMode: ReadingMode;
+  /** The typeface the page is set in (lib/fonts READER_FONTS). */
+  readerFont: ReaderFontId;
 }
 
 const DEFAULT_PREFS: ReaderPrefs = {
@@ -124,6 +143,7 @@ const DEFAULT_PREFS: ReaderPrefs = {
   readingWidth: 720,
   ruledPage: false,
   readingMode: 'continuous',
+  readerFont: DEFAULT_READER_FONT,
 };
 
 function readPrefs(): ReaderPrefs {
@@ -139,7 +159,7 @@ function readPrefs(): ReaderPrefs {
       typeof value === 'number' && value >= min && value <= max ? value : fallback;
     return {
       theme: oneOf(saved.theme, ['dark', 'sepia', 'original'] as const, DEFAULT_PREFS.theme),
-      fontSize: clamp(saved.fontSize, 14, 22, DEFAULT_PREFS.fontSize),
+      fontSize: clamp(saved.fontSize, FONT_MIN, FONT_MAX, DEFAULT_PREFS.fontSize),
       // A free range now, not three fixed steps — the slider can land anywhere.
       lineSpacing: clamp(saved.lineSpacing, LINE_MIN, LINE_MAX, DEFAULT_PREFS.lineSpacing),
       readingWidth: oneOf(saved.readingWidth, [640, 720, 800] as const, DEFAULT_PREFS.readingWidth),
@@ -148,6 +168,11 @@ function readPrefs(): ReaderPrefs {
         saved.readingMode,
         ['paginated', 'continuous'] as const,
         DEFAULT_PREFS.readingMode,
+      ),
+      readerFont: oneOf(
+        saved.readerFont,
+        READER_FONTS.map((f) => f.id),
+        DEFAULT_PREFS.readerFont,
       ),
     };
   } catch {
@@ -287,6 +312,7 @@ export function MyProDarkReader({
   // Optional lined-paper backdrop (Samsung/Apple Notes style), spaced to the
   // current line height so rules sit behind each line of text.
   const [ruledPage, setRuledPage] = useState<boolean>(prefs.ruledPage);
+  const [readerFont, setReaderFont] = useState<ReaderFontId>(prefs.readerFont);
   // Continuous is the default: one column you scroll top to bottom, pages
   // loading in as you reach them. Paged mode is still a setting.
   const [readingMode, setReadingMode] = useState<ReadingMode>(prefs.readingMode);
@@ -530,13 +556,11 @@ export function MyProDarkReader({
     : 0;
 
   /**
-   * Zoom used to be a `scale()` on the page wrapper, which only applies in
-   * paginated mode — so in continuous mode (the default) the buttons moved a
-   * percentage and nothing else. Scaling the type instead works in both, and
-   * leaves the scroll height honest for the page observers.
+   * Zoom scales the type, in both modes. Paginated mode used to `scale()` the
+   * whole page wrapper instead, which on a phone pushed the text past the
+   * screen edge, where it was clipped; scaling the type reflows it.
    */
-  const sheetFontSize =
-    readingMode === "continuous" ? (fontSize * zoomLevel) / 100 : fontSize;
+  const sheetFontSize = (fontSize * zoomLevel) / 100;
 
   // Pages in the canvas: one when paged, the loaded flow when continuous.
   const visiblePages = useMemo(() => {
@@ -653,8 +677,8 @@ export function MyProDarkReader({
   // Remember how this device likes to read, for the next book and the next
   // session.
   useEffect(() => {
-    writePrefs({ theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode });
-  }, [theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode]);
+    writePrefs({ theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode, readerFont });
+  }, [theme, fontSize, lineSpacing, readingWidth, ruledPage, readingMode, readerFont]);
 
   // A half-typed page number must not outlive the page it was typed against:
   // jumping by the scrubber or the contents left the box showing a number
@@ -1096,6 +1120,7 @@ const key = `${page}-${idx}`;
           {
             fontSize: `${sheetFontSize.toFixed(2)}px`,
             lineHeight: lineSpacing,
+            fontFamily: readerFontStack(readerFont),
             "--rule-step": `${(sheetFontSize * lineSpacing).toFixed(2)}px`,
           } as React.CSSProperties
         }
@@ -1169,9 +1194,9 @@ const key = `${page}-${idx}`;
                 <circle cx="120" cy="90" r="60" fill="rgba(182, 154, 245, 0.12)" stroke="#b69af5" strokeWidth="1.5" strokeDasharray="4 4" />
                 <circle cx="280" cy="90" r="60" fill="rgba(112, 220, 229, 0.12)" stroke="#70dce5" strokeWidth="1.5" />
                 <circle cx="200" cy="90" r="35" fill="rgba(255, 255, 255, 0.08)" stroke="#ffffff" strokeWidth="1.5" />
-                <text x="120" y="95" textAnchor="middle" fill="#b69af5" fontSize="12" fontFamily="DM Sans">Observation</text>
-                <text x="280" y="95" textAnchor="middle" fill="#70dce5" fontSize="12" fontFamily="DM Sans">Execution</text>
-                <text x="200" y="95" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="600" fontFamily="DM Sans">Presence</text>
+                <text x="120" y="95" textAnchor="middle" fill="#b69af5" fontSize="12" fontFamily="Outfit">Observation</text>
+                <text x="280" y="95" textAnchor="middle" fill="#70dce5" fontSize="12" fontFamily="Outfit">Execution</text>
+                <text x="200" y="95" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="600" fontFamily="Outfit">Presence</text>
               </svg>
             </div>
             <span className="diagram-caption">
@@ -1191,7 +1216,7 @@ const key = `${page}-${idx}`;
   return (
     <div
       ref={readerContainerRef}
-      className={`mypro-dark-reader ${theme}-theme ${colorMode ? "color-mode" : ""} mode-${readingMode} ${ruledPage ? "ruled" : ""}`}
+      className={`mypro-dark-reader ${theme}-theme ${colorMode ? "color-mode" : ""} mode-${readingMode} ${ruledPage ? "ruled" : ""} width-${widthPreset(readingWidth).id}`}
     >
       {/* ================= TOP TOOLBAR ================= */}
       <header className="reader-top-toolbar">
@@ -1384,11 +1409,33 @@ const key = `${page}-${idx}`;
                 </div>
 
                 <div className="setting-section">
+                  <span className="setting-label">TYPEFACE</span>
+                  <div className="reader-font-grid" role="radiogroup" aria-label="Typeface">
+                    {READER_FONTS.map((font) => (
+                      <button
+                        key={font.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={readerFont === font.id}
+                        className={`reader-font-option ${readerFont === font.id ? "active" : ""}`}
+                        onClick={() => setReaderFont(font.id)}
+                      >
+                        <span className="reader-font-sample" style={{ fontFamily: font.stack }}>
+                          Aa
+                        </span>
+                        <span className="reader-font-name">{font.label}</span>
+                        <small>{font.hint}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="setting-section">
                   <span className="setting-label">FONT SIZE ({fontSize}px)</span>
                   <div className="font-size-row">
-                    <button type="button" onClick={() => setFontSize((s) => Math.max(14, s - 1))}>A-</button>
-                    <input type="range" min={14} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} />
-                    <button type="button" onClick={() => setFontSize((s) => Math.min(22, s + 1))}>A+</button>
+                    <button type="button" aria-label="Smaller text" onClick={() => setFontSize((s) => Math.max(FONT_MIN, s - 1))} disabled={fontSize <= FONT_MIN}>A-</button>
+                    <input type="range" min={FONT_MIN} max={FONT_MAX} value={fontSize} aria-label="Font size" onChange={(e) => setFontSize(Number(e.target.value))} />
+                    <button type="button" aria-label="Larger text" onClick={() => setFontSize((s) => Math.min(FONT_MAX, s + 1))} disabled={fontSize >= FONT_MAX}>A+</button>
                   </div>
                 </div>
 
@@ -1427,9 +1474,9 @@ const key = `${page}-${idx}`;
                 <div className="setting-section">
                   <span className="setting-label">READING WIDTH</span>
                   <div className="reader-segmented">
-                    {[640, 720, 800].map((v) => (
-                      <button key={v} className={readingWidth === v ? "active" : ""} onClick={() => setReadingWidth(v)}>
-                        {v === 640 ? "Narrow" : v === 720 ? "Comfort" : "Wide"}
+                    {WIDTH_PRESETS.map(({ value, label }) => (
+                      <button key={value} className={readingWidth === value ? "active" : ""} onClick={() => setReadingWidth(value)}>
+                        {label}
                       </button>
                     ))}
                   </div>
@@ -1763,7 +1810,7 @@ const key = `${page}-${idx}`;
 
           <div
             className={`reader-page-wrapper ${readingMode}`}
-            style={{ maxWidth: readingWidth, transform: readingMode === "paginated" ? `scale(${zoomLevel / 100})` : undefined }}
+            style={{ maxWidth: widthPreset(readingWidth).measure }}
           >
             {readingMode === "continuous" && flowStart > 1 && (
               <button type="button" className="reader-load-earlier" onClick={loadEarlier}>

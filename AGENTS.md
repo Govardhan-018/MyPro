@@ -70,6 +70,13 @@ styles (resets, `body`, headings, `button`, `input` defaults) inside
 removes default margins, and sets `font: inherit` on form controls — do not
 repeat those.
 
+Typography: one family per job, bundled in `frontend/src/lib/fonts.ts` (Latin
+subsets only — every font file is precached for offline). Use the CSS
+variables, never a literal family: `--font-body` (Outfit), `--font-heading`
+(Space Grotesk), `--font-mono` (JetBrains Mono — numbers, times, labels,
+kickers), `--font-display` (Changa One — greeting/welcome only),
+`--font-hero` (Black Ops One — hero numerals only), `--font-serif` (Literata).
+
 Design system: pure black `#000`, graphite surfaces, white typography with
 size-based hierarchy, thin `rgba(255,255,255,.1…)` borders, rounded cards,
 global Monochrome/Color Mode (accents only under `.color-mode`, 1000ms
