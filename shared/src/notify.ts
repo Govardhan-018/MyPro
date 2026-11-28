@@ -28,7 +28,6 @@ export const NOTIFICATION_VIEWS = [
   'library',
   'knowledge',
   'health',
-  'commitments',
   'schedules',
   'assistant',
   'settings',

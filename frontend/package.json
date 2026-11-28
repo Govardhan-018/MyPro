@@ -12,6 +12,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/literata": "^5.3.0",
+    "@fontsource-variable/lora": "^5.3.0",
+    "@fontsource-variable/outfit": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@fontsource/atkinson-hyperlegible": "^5.3.0",
+    "@fontsource/black-ops-one": "^5.3.0",
+    "@fontsource/changa-one": "^5.3.0",
     "@mypro/shared": "workspace:*",
     "@supabase/supabase-js": "^2.45.0",
     "canvas-confetti": "^1.9.3",
@@ -24,8 +32,8 @@
     "tesseract.js": "6.0.1"
   },
   "devDependencies": {
-    "@types/canvas-confetti": "^1.9.0",
     "@tailwindcss/vite": "^4.0.0",
+    "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

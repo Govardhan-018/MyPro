@@ -22,12 +22,15 @@ A single intelligent personal space: **Calendar · Library/Reader · Knowledge �
 >   second implementation. The backends are *not* workspace members.
 > - `supabase/migrations/` — 0001 schema (4NF) · 0002 RLS + health gate ·
 >   0003 node presence · 0004 skills · 0005 pdf-text storage · 0006 realtime ·
->   0007 deferred run status · 0008 pending-action result · 0009 commitments ·
+>   0007 deferred run status · 0008 pending-action result · 0009 commitments (dropped by 0024) ·
 >   0010 narrative memory · 0011 companion layers · 0012 agent core ·
 >   0013 research · 0014 strava + interests · 0015–0016/0018 keepalive ·
 >   0017 message blocks · **0019 retention** (pg_cron prune of old logs) ·
 >   **0020 event completion** (`calendar_events.completed_at`) ·
->   **0021 google_oauth_config** (in-app, encrypted OAuth app credentials)
+>   **0021 google_oauth_config** (in-app, encrypted OAuth app credentials) ·
+>   0022 scheduler reliability · 0023 offline reading ·
+>   **0024 drop commitments** (the feature is removed everywhere) ·
+>   **0025 calendar item kind** (`calendar_events.kind`: event | reminder)
 >
 > Staying awake: Supabase Cron + pg_net POST `/internal/keepalive` every 10
 > minutes (`0015`, repointed by `0016`). It is a ping, not a scheduler tick.
@@ -226,10 +229,11 @@ Email → task/event creation is **not** a column on the email; it's a normal `t
 ```sql
 event_categories(id, user_id, name, tone)         -- Work/Personal/Health/Reading...
 calendar_events(
-  id, user_id, title, description,
+  id, user_id, title, description,   -- description = a reminder's note
   starts_at timestamptz, ends_at timestamptz, all_day bool,
   location text, category_id references event_categories,
-  completed_at timestamptz           -- null = outstanding; set = marked done (0020)
+  completed_at timestamptz,          -- null = outstanding; set = marked done (0020)
+  kind text default 'event'          -- 'event' | 'reminder' (0025)
 )
 event_reminders(id, calendar_event_id, minutes_before int, channel text)  -- 1:M, not an array
 ```
@@ -241,11 +245,27 @@ they hold however the request arrives — the UI only mirrors them):
   all-day). `POST/DELETE /calendar/events/:id/complete`.
 - Delete is always allowed, past events included.
 
-**Reminders are notifications.** `GET /schedules/upcoming` expands calendar
-events too — **1h before + at the start + any custom `event_reminders`**
-(all-day → at-start only) — so the phone's local-notification clock reminds you
-of events, not just scheduled jobs. Each occurrence carries a channel
-(`reminders`/`briefs`) and a deep-link route (the event on its day).
+**One store for reminders and events.** The Calendar's Quick Add writes
+either kind to `calendar_events`; the chosen *Remind before* is the item's one
+`event_reminders` row (replaced on every save). There is no separate reminder
+table. A one-off `notify` schedule in `assistant_schedules` is *shown* on the
+calendar by the client (and edited/deleted through `/schedules`), but stays a
+schedule — the drain loop delivers it.
+
+**Reminders are notifications.** `GET /schedules/upcoming?hours&tz` expands
+calendar items too (`calendarReminderMoments`, pure and tested):
+- timed: `start − lead` and the moment itself; an **event with no lead** keeps
+  the baseline **1 h before + at the start**, a reminder with none fires at its
+  time;
+- all-day: a **09:00 morning reminder** on its date in `tz` (the device's zone,
+  sent by the shared client; else the profile's), or whole days before it —
+  sub-day leads collapse onto 09:00.
+
+The phone's local-notification clock arms these, so it reminds you of
+calendar items, not just scheduled jobs. Each occurrence carries a channel
+(`reminders`/`briefs`) and a deep-link route (the item on its day). Before
+0025 is applied render reads and writes without `kind` (a reminder is stored
+as a plain event rather than failing).
 
 ### 4.5 Tasks
 

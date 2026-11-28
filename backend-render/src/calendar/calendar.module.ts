@@ -19,12 +19,18 @@ const createEvent = z.object({
   ends_at: z.string().datetime().optional(),
   all_day: z.boolean().default(false),
   location: z.string().max(300).optional(),
+  /** Appointment or nudge — one store for both (migration 0025). */
+  kind: z.enum(['event', 'reminder']).optional(),
   category_id: z.string().uuid().optional(),
   reminders: z.array(reminder).max(10).optional(),
 });
 const patchEvent = createEvent.partial();
 
 const SELECT = '*, event_reminders(*), event_categories(name, tone)';
+
+/** PostgREST's answer when a column is missing, i.e. migration 0025 not applied. */
+const missingKind = (error: { message: string } | null) =>
+  Boolean(error && /kind/.test(error.message) && /column/i.test(error.message));
 
 /**
  * How long after an event starts it may be marked done. "On the day, after the
@@ -83,9 +89,15 @@ export class CalendarService {
   async create(user: AuthUser, input: z.infer<typeof createEvent>) {
     const db = this.supabase.forUser(user.token);
     const { reminders, ...row } = input;
-    const created = one(
-      await db.from('calendar_events').insert({ ...row, user_id: user.id }).select('id').single(),
-    ) as { id: string };
+    const insert = (values: Record<string, unknown>) =>
+      db.from('calendar_events').insert({ ...values, user_id: user.id }).select('id').single();
+    let res = await insert(row);
+    // Without migration 0025 a reminder is stored as a plain event, not lost.
+    if (missingKind(res.error)) {
+      const { kind: _kind, ...legacy } = row;
+      res = await insert(legacy);
+    }
+    const created = one(res) as { id: string };
     await this.replaceReminders(user, created.id, reminders);
     return this.get(user, created.id);
   }
@@ -107,7 +119,16 @@ export class CalendarService {
     }
 
     const { reminders, ...row } = input;
-    if (Object.keys(row).length) none(await db.from('calendar_events').update(row).eq('id', id));
+    if (Object.keys(row).length) {
+      let { error } = await db.from('calendar_events').update(row).eq('id', id);
+      if (missingKind(error)) {
+        const { kind: _kind, ...legacy } = row;
+        error = Object.keys(legacy).length
+          ? (await db.from('calendar_events').update(legacy).eq('id', id)).error
+          : null;
+      }
+      none({ error });
+    }
     if (reminders) await this.replaceReminders(user, id, reminders);
     return this.get(user, id);
   }

@@ -1,5 +1,9 @@
 # MyPro — the Companion
 
+> **Note (Nov 2026):** the Commitments part of this vision was built (`0009`)
+> and then removed from the product (`0024`). Threads, memory and the Pulse
+> remain. The sections below are kept as the original design record.
+
 A design vision for the assistant in `backend-local`. Nothing here is built yet;
 this is the argument for what to build and why, before any code.
 

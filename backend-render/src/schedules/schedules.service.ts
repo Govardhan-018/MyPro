@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
+import { DateTime, IANAZone } from 'luxon';
 import { SupabaseService } from '../common/supabase.service';
 import { AuditService } from '../common/audit.service';
 import type { AuthUser } from '../common/auth.guard';
@@ -129,18 +130,68 @@ interface ScheduleOccurrenceOut {
   deeplink_at?: string;
 }
 
+/** A calendar row is an appointment (`event`) or a nudge (`reminder`) — 0025. */
+export type CalendarKind = 'event' | 'reminder';
+
+/** When an all-day item reminds on its day, local time. */
+export const ALL_DAY_REMINDER_HOUR = 9;
+
 /**
- * The minutes-before a calendar event should remind. The baseline the product
- * promises is **one hour before and at the start** (`60` and `0`); any custom
- * `event_reminders` are merged in and de-duplicated. An all-day event gets only
- * the at-start moment — "one hour before midnight" is noise.
+ * The minutes-before a timed calendar item should remind.
+ *
+ * - The user chose a "Remind before" (a custom `event_reminders` row): that
+ *   lead **and** the moment itself. Nothing they did not ask for.
+ * - Nothing chosen: an event keeps the baseline the product always promised,
+ *   **one hour before and at the start**; a reminder fires at its time.
  *
  * Pure and exported so the timing rule is unit-tested without a database.
  */
-export function calendarReminderLeads(allDay: boolean, custom: number[]): number[] {
+export function calendarReminderLeads(
+  allDay: boolean,
+  custom: number[],
+  kind: CalendarKind = 'event',
+): number[] {
   const valid = custom.filter((m) => Number.isFinite(m) && m >= 0);
   if (allDay) return [0];
-  return [...new Set([0, 60, ...valid])].sort((a, b) => a - b);
+  const base = valid.length ? [0] : kind === 'reminder' ? [0] : [0, 60];
+  return [...new Set([...base, ...valid])].sort((a, b) => a - b);
+}
+
+/**
+ * The instants a calendar item should notify, newest last.
+ *
+ * `remindAt = start − lead`. An all-day item has no start time, so it is
+ * anchored to a **morning reminder** — 09:00 in the user's zone on its date —
+ * and only whole-day leads move it ("1 day before" = 09:00 the day before);
+ * a sub-day lead on an all-day item collapses onto the anchor rather than
+ * firing at a meaningless hour. All-day rows are stored as UTC midnight of
+ * their date, so the date is read in UTC and the hour applied in `timezone`.
+ */
+export function calendarReminderMoments(
+  item: { starts_at: string; all_day?: boolean | null; kind?: CalendarKind | null },
+  custom: number[],
+  timezone = 'UTC',
+): { at: Date; minutesBefore: number }[] {
+  const start = new Date(item.starts_at);
+  if (!Number.isFinite(start.getTime())) return [];
+  const kind = item.kind === 'reminder' ? 'reminder' : 'event';
+
+  if (!item.all_day) {
+    return calendarReminderLeads(false, custom, kind).map((minutesBefore) => ({
+      at: new Date(start.getTime() - minutesBefore * 60_000),
+      minutesBefore,
+    }));
+  }
+
+  const zone = IANAZone.isValidZone(timezone) ? timezone : 'UTC';
+  const date = item.starts_at.slice(0, 10);
+  const anchor = DateTime.fromISO(date, { zone }).set({ hour: ALL_DAY_REMINDER_HOUR });
+  if (!anchor.isValid) return [];
+  const days = new Set([0]);
+  for (const m of custom) if (Number.isFinite(m) && m > 0 && m % 1440 === 0) days.add(m / 1440);
+  return [...days]
+    .sort((a, b) => a - b)
+    .map((d) => ({ at: anchor.minus({ days: d }).toJSDate(), minutesBefore: d * 1440 }));
 }
 
 /** Human lead-time for a calendar reminder's body, e.g. "In 1 hour · Office". */
@@ -159,6 +210,24 @@ export function calendarBody(minutesBefore: number, location: string | null): st
   const h = Math.floor(minutesBefore / 60);
   const m = minutesBefore % 60;
   return `In ${h}h ${m}m${where}`;
+}
+
+/**
+ * The body of a calendar notification. A reminder at its moment shows its note
+ * (or simply "Now"); an all-day item's morning reminder says "Today".
+ */
+export function calendarItemBody(
+  item: { all_day?: boolean | null; kind?: CalendarKind | null; location: string | null; description?: string | null },
+  minutesBefore: number,
+): string {
+  const where = item.location ? ` · ${item.location}` : '';
+  const note = item.description?.trim();
+  if (item.all_day) {
+    const when = minutesBefore === 0 ? 'Today' : minutesBefore === 1440 ? 'Tomorrow' : calendarBody(minutesBefore, null);
+    return `${when}${where}${note && minutesBefore === 0 ? ` · ${note}` : ''}`;
+  }
+  if (item.kind === 'reminder' && minutesBefore === 0) return note || `Now${where}`;
+  return calendarBody(minutesBefore, item.location);
 }
 
 @Injectable()
@@ -307,7 +376,7 @@ export class SchedulesService {
    * say, and an id to deduplicate against on the next sync. Nothing else
    * about the schedule belongs on the device.
    */
-  async upcoming(user: AuthUser, hours: number) {
+  async upcoming(user: AuthUser, hours: number, tz?: string) {
     const rows = (await this.list(user)) as ScheduleRowShape[];
     const from = new Date();
     const until = new Date(from.getTime() + hours * 3600_000);
@@ -347,7 +416,7 @@ export class SchedulesService {
         })),
       );
 
-    const out = [...scheduleOccurrences, ...(await this.calendarOccurrences(user, from, until))];
+    const out = [...scheduleOccurrences, ...(await this.calendarOccurrences(user, from, until, tz))];
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
   }
@@ -355,49 +424,56 @@ export class SchedulesService {
   /**
    * Calendar events as notification moments (Feature: calendar reminders).
    *
-   * Every event earns a reminder **one hour before** and **at the start** —
-   * that is the baseline the product promises — plus any custom
-   * `event_reminders` the user set on it. All_day events get only the at-start
-   * moment, because "one hour before midnight" is noise.
+   * Each item reminds at its moment plus the "Remind before" lead the user
+   * chose; an event with no lead keeps the baseline of one hour before and at
+   * the start. All-day items get a morning reminder in the user's zone (`tz`
+   * from the device, else the profile) — see `calendarReminderMoments`.
    *
    * The phone arms whatever this returns, so no device change is needed: the
    * same local-notification path that fires the morning brief now fires event
    * reminders too, with the laptop shut.
    */
-  private async calendarOccurrences(user: AuthUser, from: Date, until: Date) {
+  private async calendarOccurrences(user: AuthUser, from: Date, until: Date, tz?: string) {
     const db = this.supabase.forUser(user.token);
-    // Fetch a little past the window so a 1h-before reminder for an event just
-    // beyond the edge is still caught.
-    const fetchUntil = new Date(until.getTime() + 60 * 60_000);
-    const { data, error } = await db
-      .from('calendar_events')
-      .select('id, title, starts_at, all_day, location, event_reminders(minutes_before)')
-      .gte('starts_at', from.toISOString())
-      .lte('starts_at', fetchUntil.toISOString())
-      .order('starts_at');
+    // Fetch past the window so a lead-time reminder (up to a day early) for an
+    // item just beyond the edge is still caught, and a day behind so an
+    // all-day item's morning reminder (stored as UTC midnight) is not missed.
+    const fetchFrom = new Date(from.getTime() - 24 * 60 * 60_000);
+    const fetchUntil = new Date(until.getTime() + 2 * 24 * 60 * 60_000);
+    const zone = tz && IANAZone.isValidZone(tz) ? tz : await this.profileZone(user);
+    const query = (columns: string) =>
+      db
+        .from('calendar_events')
+        .select(columns)
+        .gte('starts_at', fetchFrom.toISOString())
+        .lte('starts_at', fetchUntil.toISOString())
+        .order('starts_at');
+    const cols = 'id, title, description, starts_at, all_day, location, event_reminders(minutes_before)';
+    let { data, error } = await query(`${cols}, kind`);
+    // Before migration 0025 there is no `kind` column: read without it.
+    if (error && /kind/.test(error.message)) ({ data, error } = await query(cols));
     if (error) throw new BadRequestException(error.message);
 
     type EventRow = {
       id: string;
       title: string;
+      description: string | null;
       starts_at: string;
       all_day: boolean | null;
       location: string | null;
+      kind?: CalendarKind | null;
       event_reminders: { minutes_before: number }[] | null;
     };
 
     const out: ScheduleOccurrenceOut[] = [];
-    for (const event of (data ?? []) as EventRow[]) {
-      const startsAt = new Date(event.starts_at);
-      if (!Number.isFinite(startsAt.getTime())) continue;
-
-      const leads = calendarReminderLeads(
-        Boolean(event.all_day),
+    for (const event of (data ?? []) as unknown as EventRow[]) {
+      const moments = calendarReminderMoments(
+        event,
         (event.event_reminders ?? []).map((r) => r.minutes_before),
+        zone,
       );
 
-      for (const minutesBefore of leads) {
-        const at = new Date(startsAt.getTime() - minutesBefore * 60_000);
+      for (const { at, minutesBefore } of moments) {
         // Only moments inside the arming window and still in the future.
         if (at.getTime() <= from.getTime() || at.getTime() > until.getTime()) continue;
         out.push({
@@ -405,8 +481,8 @@ export class SchedulesService {
           schedule_id: event.id,
           name: event.title,
           action_type: 'notify',
-          title: event.title || 'Event',
-          body: calendarBody(minutesBefore, event.location),
+          title: event.title || (event.kind === 'reminder' ? 'Reminder' : 'Event'),
+          body: calendarItemBody(event, minutesBefore),
           at: at.toISOString(),
           kind: 'calendar',
           deeplink: 'calendar',
@@ -417,6 +493,18 @@ export class SchedulesService {
       }
     }
     return out;
+  }
+
+  /** The zone saved on the profile, for clients that do not send their own. */
+  private async profileZone(user: AuthUser): Promise<string> {
+    const { data } = await this.supabase
+      .forUser(user.token)
+      .from('profiles')
+      .select('timezone')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const tz = (data as { timezone?: string } | null)?.timezone;
+    return tz && IANAZone.isValidZone(tz) ? tz : 'UTC';
   }
 
   async runs(user: AuthUser, id: string) {

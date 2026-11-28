@@ -26,7 +26,6 @@ export type {
   ScheduleRow,
   AssistantMessageRow,
   AssistantSettingsRow,
-  CommitmentRow,
   ReceiptRow,
   SendResult,
   EffortMode,

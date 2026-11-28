@@ -4,7 +4,66 @@ What the last session changed. `docs/PHASES.md` is the durable plan and
 `docs/BACKEND_PLAN.md` is the architecture contract; this file is the volatile
 "what just happened". Read `AGENTS.md` too.
 
-## Latest session — five improvements (branch `claude/clever-dirac-7r1fbd`)
+## Latest session — mobile UI overhaul (branch `claude/tender-pasteur-hyrku4`)
+
+**Follow-up in the same session — typography and the reader** (PHASES 13.12):
+bundled fonts with distinct roles (`lib/fonts.ts`; no more Google Fonts
+request), a reader Typeface picker, and fixes for three reader settings that
+did nothing — line spacing, reading width on a phone, paginated zoom. No
+migration. Frontend suite now 73 tests.
+Then the roles were extended app-wide — page titles, every control, data,
+stats and empty states (see the "Type roles" block at the end of
+`frontend/src/index.css`); the book-options footer no longer overflows on a
+phone.
+Finally the **book sheet** (`BookOptionsModal`) was rebuilt: cover + chips
+header, Track progress | Read PDF tabs, a progress card with pages left and a
+time-to-finish estimate, a − [page] + stepper with slider and quick chips,
+pinned actions. The "Sync with MyPro" PDF upload (which always failed —
+`performSupabaseUpload` throws) is now shown as *coming soon* instead of a
+button; a picked PDF is stored on the device as before.
+
+Built for the Android phone width first (verified at 412px against a mocked
+API). Suites: shared 38 · frontend 71 · backend-render 83 · backend-local 370;
+all typecheck; web builds. **Two migrations to apply by hand, in order:**
+**`0024_drop_commitments.sql`** (destructive — export `commitments` first if
+you want a copy) and **`0025_calendar_item_kind.sql`** (additive). Code
+degrades without 0025 (a reminder is stored as a plain event); 0024 can wait,
+nothing reads the table any more.
+
+1. **Login** — subtitle and the Calendar/Library/Health pills gone; mark +
+   "Welcome to MyPro" + a sharper form (crisper inputs, visible focus rings,
+   bigger targets). Auth handlers untouched.
+2. **Today** — quote card replaces "Plan your day with me"
+   (`components/QuoteCard.tsx`, `data/quotes.ts` — 20 starters, paste more in
+   the same shape). Random each load, never the same twice running
+   (`sessionStorage`), ten dark mesh backgrounds.
+3. **Calendar** — Month only (`components/calendar/CalendarView.tsx`): aligned
+   toolbar (‹ Today › · + New), dots per busy day (ring = reminder, dot =
+   event; colour under Color Mode), tap a day → its schedule below with time /
+   All day, type badge, lead, Mark done, Delete (tap twice). Quick Add:
+   Reminder | Event, title, date, time or All day, Remind before, location or
+   note, and a live "You'll be reminded …" line. **One store**:
+   `calendar_events.kind`; one-off Schedules "Remind me" items are merged in by
+   `lib/useAgenda.ts` and editable/deletable from the calendar (they stay
+   Schedules rows). Today's Flow reads the same list. Render:
+   `calendarReminderMoments` (lead + the moment; events with no lead keep the
+   1h baseline; all-day → 09:00 in the device zone, which the shared client now
+   sends as `/schedules/upcoming?tz=`). ~160 dead Day/Week CSS rules removed.
+4. **Library** — Settings → Profile & preferences → *Show Search in Library*
+   (per device, `lib/preferences.ts`); typographic covers for books without
+   art (`library/BookCover.tsx`, also on Today's "Continue learning");
+   **My Collections removed** from the page (and `useCollections`; the API and
+   table stay); the four stat boxes are now a concentric-ring gauge
+   (`ui/ConcentricRings.tsx`, reusable — Health has no ring component yet).
+5. **Commitments removed** — web view/hook/nav, shared types/API/notify view,
+   render module, the agent's three skills, the Pulse signal, the narrative
+   input and the register (now reads tasks). Tests updated.
+
+**Not verified here:** a real Android device, the live Render/Supabase stack,
+the agent's live behaviour after the register change. There is no lint script
+in the repo, so "lint" was not run.
+
+## Previous session — five improvements (branch `claude/clever-dirac-7r1fbd`)
 
 Suites: shared 38 · frontend 51 · backend-render 62 · backend-local 337; all
 typecheck; web builds. Verified end to end in a browser against a mock API
@@ -42,7 +101,7 @@ device (IndexedDB/SW in the WebView are standard Chromium, but untested on
 hardware), real Google OAuth. True background sync with the app *closed*
 needs native work (WorkManager); today sync runs on open/resume/reconnect.
 
-## Previous session — reliability audit
+## Earlier session — reliability audit
 
 Session management, Android notifications, Gmail OAuth UX, the three-mode
 scheduler, plus audit fixes. Suites: shared 38 · frontend 14 · backend-render

@@ -94,31 +94,6 @@ export const CAPABILITY_META: Readonly<Record<string, CapabilityMeta>> = {
     enabled: true,
   }),
 
-  /* ---- commitments: promises with a state machine ---- */
-  list_commitments: meta({
-    name: 'list_commitments',
-    version: '1.0.0',
-    category: 'commitments',
-    keywords: ['commitment', 'commitments', 'promised', 'owe', 'i said i would', 'deadline',
-      'at risk', 'slipping', 'on the hook'],
-    enabled: true,
-  }),
-  create_commitment: meta({
-    name: 'create_commitment',
-    version: '1.0.0',
-    category: 'commitments',
-    keywords: ['i promised', 'i will', 'commit to', 'by friday', 'hold me to', 'deadline'],
-    enabled: true,
-  }),
-  update_commitment: meta({
-    name: 'update_commitment',
-    version: '1.0.0',
-    category: 'commitments',
-    keywords: ['done', 'delivered', 'slipped', 'abandoned', 'gave up', 'finished it'],
-    dependencies: ['list_commitments'],
-    enabled: true,
-  }),
-
   /* ---- memory ---- */
   remember: meta({
     name: 'remember',

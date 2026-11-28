@@ -12,11 +12,11 @@ export type Register = 'focus' | 'casual' | 'serious' | 'celebratory' | 'concern
 export interface RegisterSignals {
   /** A live health concern (and the grant is active). */
   healthActive?: boolean;
-  /** A commitment is overdue or flagged at risk. */
+  /** An open task is overdue. */
   atRisk?: boolean;
   /** A deadline is close (hours/a day out). */
   deadlineSoon?: boolean;
-  /** A goal or commitment was just completed. */
+  /** A task was just completed. */
   justCompleted?: boolean;
 }
 

@@ -70,6 +70,21 @@ styles (resets, `body`, headings, `button`, `input` defaults) inside
 removes default margins, and sets `font: inherit` on form controls — do not
 repeat those.
 
+Typography: one family per job, bundled in `frontend/src/lib/fonts.ts` (Latin
+subsets only — every font file is precached for offline). Use the CSS
+variables, never a literal family:
+- `--font-display` (Changa One) — every page title (`.page-heading h1`), the
+  greeting, welcome screens, and mid-size stat numbers.
+- `--font-heading` (Space Grotesk) — headings and card titles; also
+  `--font-ui`, which every button, tab, chip, toggle and menu uses.
+- `--font-body` (Outfit) — descriptions, messages, inputs.
+- `--font-mono` (JetBrains Mono) — times, dates, counts, durations, page
+  numbers, and the small uppercase kickers/labels.
+- `--font-hero` (Black Ops One) — only numerals ≥ ~28px; its stencil cuts
+  break up smaller.
+- `--font-serif` (Literata) — long-form reading.
+The role map lives at the end of `src/index.css` ("Type roles").
+
 Design system: pure black `#000`, graphite surfaces, white typography with
 size-based hierarchy, thin `rgba(255,255,255,.1…)` borders, rounded cards,
 global Monochrome/Color Mode (accents only under `.color-mode`, 1000ms

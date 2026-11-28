@@ -63,7 +63,7 @@ Postgres, one Android app that is a native shell around the web app.
 | **Web** | `frontend/` | Vercel | The entire UI. React 19 + Vite + Tailwind v4. Service worker for offline launch and web push. |
 | **Android** | `android/` | Phone (APK from GitHub Actions) | Expo SDK 52 `react-native-webview` shell around the web app. Native only for what a page cannot do: OS alarms, push, back button, deep links. |
 | **Core** | `backend-render/` | Render (`mypro-core`) | Always-reachable request-driven API: auth broker, CRUD, calendar reminders, Gmail/Strava OAuth + encrypted tokens, `/schedules/upcoming`. Holds **no** model key. |
-| **Agent** | `backend-local/` | Render (`mypro-agent`) or a laptop via Cloudflare tunnel | The companion: LLM, agent core, 37 skills, research, memory, the Pulse, and the **scheduler drain loop**. Holds the model keys, never an OAuth token. |
+| **Agent** | `backend-local/` | Render (`mypro-agent`) or a laptop via Cloudflare tunnel | The companion: LLM, agent core, 34 skills, research, memory, the Pulse, and the **scheduler drain loop**. Holds the model keys, never an OAuth token. |
 | **Database** | `supabase/` | Supabase cloud | 23 hand-applied migrations, RLS on every table, `pg_cron` keep-alive and retention. |
 | **Shared core** | `shared/` | imported by web + Android | `@mypro/shared`: typed API client, auth/session engine, agent discovery, PDF text engine, notification mapping, Realtime stream. One implementation for both clients. |
 
@@ -89,8 +89,9 @@ phone as the clock, Supabase `pg_cron` pinging Render to keep it awake.
 
 ```
 frontend/
-  src/App.tsx                    all views (Today, Calendar, Library, Knowledge, Health,
-                                 Commitments, Schedules, Assistant, Settings), routing, shell
+  src/App.tsx                    all views (Today, Library, Knowledge, Health, Schedules,
+                                 Assistant, Settings), routing, shell
+  src/components/calendar/       the Calendar: one month view + the selected day, Quick Add
   src/components/assistant/      Markdown renderer, plan card, result blocks, character panel
   src/components/library/        PDF reader, podcast player, article reader, offline download
   src/components/schedules/      three-mode scheduler
@@ -109,7 +110,7 @@ shared/src/
   notify.ts realtime.ts types.ts
 backend-render/src/
   auth/ library/ calendar/ schedules/ gmail/ strava/ notifications/ health/
-  tasks/ commitments/ interests/ profile/ nodes/ common/ config/
+  tasks/ interests/ profile/ nodes/ common/ config/
 backend-local/src/
   agent/        orchestrator, intent router, planner, executor, verification, effort budgets
   assistant/    chat service, system prompt, register, internal AI endpoint
@@ -118,7 +119,7 @@ backend-local/src/
   llm/          provider-neutral model layer (Groq, Gemini, Cohere, SambaNova)
   research/     12 web/news/sports/weather providers behind chains, SSRF guard, cache
   memory/ pulse/ scheduler/ notifications/ gmail/ fitness/ presence/
-supabase/migrations/             0001 … 0023 (applied by hand, in order)
+supabase/migrations/             0001 … 0025 (applied by hand, in order)
 docs/                            architecture contract, AI system, agent spec, phases, handoff
 .github/workflows/android.yml    APK build (main only, Gradle cache, rate-limit retry)
 render.yaml                      Render blueprint for mypro-core and mypro-agent
@@ -166,11 +167,21 @@ Each feature lists what it does, how, and where it lives.
   503 when Supabase is unreachable.
 
 ### 4.2 Today and Calendar
-- Week, day and month views; mobile agenda; deep links (`#calendar?event=…`)
-  open a specific event from a notification.
-- **Reminders:** every event reminds 1 h before and at the start, plus custom
-  `event_reminders`; all-day events remind at the start only. Served by
-  `/schedules/upcoming` and armed on the phone.
+- **One Month view** (Day and Week were folded into it): colour-coded dots on
+  busy days, tap a day for its schedule beneath — time or *All day*, type
+  badge, reminder lead, Mark done and Delete. Deep links
+  (`#calendar?event=…`) open a specific item from a notification.
+- **One store for Reminders and Events:** `calendar_events.kind` (`0025`).
+  Quick Add picks *Reminder* or *Event*, a time or *All day*, an optional
+  *Remind before* (at time · 5/15/30 min · 1 h · 1 day) and a location (event)
+  or note (reminder). One-off "Remind me" reminders made in Schedules show on
+  the calendar too and can be edited or deleted there (they stay in Schedules).
+  Today's Flow reads the same merged list (`useAgenda`).
+- **When it alerts:** `remindAt = start − lead`, plus the moment itself; an
+  event with no lead keeps the 1 h-before baseline. All-day items remind at
+  09:00 in the device's zone (or the day before). Computed in render
+  (`calendarReminderMoments`), served by `/schedules/upcoming?tz=…` and armed
+  on the phone.
 - **Completion:** "Mark done" only after the start, within a 12-hour window
   (all-day: the day); editing is rejected once started — enforced server-side,
   mirrored in `eventActionState`. A started or completed event opens as a
@@ -277,8 +288,6 @@ latest run; run history with results. Execution semantics in
 ### 4.9 Other domains
 - **Health records** — symptoms, medications, documents; the assistant can
   read them only under a time-boxed grant (see [§8](#8-security-model)).
-- **Commitments** — open loops with deadlines, states (open / at_risk / done /
-  slipped / abandoned) and check-ins the Pulse follows up on.
 - **Tasks**, **interests** (followed teams/companies/topics watched for news),
   **Strava** training history (read through the core).
 - **Settings** — profile, Colour Mode, notifications, mail, storage, privacy.
@@ -310,12 +319,11 @@ model call.
 | max output tokens | 1 024 | 4 096 | 8 192 |
 | search results / pages fetched | 3 / 0 | 5 / 2 | 8 / 5 |
 
-### 5.3 Skills (37)
+### 5.3 Skills (34)
 | Area | Skills |
 |---|---|
 | Calendar | `list_events` `create_event` `update_event` `delete_event` |
 | Tasks | `list_tasks` `create_task` `update_task` |
-| Commitments | `list_commitments` `create_commitment` `update_commitment` |
 | Memory | `remember` `forget` `open_thread` `close_thread` |
 | Library & knowledge | `search_library` `add_library_item` `update_reading_progress` `search_knowledge` `save_note` |
 | Health | `list_health_records` (grant-gated) |
@@ -348,7 +356,7 @@ re-checked), robots.txt, per-host delay, byte/char caps, result cache, usage
 ledger. All web text is marked untrusted.
 
 ### 5.7 The Pulse (proactivity)
-Every 30 min: candidate signals (commitment due, task due, email needing
+Every 30 min: candidate signals (task due, email needing
 action, silence, evening close-out, weekly review, interest news) scored as
 `urgency × value × novelty`, gated by minimum score, per-type cooldown and a
 daily budget of 3, composed tool-free, and **every** candidate — sent or
@@ -390,7 +398,7 @@ type-discriminated blobs); subtype detail tables keep `library_items` lean.
 | 0005 | storage for extracted PDF text |
 | 0006 | Realtime on `notifications` |
 | 0007–0008 | `deferred` run status; outward-action results |
-| 0009–0011 | commitments, narrative memory, companion layers (episodes, threads, interventions) |
+| 0009–0011 | commitments (removed by 0024), narrative memory, companion layers (episodes, threads, interventions) |
 | 0012 | agent plans and steps |
 | 0013–0014 | research cache/usage; Strava, interests |
 | 0015–0016, 0018 | `pg_cron` keep-alive for core and agent (agent address discovered) |
@@ -400,6 +408,8 @@ type-discriminated blobs); subtype detail tables keep `library_items` lean.
 | 0021 | in-app Google OAuth app credentials (secret encrypted, RLS with no policies) |
 | 0022 | scheduler: run `attempt`/`result`, `retrying` status, `device_tokens.armed_at` |
 | 0023 | `position_updated_at` on book/podcast details (offline conflict resolution) |
+| 0024 | drops `commitments` (the feature is removed) |
+| 0025 | `calendar_events.kind` — reminders and events in one store |
 
 ---
 
@@ -413,7 +423,7 @@ me  me/activity  me/realtime  me/push GET/PATCH/POST
 library                               CRUD; PATCH accepts position_at (newest position wins)
   /:id/annotations|bookmarks|reading-sessions|listening-sessions   client-uuid idempotent creates
   /:id/pdf-text/upload-url|url|confirm                             signed URLs
-collections  knowledge  tasks  commitments  interests
+collections  knowledge  tasks  interests
 calendar/events|categories            CRUD; /events/:id/complete POST/DELETE (window enforced)
 health/records  health/grant          grant-gated
 notifications  devices(/unregister, /channels)
@@ -544,10 +554,10 @@ by a push** — run each new SQL file in the Supabase SQL editor.
 | Package | Files | Tests | Covers |
 |---|---|---|---|
 | `shared` | 4 | 38 | session expiry and refresh races, 401 recovery, PDF block grouping, notification mapping |
-| `frontend` | 5 | 51 | scheduler form ↔ API mapping, Markdown parser (incl. unsafe links), knowledge grouping, outbox (coalescing, ordering, interrupted sync, drop/retry), calendar event states and time zones |
-| `backend-render` | 9 | 75 | Email send end to end (real send path, decoded MIME, encoded subjects, Google errors), Gmail scopes and credential resolution, redirect derivation, OAuth state signing, refresh classification, schedule validation, calendar reminders/completion, recurrence, conflict resolution, idempotent inserts, self-address announcement |
-| `backend-local` | 32 | 385 | send consent from the user's own message, direct sends and email scheduling, email approval (claim, edits, retry, ambiguous timeouts, expiry), agent→core mail hop, capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
-| **Total** | **50** | **549** | |
+| `frontend` | 8 | 71 | quotes (no repeats), book covers, calendar Quick Add body + reminder timing + Schedules merge, scheduler form ↔ API mapping, Markdown parser (incl. unsafe links), knowledge grouping, outbox (coalescing, ordering, interrupted sync, drop/retry), calendar event states and time zones |
+| `backend-render` | 9 | 83 | reminder moments (lead times, all-day mornings by zone), Email send end to end (real send path, decoded MIME, encoded subjects, Google errors), Gmail scopes and credential resolution, redirect derivation, OAuth state signing, refresh classification, schedule validation, calendar reminders/completion, recurrence, conflict resolution, idempotent inserts, self-address announcement |
+| `backend-local` | 31 | 370 | send consent from the user's own message, direct sends and email scheduling, email approval (claim, edits, retry, ambiguous timeouts, expiry), agent→core mail hop, capability routing and evaluation, planning/effort, verification, skill execution, scheduler (claim, three modes, retries, email gating), push dedupe, research (normalisation, robots, SSRF, failure chains), Pulse scoring, memory decay, Core-address discovery |
+| **Total** | **52** | **562** | |
 
 Run: `pnpm --dir shared test`, `pnpm --dir frontend test`, `npm test` in each
 backend. Browser verification (Playwright, phone widths against a mock API)
@@ -584,7 +594,7 @@ stale offline write rejected.
 - **Offline covers reading**; calendar, chat, brief and knowledge need a
   connection. Scanned PDFs without a text layer cannot be downloaded.
 - **Cloud storage of PDF files does not exist**; only extracted text syncs.
-- Migrations **0019–0023** must be applied by hand where not already.
+- Migrations **0019–0025** must be applied by hand where not already.
 
 ---
 

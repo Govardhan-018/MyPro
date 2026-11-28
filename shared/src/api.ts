@@ -9,7 +9,6 @@ import type {
   GmailAccessLevel,
   AssistantMessageRow,
   AssistantSettingsRow,
-  CommitmentRow,
   LibraryItemRow,
   LibraryType,
   NodeStatus,
@@ -65,6 +64,15 @@ function withQuery(path: string, query?: Query): string {
   }
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
+}
+
+/** This device's IANA zone, or undefined where Intl cannot say. */
+function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 'api' → backend-render (always on) · 'agent' → backend-local (laptop). */
@@ -321,16 +329,6 @@ export function createApi(
       remove: (id: string) => del(`/tasks/${id}`),
     },
 
-    /** Open loops the companion tracks (Phase 16.1). Served by render, so the
-     *  UI reads them whether or not the laptop is awake. */
-    commitments: {
-      list: (state?: string) => get<CommitmentRow[]>('/commitments', { state }),
-      create: (body: Record<string, unknown>) => post<CommitmentRow>('/commitments', body),
-      update: (id: string, body: Record<string, unknown>) =>
-        patch<CommitmentRow>(`/commitments/${id}`, body),
-      remove: (id: string) => del(`/commitments/${id}`),
-    },
-
     health: {
       records: () => get<Record<string, unknown>[]>('/health/records'),
       create: (body: Record<string, unknown>) => post('/health/records', body),
@@ -438,7 +436,9 @@ export function createApi(
        * brief land on time with the laptop shut and render asleep. Expanded
        * server-side so the recurrence maths — and luxon — stay off the device.
        */
-      upcoming: (hours = 48) => get<ScheduleOccurrence[]>('/schedules/upcoming', { hours }),
+      /** `tz` (the device's zone) places an all-day item's morning reminder. */
+      upcoming: (hours = 48, tz = deviceTimeZone()) =>
+        get<ScheduleOccurrence[]>('/schedules/upcoming', { hours, tz }),
     },
 
     /** All assistant traffic goes straight to the laptop (backend-local). */

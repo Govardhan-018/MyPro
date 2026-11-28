@@ -3,6 +3,15 @@ import { api, ApiError } from './api';
 import { isApiConfigured } from './env';
 import { requestShellRearm } from './shell';
 
+/** One store, two kinds: an appointment, or a nudge at a moment (0025). */
+export type CalKind = 'event' | 'reminder';
+
+/**
+ * Anything with a time on the calendar. Most are `calendar_events` rows; a
+ * one-off "Remind me" from Schedules is mapped into the same shape (`source:
+ * 'schedule'`, see useAgenda) so the month, the day panel and Today's Flow all
+ * read one list.
+ */
 export interface CalEvent {
   id: string;
   title: string;
@@ -13,6 +22,69 @@ export interface CalEvent {
   tone: string;
   /** Set once the event has been marked done. */
   completedAt?: string;
+  /** Defaults to 'event' (every row before 0025). */
+  kind?: CalKind;
+  /** A reminder's note (`description`). */
+  note?: string;
+  /** The chosen "Remind before", in minutes; null/undefined = the default. */
+  leadMinutes?: number | null;
+  /** Where the row lives. Defaults to 'calendar'. */
+  source?: 'calendar' | 'schedule';
+  /** The Schedules row id, for `source: 'schedule'`. */
+  scheduleId?: string;
+  /** A Schedules reminder that is switched off. */
+  paused?: boolean;
+}
+
+/** "Remind before" choices, in minutes. `0` = at the time itself. */
+export const LEAD_OPTIONS: { minutes: number; label: string }[] = [
+  { minutes: 0, label: 'At time of event' },
+  { minutes: 5, label: '5 mins before' },
+  { minutes: 15, label: '15 mins before' },
+  { minutes: 30, label: '30 mins before' },
+  { minutes: 60, label: '1 hour before' },
+  { minutes: 1440, label: '1 day before' },
+];
+
+/** An all-day item has no time to count back from: morning of, or the day before. */
+export const ALL_DAY_LEAD_OPTIONS: { minutes: number; label: string }[] = [
+  { minutes: 0, label: 'Morning of (9 AM)' },
+  { minutes: 1440, label: '1 day before (9 AM)' },
+];
+
+/**
+ * The lead an item effectively has. A row with no reminder of its own keeps
+ * render's baseline — an event one hour before (and at the start), a reminder
+ * at its time — so the editor shows what will actually happen.
+ */
+export function effectiveLead(ev: Pick<CalEvent, 'leadMinutes' | 'kind' | 'allDay'>): number {
+  if (ev.leadMinutes != null) return ev.allDay && ev.leadMinutes % 1440 !== 0 ? 0 : ev.leadMinutes;
+  return ev.kind === 'reminder' || ev.allDay ? 0 : 60;
+}
+
+/** "15 min before", "1 day before", "At time" — the chip beside an item. */
+export function leadLabel(minutes: number, allDay = false): string {
+  if (allDay) return minutes >= 1440 ? `${minutes / 1440 === 1 ? '1 day' : `${minutes / 1440} days`} before` : 'Morning of';
+  if (minutes <= 0) return 'At time';
+  if (minutes % 1440 === 0) return `${minutes / 1440 === 1 ? '1 day' : `${minutes / 1440} days`} before`;
+  if (minutes % 60 === 0) return `${minutes / 60 === 1 ? '1 hr' : `${minutes / 60} hr`} before`;
+  return `${minutes} min before`;
+}
+
+/**
+ * When the notification goes off: `remindAt = start − lead`. An all-day item is
+ * anchored to 09:00 local on its date (render's `calendarReminderMoments`
+ * does the same for the phone's clock — change one, change both).
+ */
+export function remindAt(ev: Pick<CalEvent, 'startsAt' | 'allDay' | 'leadMinutes' | 'kind'>): Date | null {
+  const lead = effectiveLead(ev);
+  if (ev.allDay) {
+    const [y, m, d] = ev.startsAt.slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d - Math.floor(lead / 1440), 9, 0, 0, 0);
+  }
+  const start = new Date(ev.startsAt).getTime();
+  return Number.isFinite(start) ? new Date(start - lead * 60_000) : null;
 }
 
 /**
@@ -85,69 +157,18 @@ export interface NewEventInput {
   endTime?: string;
   allDay: boolean;
   location?: string;
+  /** Defaults to 'event'. */
+  kind?: CalKind;
+  /** A reminder's note. */
+  note?: string;
+  /** "Remind before", minutes. Undefined leaves the server's default. */
+  leadMinutes?: number;
 }
 
-/* ---- grid geometry ----------------------------------------------------
- * The grid covers the whole day at 64px/hour and scrolls inside a 640px
- * window. It used to run 8 AM–6 PM with `overflow: hidden`, which silently
- * ate every event outside office hours — an 8 PM dinner simply was not
- * drawn, and a 6 AM run was clamped on top of the 8 AM slot.
- * -------------------------------------------------------------------- */
-export const GRID_START_HOUR = 0;
-export const GRID_END_HOUR = 24;
-const PX_PER_HOUR = 64;
-const PX_PER_MIN = PX_PER_HOUR / 60;
-/** Full height of the scrollable day (24 × 64). */
-export const GRID_HEIGHT = (GRID_END_HOUR - GRID_START_HOUR) * PX_PER_HOUR;
-/** Where the grid parks itself when opened — the working day, as before. */
-export const DEFAULT_SCROLL_TOP = 8 * PX_PER_HOUR;
-
-export const HOUR_LABELS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => {
-  const h = GRID_START_HOUR + i;
-  const suffix = h >= 12 ? 'PM' : 'AM';
-  const base = h % 12 === 0 ? 12 : h % 12;
-  return `${base} ${suffix}`;
-});
-
-const WEEKDAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 const TONES = ['lavender', 'mint', 'blue', 'peach', 'cyan', 'coral'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 export const isoDate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-
-export function startOfWeek(date: Date): Date {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const weekday = (d.getDay() + 6) % 7; // Monday = 0
-  d.setDate(d.getDate() - weekday);
-  return d;
-}
-
-export function weekdayLabel(d: Date): string {
-  return WEEKDAY_LABELS[(d.getDay() + 6) % 7];
-}
-
-function minutesInto(iso: string): number {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? 0 : d.getHours() * 60 + d.getMinutes();
-}
-
-export function positionOf(ev: CalEvent): { top: number; height: number } {
-  const start = minutesInto(ev.startsAt);
-  const end = ev.endsAt ? minutesInto(ev.endsAt) : start + 60;
-  const top = Math.max(0, (start - GRID_START_HOUR * 60) * PX_PER_MIN);
-  // An event ending before it starts (or crossing midnight) still has to be
-  // drawable: clamp to the end of the day rather than render a negative box.
-  const span = end > start ? end - start : Math.max(15, 24 * 60 - start);
-  // `span` is minutes and `GRID_HEIGHT - top` is pixels: comparing them before
-  // the conversion clamped a late-evening event against the wrong unit, so it
-  // still spilled past the bottom of the grid.
-  return { top, height: Math.max(26, Math.min(span * PX_PER_MIN, GRID_HEIGHT - top)) };
-}
-
-export function nowOffset(): number {
-  const now = new Date();
-  return (now.getHours() * 60 + now.getMinutes() - GRID_START_HOUR * 60) * PX_PER_MIN;
-}
 
 export function timeLabel(iso: string): string {
   const d = new Date(iso);
@@ -190,8 +211,18 @@ function toneFor(row: Record<string, unknown>, id: string): string {
   return TONES[Math.abs(h) % 4]; // lavender/mint/blue/peach
 }
 
-function rowToEvent(row: Record<string, unknown>): CalEvent {
+/** Reminders share one colour so they read apart from events at a glance. */
+export const REMINDER_TONE = 'cyan';
+
+export function rowToEvent(row: Record<string, unknown>): CalEvent {
   const id = String(row.id);
+  const kind: CalKind = row.kind === 'reminder' ? 'reminder' : 'event';
+  const leads = (Array.isArray(row.event_reminders) ? row.event_reminders : [])
+    .map((r) => Number((r as Record<string, unknown>)?.minutes_before))
+    .filter((m) => Number.isFinite(m) && m >= 0);
+  // The row stores the moment itself (0) next to the chosen lead; the chosen
+  // one is the largest.
+  const lead = leads.length ? Math.max(...leads) : null;
   return {
     id,
     title: str(row.title) ?? '(untitled)',
@@ -199,8 +230,12 @@ function rowToEvent(row: Record<string, unknown>): CalEvent {
     endsAt: str(row.ends_at),
     allDay: Boolean(row.all_day),
     location: str(row.location),
-    tone: toneFor(row, id),
+    tone: kind === 'reminder' ? REMINDER_TONE : toneFor(row, id),
     completedAt: str(row.completed_at),
+    kind,
+    note: str(row.description),
+    leadMinutes: lead,
+    source: 'calendar',
   };
 }
 
@@ -225,6 +260,46 @@ function combine(date: string, time?: string, allDay = false): string | undefine
 }
 
 const byStart = (a: CalEvent, b: CalEvent) => a.startsAt.localeCompare(b.startsAt);
+
+/**
+ * Validate the Quick Add form and shape the API body — create and update
+ * alike. Pure and exported, so the rules are tested without a network.
+ *
+ * Kind decides the optional text: an event keeps a location, a reminder a
+ * note (`description`). The lead goes out as `reminders`, which the server
+ * *replaces*, so an edit that changes the lead never stacks a second one.
+ */
+export function eventBody(input: NewEventInput): Record<string, unknown> {
+  const kind: CalKind = input.kind ?? 'event';
+  const noun = kind === 'reminder' ? 'reminder' : 'event';
+  const title = input.title.trim();
+  if (!title) throw new Error(`Give the ${noun} a title.`);
+  if (!input.allDay && !(input.startTime && /^\d{2}:\d{2}/.test(input.startTime))) {
+    throw new Error(`Pick a time for the ${noun}, or make it all day.`);
+  }
+  const starts_at = combine(input.date, input.startTime, input.allDay);
+  if (!starts_at) throw new Error(`Pick a date for the ${noun}.`);
+  const ends_at = input.allDay || kind === 'reminder' ? undefined : combine(input.date, input.endTime);
+  if (ends_at && new Date(ends_at) <= new Date(starts_at)) {
+    throw new Error('The end time has to be after the start time.');
+  }
+  const lead = input.leadMinutes;
+  const body = clean({
+    title,
+    starts_at,
+    ends_at,
+    all_day: input.allDay,
+    location: kind === 'event' ? input.location?.trim() : undefined,
+    description: kind === 'reminder' ? input.note?.trim() : undefined,
+    kind,
+  });
+  if (lead != null && Number.isFinite(lead) && lead >= 0) {
+    // An all-day item only moves by whole days (render collapses the rest).
+    const minutes = input.allDay ? Math.floor(lead / 1440) * 1440 : Math.round(lead);
+    body.reminders = [{ minutes_before: minutes, channel: 'push' }];
+  }
+  return body;
+}
 
 /**
  * The day an event belongs to, as the grid keys days (local YYYY-MM-DD).
@@ -323,24 +398,7 @@ export function useCalendar(focus: Date): CalendarState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, key, reloadToken]);
 
-  /** Shared validation + shaping for create and update. */
-  const toBody = (input: NewEventInput): Record<string, unknown> => {
-    const title = input.title.trim();
-    if (!title) throw new Error('Give the event a title.');
-    const starts_at = combine(input.date, input.startTime, input.allDay);
-    if (!starts_at) throw new Error('Pick a date for the event.');
-    const ends_at = input.allDay ? undefined : combine(input.date, input.endTime);
-    if (ends_at && new Date(ends_at) <= new Date(starts_at)) {
-      throw new Error('The end time has to be after the start time.');
-    }
-    return clean({
-      title,
-      starts_at,
-      ends_at,
-      all_day: input.allDay,
-      location: input.location,
-    });
-  };
+  const toBody = eventBody;
 
   const createEvent = async (input: NewEventInput) => {
     const body = toBody(input);
@@ -355,7 +413,10 @@ export function useCalendar(focus: Date): CalendarState {
             endsAt: body.ends_at ? String(body.ends_at) : undefined,
             allDay: input.allDay,
             location: input.location,
-            tone: 'lavender',
+            tone: input.kind === 'reminder' ? REMINDER_TONE : 'lavender',
+            kind: input.kind ?? 'event',
+            note: input.note,
+            leadMinutes: input.leadMinutes ?? null,
           },
         ].sort(byStart),
       );
@@ -369,9 +430,10 @@ export function useCalendar(focus: Date): CalendarState {
 
   const updateEvent = async (id: string, input: NewEventInput) => {
     const body = toBody(input);
-    // An unset end time has to be sent explicitly, or the old one survives.
+    // An unset field has to be sent explicitly, or the old value survives.
     if (!('ends_at' in body)) body.ends_at = null;
     if (!('location' in body)) body.location = null;
+    if (!('description' in body)) body.description = null;
     if (!configured) {
       setEvents((cur) =>
         cur
@@ -384,6 +446,9 @@ export function useCalendar(focus: Date): CalendarState {
                   endsAt: body.ends_at ? String(body.ends_at) : undefined,
                   allDay: input.allDay,
                   location: input.location,
+                  kind: input.kind ?? ev.kind,
+                  note: input.note,
+                  leadMinutes: input.leadMinutes ?? ev.leadMinutes,
                 }
               : ev,
           )

@@ -12,7 +12,7 @@
  *    network at fire time. This is the on-time path, and it works on a plain
  *    `expo prebuild` APK.
  *  - **Push** (`registerForPush`) reaches the phone for things nobody could
- *    predict — an unanswered email, a commitment at risk. It needs an EAS
+ *    predict — an unanswered email, an AI task that finished. It needs an EAS
  *    project id and a Firebase `google-services.json`, so it is allowed to
  *    fail without taking the clock down with it.
  *
