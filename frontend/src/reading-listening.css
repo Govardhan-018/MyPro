@@ -6086,3 +6086,18 @@ button.learning-thumbnail {
   opacity: 0.35;
   cursor: default;
 }
+
+/* Book options footer on a phone: the two actions share the row instead of
+   overflowing it (the first button used to run off the left edge). */
+@media (max-width: 767px) {
+  .pane-actions {
+    flex-wrap: wrap;
+  }
+  .pane-actions > button {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+  }
+}

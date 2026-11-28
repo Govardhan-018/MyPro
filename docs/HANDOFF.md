@@ -11,6 +11,10 @@ bundled fonts with distinct roles (`lib/fonts.ts`; no more Google Fonts
 request), a reader Typeface picker, and fixes for three reader settings that
 did nothing — line spacing, reading width on a phone, paginated zoom. No
 migration. Frontend suite now 73 tests.
+Then the roles were extended app-wide — page titles, every control, data,
+stats and empty states (see the "Type roles" block at the end of
+`frontend/src/index.css`); the book-options footer no longer overflows on a
+phone.
 
 Built for the Android phone width first (verified at 412px against a mocked
 API). Suites: shared 38 · frontend 71 · backend-render 83 · backend-local 370;

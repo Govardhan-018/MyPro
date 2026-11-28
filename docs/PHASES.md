@@ -601,6 +601,11 @@ the native screens.
   screen; it now sets the page margins), and **zoom in paginated mode** (a
   `scale()` clipped the page on a phone; it now scales the type). The settings
   sheet is shorter with a light scrim so changes are visible as you make them.
+  **App-wide roles** (follow-up): every page title in Changa One, everything
+  tappable (buttons, tabs, chips, nav, menus) in Space Grotesk via `--font-ui`,
+  data and kickers in JetBrains Mono, stat numbers in Changa One with Black
+  Ops One kept for the large ring numeral, body/inputs in Outfit. Checked for
+  overflow at 360px on every section.
 
 ### ⬜ Phase 14 — Everything you read, searchable
 **Goal: ask "what have I read about attention?" and get an answer out of your

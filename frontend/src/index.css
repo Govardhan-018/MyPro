@@ -9281,48 +9281,117 @@ button.agenda-row {
 
 
 /* =====================================================================
-   Type roles. One family per job, so the page reads as designed:
-     Outfit (body) · Space Grotesk (headings) · JetBrains Mono (numbers,
-     times, labels) · Changa One (display) · Black Ops One (hero numerals).
+   Type roles — one family per job, across the whole app.
+
+     Changa One      display: every page title, the greeting, welcome
+     Space Grotesk   headings, card titles, and everything you tap —
+                     buttons, tabs, chips, toggles, navigation, menus
+     Outfit          body: descriptions, messages, inputs, notes
+     JetBrains Mono  data: times, dates, counts, durations, page numbers,
+                     and the small uppercase kickers/labels
+     Black Ops One   hero numerals: the one big number on a stat
+
+   Faces are bundled in lib/fonts.ts. Use the variables, never a literal
+   family name, so a role can change in one place.
    ===================================================================== */
+:root {
+  --font-ui: var(--font-heading);
+}
 @layer base {
   h1,
   h2,
   h3,
-  h4 {
+  h4,
+  h5 {
     font-family: var(--font-heading);
     letter-spacing: -0.02em;
   }
+  /* Anything you tap speaks in the UI face… */
+  button,
+  select,
+  summary,
+  [role="tab"],
+  [role="radio"],
+  [role="switch"],
+  [role="menuitem"] {
+    font-family: var(--font-ui);
+  }
+  /* …and anything you type in, the body face. */
+  input,
+  textarea {
+    font-family: var(--font-body);
+  }
+  code,
+  kbd,
+  pre,
+  samp,
+  time {
+    font-family: var(--font-mono);
+  }
 }
-/* Headings set by class rather than tag. */
+
+/* ---- Display: page titles ---- */
+.page-heading h1,
+.login-introduction h1,
+.assistant-intro h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.005em;
+}
+.page-heading h1 {
+  line-height: 1.08;
+}
+
+/* ---- Headings set by class rather than tag ---- */
 .modal-heading h2,
-.settings-card > button span,
 .learning-title-line h3,
 .book-info h3,
 .cal-item-body > strong,
 .agenda-event strong,
 .settings-toggle-row strong,
-.cal-switch-row strong {
+.cal-switch-row strong,
+.reader-book-title,
+.reader-chapter-title,
+.illness-record-title,
+.storage-option-title,
+.editor-title,
+.podcast-episode-title,
+.source-title,
+.assistant-identity-name,
+.character-preset-label,
+.watch-entity,
+.sched-row-text,
+.knowledge-group-title,
+.result-card-head strong {
   font-family: var(--font-heading);
 }
 
-/* Display: the few lines that should feel like a headline. */
-.dashboard-view .page-heading h1,
-.login-introduction h1 {
-  font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: 0.005em;
+/* ---- Body: descriptive lines inside tappable cards stay in Outfit ---- */
+.agenda-event span,
+.cal-item-extra,
+.cal-switch-row small,
+.settings-toggle-row small,
+.reader-font-option small,
+.settings-card > button small,
+.character-preset-blurb,
+.cal-day-empty span,
+.mobile-nav-actions small {
+  font-family: var(--font-body);
 }
 
-/* Labels, kickers, numbers, times and dates. */
+/* ---- Data and labels (mono) ---- */
 .eyebrow,
 .section-kicker,
+.kicker,
 .quote-kicker,
 .soft-label,
 .content-type,
 .setting-label,
+.settings-group-label,
+.mobile-nav-kicker,
 .page-meta,
 .field-label,
+.input-label,
 .agenda-time,
 .free-time,
 .cal-weekdays span,
@@ -9332,47 +9401,93 @@ button.agenda-row {
 .cal-lead,
 .cal-legend,
 .cal-alert-hint,
+.cal-badge,
 .library-result-count,
-.library-rings-legend strong,
 .library-rings-detail,
-.health-stat div > strong,
 .rings-center span,
 .book-info small,
 .learning-progress-line,
-kbd,
-time {
+.quote-card figcaption,
+.sched-when,
+.sched-row-meta,
+.sched-run-when,
+.sched-chip,
+.time-current,
+.time-remaining,
+.time-progress-stat,
+.skip-number,
+.speed-btn,
+.podcast-note-stamp,
+.read-time-pill,
+.page-indicator-pill,
+.pages-ratio,
+.toc-page-num,
+.last-sync-time,
+.illness-timeline-date,
+.knowledge-group-count,
+.match-count,
+.badge-count,
+.notifications-fab-count,
+.agent-plan-count,
+.agent-plan-mode,
+.approval-card-kind,
+.header-status-pill,
+.source-meta,
+.fixture-meta,
+.weather-range,
+.offline-badge {
   font-family: var(--font-mono);
 }
 .eyebrow,
 .section-kicker,
+.kicker,
 .quote-kicker,
 .soft-label,
 .setting-label,
-.field-label {
+.settings-group-label,
+.mobile-nav-kicker,
+.field-label,
+.input-label {
   letter-spacing: 0.1em;
 }
 .cal-day-num,
-.cal-item-time strong,
-.library-rings-legend strong {
-  font-feature-settings: "zero" 0;
+.cal-item-time strong {
   letter-spacing: -0.02em;
 }
 
-/* Secondary lines under a time read better in the body face. */
-.agenda-time span {
-  font-family: var(--font-body);
-}
-
-/* Hero numerals. */
+/* ---- Numbers that carry a stat ----
+   Black Ops One only where the numeral is big enough for its stencil cuts
+   to read (at tile size its 0 breaks up); Changa One for the rest. */
 .rings-center strong {
   font-family: var(--font-hero);
   font-weight: 400;
   font-size: 30px;
   letter-spacing: 0.02em;
 }
+.health-stat div > strong,
+.library-rings-legend strong,
+.progress-numbers strong,
+.storage-stat-card strong {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
 
-/* The quote reads as a quote. */
+/* ---- Empty-state titles read as headings ---- */
+.ds-callout,
+.library-empty strong,
+.health-empty-state strong,
+.storage-empty-state strong,
+.sched-empty strong,
+.notification-panel-empty strong {
+  font-family: var(--font-heading);
+}
+
+/* ---- Moments ---- */
 .quote-card blockquote p {
   font-family: var(--font-heading);
   font-weight: 500;
+}
+.agenda-time span {
+  font-family: var(--font-body);
 }
